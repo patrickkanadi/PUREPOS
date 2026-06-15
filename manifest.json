@@ -8,12 +8,12 @@
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/3105/3105807.png",
+      "src": "https://raw.githubusercontent.com/patrickkanadi/PUREPOS/main/images.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/3105/3105807.png",
+      "src": "https://raw.githubusercontent.com/patrickkanadi/PUREPOS/main/images.png",
       "sizes": "512x512",
       "type": "image/png"
     }
