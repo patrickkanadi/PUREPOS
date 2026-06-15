@@ -1,11 +1,10 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbxFbXjkE3N2Q8T0oJ9gHOKSKFSefg3T01ezUcFuyNUNfGXh-lC700oKo57qwakeJ-Y/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 1; 
+const DB_VERSION = 2; 
 let db;
 
-let currentCashier = ""; let currentPin = ""; let currentShiftId = ""; let currentLoginTime = "";
+let currentCashier = ""; let currentPin = ""; let currentShiftId = ""; let currentLoginTime = ""; let currentOutlet = "";
 let globalMenuData = []; let currentCategory = ""; let currentCart = []; 
-let activeNumpadItem = null; let numpadValue = "0";
 window.masterDrawerBalance = 0; let isLoggingOut = false;
 let currentVoidTarget = { type: null, id: null };
 let isMenuLocked = true; let isSyncing = false; let activeCustomerProfile = null; 
@@ -44,6 +43,7 @@ function initDB() {
             if (!db.objectStoreNames.contains("expense_categories")) db.createObjectStore("expense_categories", { keyPath: "name" });
             if (!db.objectStoreNames.contains("void_requests")) db.createObjectStore("void_requests", { keyPath: "id" });
             if (!db.objectStoreNames.contains("local_shift_history")) db.createObjectStore("local_shift_history", { keyPath: "shiftId" });
+            if (!db.objectStoreNames.contains("stock_inbound")) db.createObjectStore("stock_inbound", { keyPath: "logId" });
         };
         request.onsuccess = (e) => { db = e.target.result; resolve(db); };
     });
@@ -56,13 +56,27 @@ function attemptLogin() {
             db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(pin).onsuccess = (shiftReq) => {
                 const activeShift = shiftReq.target.result;
                 currentCashier = staff.name; currentPin = staff.pin;
-                if (activeShift) { currentShiftId = activeShift.shiftId; currentLoginTime = activeShift.loginTime; } 
-                else {
+                
+                const dropdownSelection = document.getElementById("login-outlet").value;
+                if (dropdownSelection === "AUTO") {
+                    currentOutlet = staff.defaultOutlet || "Depot Pusat"; 
+                } else {
+                    currentOutlet = dropdownSelection; 
+                }
+
+                if (activeShift) { 
+                    currentShiftId = activeShift.shiftId; 
+                    currentLoginTime = activeShift.loginTime; 
+                    currentOutlet = activeShift.outlet || currentOutlet; 
+                } else {
                     currentShiftId = "SHF-" + Date.now(); currentLoginTime = new Date().toISOString();
-                    db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({pin: pin, shiftId: currentShiftId, loginTime: currentLoginTime});
+                    db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({
+                        pin: pin, shiftId: currentShiftId, loginTime: currentLoginTime, outlet: currentOutlet
+                    });
                 }
                 document.getElementById("login-screen").classList.add("hidden"); document.getElementById("pos-screen").classList.remove("hidden");
                 document.getElementById("display-cashier").innerText = currentCashier;
+                document.getElementById("display-outlet").innerText = currentOutlet;
                 syncMasterData(); lockMenu(); 
             };
         } else { alert("PIN Salah!"); }
@@ -122,6 +136,13 @@ async function syncMasterData() {
             globalMenuData = result.data.menu; 
             window.loyaltyEnabled = result.data.settings["Enable_Loyalty"] === "TRUE";
             window.loyaltyThreshold = Number(result.data.settings["Loyalty_Threshold"]) || 10;
+            
+            const rawOutlets = result.data.settings["Outlet_List"] || "Pusat";
+            const outletArray = rawOutlets.split(",").map(s => s.trim());
+            const selectBox = document.getElementById("login-outlet");
+            if(selectBox) {
+                selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join("");
+            }
 
             if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
             if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
@@ -197,30 +218,48 @@ function loadMenuUI() {
 }
 function renderProductGrid() {
     const grid = document.getElementById("product-grid"); grid.innerHTML = "";
-    globalMenuData.filter(i => i.category === currentCategory).forEach(item => {
+    
+    const filteredMenu = globalMenuData.filter(i => {
+        if (i.category !== currentCategory) return false;
+        const availableList = (i.availableAt || "ALL").toUpperCase();
+        if (availableList === "ALL" || availableList === "") return true;
+        return availableList.includes(currentOutlet.toUpperCase());
+    });
+
+    filteredMenu.forEach(item => {
         const card = document.createElement("div"); card.className = "product-card";
         card.innerHTML = `<div><h4 style="margin-top:0;">${item.name}</h4></div> <div class="price-badge">Rp ${item.price.toLocaleString('id-ID')}</div>`;
-        card.onclick = () => { if(isMenuLocked) return; openNumpad(item); };
+        card.onclick = () => { if(isMenuLocked) return; addToCart(item, 1); };
         grid.appendChild(card);
     });
 }
-function openNumpad(item) { activeNumpadItem = item; numpadValue = "0"; document.getElementById("numpad-display").innerText = "0"; document.getElementById("numpad-modal").classList.remove("hidden"); }
-function closeNumpad() { document.getElementById("numpad-modal").classList.add("hidden"); activeNumpadItem = null; }
-function numpadPress(val) {
-    if (val === 'DEL') { numpadValue = numpadValue.slice(0, -1) || "0"; } else { numpadValue = numpadValue === "0" ? String(val) : numpadValue + val; }
-    document.getElementById("numpad-display").innerText = numpadValue;
-}
-function confirmNumpad() { let qty = parseInt(numpadValue, 10); if (qty > 0) addToCart(activeNumpadItem, qty); closeNumpad(); }
 function addToCart(item, qty) {
     const existing = currentCart.find(i => i.itemId === item.itemId);
     if (existing) { existing.qty += qty; } else { currentCart.push({ ...item, qty: qty, originalPrice: item.price }); }
     renderCart();
 }
+window.updateCartQty = function(itemId, delta) {
+    const item = currentCart.find(i => i.itemId === itemId);
+    if (item) {
+        item.qty += delta;
+        if (item.qty <= 0) { currentCart = currentCart.filter(i => i.itemId !== itemId); }
+        renderCart();
+    }
+}
 function renderCart() {
     const container = document.getElementById("cart-items"); container.innerHTML = ""; let total = 0;
     currentCart.forEach(item => {
         const lineTotal = item.qty * item.price; total += lineTotal;
-        container.innerHTML += `<div class="cart-item"><div><span class="cart-qty">${item.qty}</span> ${item.name}</div><strong>Rp ${lineTotal.toLocaleString('id-ID')}</strong></div>`;
+        container.innerHTML += `
+        <div class="cart-item" style="display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px dashed #ccc;">
+            <div style="flex:1; font-weight:bold; font-size:14px;">${item.name}</div>
+            <div style="display:flex; align-items:center; gap:8px; margin: 0 10px;">
+                <button onclick="updateCartQty('${item.itemId}', -1)" style="width:30px; height:30px; background:#e74c3c; color:white; border:none; border-radius:6px; font-weight:bold; font-size:16px; cursor:pointer;">-</button>
+                <span style="font-weight:bold; min-width:25px; text-align:center;">${item.qty}</span>
+                <button onclick="updateCartQty('${item.itemId}', 1)" style="width:30px; height:30px; background:#2ecc71; color:white; border:none; border-radius:6px; font-weight:bold; font-size:16px; cursor:pointer;">+</button>
+            </div>
+            <div style="font-weight:bold; color:#2c3e50; min-width:80px; text-align:right;">Rp ${lineTotal.toLocaleString('id-ID')}</div>
+        </div>`;
     });
     document.getElementById("cart-total").innerText = `Rp ${total.toLocaleString('id-ID')}`; window.cartSubtotal = total; window.cartGrandTotal = total;
 }
@@ -276,7 +315,7 @@ async function finalizeOrder(shouldPrint) {
         orderId: "ORD-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId,
         customerName: custName, customerPhone: custPhone, orderStatus: status, items: currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
         paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, 
-        coinsEarned: refillsEarned, coinsRedeemed: redeemCount, loyaltyThresholdUsed: window.loyaltyThreshold, syncStatus: "Pending" 
+        coinsEarned: refillsEarned, coinsRedeemed: redeemCount, loyaltyThresholdUsed: window.loyaltyThreshold, outlet: currentOutlet, syncStatus: "Pending" 
     };
 
     const txMenu = db.transaction(["menu"], "readwrite"); const storeMenu = txMenu.objectStore("menu");
@@ -321,6 +360,26 @@ async function buildPrintableReceipt(orderId, order, deposit, remaining, payMeth
         <div style="text-align:center; margin-top:15px; font-weight:bold; font-size: 12px;">${f1}</div>${f2 ? `<div style="text-align:center; margin-top:2px; font-size: 10px;">${f2}</div>` : ''}${f3 ? `<div style="text-align:center; margin-top:2px; font-size: 10px;">${f3}</div>` : ''}
     `;
 }
+window.openInboundModal = function() {
+    document.getElementById("inbound-qty").value = "";
+    document.getElementById("inbound-notes").value = "";
+    document.getElementById("inbound-modal").classList.remove("hidden");
+}
+window.submitInbound = function() {
+    const qty = Number(document.getElementById("inbound-qty").value);
+    const notes = document.getElementById("inbound-notes").value.trim() || "-";
+    if (qty <= 0) return alert("Masukkan jumlah liter air yang benar.");
+
+    const payload = {
+        logId: "INB-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId,
+        itemName: "Air Baku", qty: qty, notes: notes, outlet: currentOutlet, syncStatus: "Pending"
+    };
+
+    db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").add(payload);
+    document.getElementById("inbound-modal").classList.add("hidden");
+    alert(`Berhasil mencatat kedatangan ${qty} Liter air ke tandon.`);
+    runBackgroundSync();
+}
 function openExpenseModal() {
     document.getElementById("expense-modal").classList.remove("hidden");
     const list = document.getElementById("expense-category-list"); list.innerHTML = "";
@@ -331,7 +390,7 @@ function saveExpense() {
     if (amount <= 0 || !category) return alert("Harap masukkan jumlah dan kategori yang benar.");
     db.transaction(["expense_categories"], "readwrite").objectStore("expense_categories").put({ name: category });
 
-    const payload = { expenseId: "EXP-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, category: category, description: document.getElementById("exp-desc").value || "-", amount: amount, status: "Active", syncStatus: "Pending" };
+    const payload = { expenseId: "EXP-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, category: category, description: document.getElementById("exp-desc").value || "-", amount: amount, status: "Active", outlet: currentOutlet, syncStatus: "Pending" };
     db.transaction(["expenses"], "readwrite").objectStore("expenses").add(payload);
     document.getElementById("expense-modal").classList.add("hidden"); document.getElementById("exp-amount").value = ""; document.getElementById("exp-category").value = ""; document.getElementById("exp-desc").value = ""; alert("Pengeluaran Berhasil Dicatat!"); runBackgroundSync();
 }
@@ -480,7 +539,7 @@ function submitCashDrop() {
     
     calculateLiveDrawer((liveAmount) => {
         const leftInDrawer = liveAmount - pullAmount;
-        const payload = { dropId: "DRP-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: finalNotes, syncStatus: "Pending" };
+        const payload = { dropId: "DRP-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: finalNotes, outlet: currentOutlet, syncStatus: "Pending" };
         db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").add(payload);
         document.getElementById("cash-drop-modal").classList.add("hidden"); runBackgroundSync();
         if (isLoggingOut) { executeFinalLogout(leftInDrawer); } else { alert(`Setor Uang Berhasil!\nTujuan: ${destination}\nSisa Tunai di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); }
@@ -488,7 +547,7 @@ function submitCashDrop() {
 }
 function openShiftReport() {
     let tCust = 0; let tOrders = 0; let tOmset = 0; let tCash = 0; let tQris = 0; let tTransfer = 0; let tFree = 0; let tExpense = 0; let foodSummary = {};
-    document.getElementById("meter-token").value = ""; document.getElementById("meter-pasca").value = ""; document.getElementById("meter-water").value = "";
+    document.getElementById("meter-water").value = "";
     
     db.transaction(["orders", "expenses"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
         const validOrders = e.target.result.filter(o => o.shiftId === currentShiftId && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending");
@@ -515,9 +574,9 @@ function openShiftReport() {
     };
 }
 function initiateLogoutSequence() { 
-    const meterT = document.getElementById("meter-token").value; const meterP = document.getElementById("meter-pasca").value; const meterW = document.getElementById("meter-water").value;
-    if (meterT === "" || meterP === "" || meterW === "") return alert("⚠️ ERROR: Wajib mengisi semua Meteran Listrik & Air sebelum mengakhiri Shift.");
-    window.currentShiftData.meterToken = Number(meterT); window.currentShiftData.meterPasca = Number(meterP); window.currentShiftData.meterWater = Number(meterW);
+    const meterW = document.getElementById("meter-water").value;
+    if (meterW === "") return alert("⚠️ ERROR: Wajib mengisi Angka Meteran Air sebelum mengakhiri Shift.");
+    window.currentShiftData.meterWater = Number(meterW);
     document.getElementById("shift-report-modal").classList.add("hidden"); openCashDrop(true); 
 }
 async function executeFinalLogout(netCash) { 
@@ -525,7 +584,7 @@ async function executeFinalLogout(netCash) {
     const shiftPayload = {
         shiftId: currentShiftId, timestamp: new Date().toISOString(), cashier: currentCashier, loginTime: currentLoginTime, logoutTime: new Date().toISOString(), 
         totalCustomers: data.totalCustomers, totalOrders: data.totalOrders, totalOmset: data.totalOmset, totalCash: data.totalCash, totalQris: data.totalQris, totalTransfer: data.totalTransfer, totalFree: data.totalFree,
-        totalExpenses: data.totalExpenses, netCash: netCash, foodSummary: data.foodSummary, meterToken: data.meterToken, meterPasca: data.meterPasca, meterWater: data.meterWater, syncStatus: "Pending"
+        totalExpenses: data.totalExpenses, netCash: netCash, foodSummary: data.foodSummary, meterWater: data.meterWater, outlet: currentOutlet, syncStatus: "Pending"
     };
 
     db.transaction(["local_shift_history"], "readwrite").objectStore("local_shift_history").add(shiftPayload);
@@ -546,7 +605,7 @@ async function runBackgroundSync() {
     if (!navigator.onLine || isSyncing) return;
     isSyncing = true; 
     try {
-        let tx = db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members"], "readonly");
+        let tx = db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound"], "readonly");
         
         let orders = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
         for (const order of orders) {
@@ -582,6 +641,13 @@ async function runBackgroundSync() {
         let members = await new Promise(res => tx.objectStore("unsynced_members").getAll().onsuccess = e => res(e.target.result));
         for (const mem of members) {
             try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncMember", data: mem }) }); if ((await r.json()).status === "Success") { db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); } } catch(e) {}
+        }
+
+        let inbounds = await new Promise(res => tx.objectStore("stock_inbound").getAll().onsuccess = e => res(e.target.result));
+        for (const inb of inbounds) {
+            if (inb.syncStatus === "Pending") {
+                try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncInbound", data: inb }) }); if ((await r.json()).status === "Success") { db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").delete(inb.logId); } } catch(e) {}
+            }
         }
     } finally { isSyncing = false; }
 }
