@@ -1,6 +1,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbxFbXjkE3N2Q8T0oJ9gHOKSKFSefg3T01ezUcFuyNUNfGXh-lC700oKo57qwakeJ-Y/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 2; 
+const DB_VERSION = 3; 
 let db;
 
 // MULTI-SESSION ARCHITECTURE
@@ -57,6 +57,8 @@ function initDB() {
             if (!db.objectStoreNames.contains("void_requests")) db.createObjectStore("void_requests", { keyPath: "id" });
             if (!db.objectStoreNames.contains("local_shift_history")) db.createObjectStore("local_shift_history", { keyPath: "shiftId" });
             if (!db.objectStoreNames.contains("stock_inbound")) db.createObjectStore("stock_inbound", { keyPath: "logId" });
+            if (!db.objectStoreNames.contains("cuci_tandon")) db.createObjectStore("cuci_tandon", { keyPath: "logId" });
+            if (!db.objectStoreNames.contains("lapor_masalah")) db.createObjectStore("lapor_masalah", { keyPath: "logId" });
         };
         request.onsuccess = (e) => { db = e.target.result; resolve(db); };
     });
@@ -146,6 +148,16 @@ window.switchCart = function(index) {
     }
 }
 
+function isCustomerLocked(phone) {
+    if (!phone || phone === "-") return false;
+    for (let i = 0; i < posSessions.length; i++) {
+        if (i !== activeSessionIndex && posSessions[i].customer && posSessions[i].customer.phone === phone) {
+            return i + 1; 
+        }
+    }
+    return false;
+}
+
 function updatePromoBanner(member) {
     const promoBanner = document.getElementById("promo-indicator-banner");
     if (!window.loyaltyEnabled || !promoBanner) {
@@ -213,6 +225,11 @@ function unlockMenu(isGuest) {
         let searchPhone = phone.replace(/\D/g, '');
         if (searchPhone.startsWith('62')) searchPhone = '0' + searchPhone.substring(2);
         if (searchPhone.length > 0 && !searchPhone.startsWith('0')) searchPhone = '0' + searchPhone;
+
+        let lockedQueue = isCustomerLocked(searchPhone);
+        if (lockedQueue) {
+            return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan atau batalkan pesanan di sana terlebih dahulu untuk mencegah konflik poin.`);
+        }
 
         const tx = db.transaction(["members"], "readonly");
         tx.objectStore("members").get(searchPhone).onsuccess = (ev) => {
@@ -317,9 +334,21 @@ document.getElementById("cust-phone").addEventListener("input", handleAutocomple
 });
 
 window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed) {
+    document.getElementById("autocomplete-results").classList.add("hidden");
+    
+    let lockedQueue = isCustomerLocked(phone);
+    if (lockedQueue) {
+        return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan atau batalkan pesanan di sana terlebih dahulu untuk mencegah konflik poin.`);
+    }
+
     document.getElementById("cust-phone").value = phone; 
     document.getElementById("cust-name").value = name; 
-    document.getElementById("autocomplete-results").classList.add("hidden");
+    
+    let wallet = {};
+    try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
+
+    activeCustomerProfile = { phone: phone, name: name, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed };
+    updatePromoBanner(activeCustomerProfile);
 };
 
 function saveMemberToDB(phone, name) {
@@ -375,7 +404,7 @@ window.updateCartQty = function(itemId, delta) {
     const item = currentCart.find(i => i.itemId === itemId);
     if (item) {
         item.qty += delta;
-        if (item.qty <= 0) { currentCart = currentCart.filter(i => i.itemId !== itemId); }
+        if (item.qty <= 0) { currentCart = currentCart.filter(i => i.itemId !== itemId); posSessions[activeSessionIndex].cart = currentCart; }
         renderCart();
     }
 }
@@ -397,11 +426,9 @@ function renderCart() {
     });
     document.getElementById("cart-total").innerText = `Rp ${total.toLocaleString('id-ID')}`; window.cartSubtotal = total; window.cartGrandTotal = total; 
     
-    // Multi-Session: Update Cart Indicators
     posSessions.forEach((session, i) => {
         let qty = session.cart.reduce((sum, item) => sum + item.qty, 0);
         let btn = document.getElementById(`tab-btn-${i}`);
-        let isActive = i === activeSessionIndex;
         if (qty > 0) {
             btn.innerHTML = `🛒 Antrean ${i+1} <span style="background:#e74c3c; color:white; border-radius:12px; padding:2px 6px; font-size:11px; margin-left:5px;">${qty}</span>`;
         } else {
@@ -473,17 +500,15 @@ window.recalcRedemptions = function() {
     });
     
     document.getElementById("pay-free").value = totalDiscount; 
-    window.cartGrandTotal = Math.max(0, window.cartSubtotal - totalDiscount);
-    document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
-    
     autoBalanceCash();
 }
 
 window.autoBalanceCash = function() {
     const q = Number(document.getElementById("pay-qris").value) || 0;
     const t = Number(document.getElementById("pay-transfer").value) || 0;
+    const f = Number(document.getElementById("pay-free").value) || 0;
     
-    const totalAccounted = q + t;
+    const totalAccounted = q + t + f;
     const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     
     document.getElementById("pay-cash").value = remaining;
@@ -494,8 +519,9 @@ window.calculateRemaining = function() {
     const c = Number(document.getElementById("pay-cash").value) || 0; 
     const q = Number(document.getElementById("pay-qris").value) || 0;
     const t = Number(document.getElementById("pay-transfer").value) || 0; 
+    const f = Number(document.getElementById("pay-free").value) || 0;
 
-    const totalAccounted = c + q + t; 
+    const totalAccounted = c + q + t + f; 
     const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     document.getElementById("review-remaining").innerText = `Rp ${remaining.toLocaleString('id-ID')}`;
 }
@@ -506,7 +532,8 @@ async function finalizeOrder(shouldPrint) {
     const cash = Number(document.getElementById("pay-cash").value) || 0; const qris = Number(document.getElementById("pay-qris").value) || 0;
     const transfer = Number(document.getElementById("pay-transfer").value) || 0; const free = Number(document.getElementById("pay-free").value) || 0;
     const rentBottleQty = Number(document.getElementById("rent-bottle-qty").value) || 0;
-    const totalAccounted = cash + qris + transfer; const remaining = window.cartGrandTotal - totalAccounted; 
+    
+    const totalAccounted = cash + qris + transfer + free; const remaining = window.cartGrandTotal - totalAccounted; 
 
     let custPhoneRaw = document.getElementById("cust-phone").value.trim(); let custPhone = custPhoneRaw || "-";
     const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
@@ -634,8 +661,14 @@ async function buildPrintableReceipt(orderId, order, deposit, remaining, payMeth
     `;
 }
 
-// Inbound / Truck Logic
+// Inbound, Cuci Tandon & Lapor Masalah Logic
 window.openInboundModal = function() {
+    let select = document.getElementById("inbound-tank-target");
+    select.innerHTML = "";
+    let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
+    tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">💧 ${t.name}</option>`; });
+    if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
+    
     document.getElementById("inbound-qty").value = "";
     document.getElementById("inbound-notes").value = "";
     document.getElementById("inbound-modal").classList.remove("hidden");
@@ -655,6 +688,54 @@ window.submitInbound = function() {
     db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").add(payload);
     document.getElementById("inbound-modal").classList.add("hidden");
     alert(`Berhasil mencatat kedatangan ${qty} Liter ke ${targetTank}.`);
+    runBackgroundSync();
+}
+
+window.openCuciModal = function() {
+    let select = document.getElementById("cuci-tank");
+    select.innerHTML = "";
+    let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
+    tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">💧 ${t.name}</option>`; });
+    if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
+    
+    document.getElementById("cuci-qty").value = "";
+    document.getElementById("cuci-notes").value = "";
+    document.getElementById("cuci-modal").classList.remove("hidden");
+}
+window.submitCuciTandon = function() {
+    let tank = document.getElementById("cuci-tank").value;
+    let qty = Number(document.getElementById("cuci-qty").value);
+    let notes = document.getElementById("cuci-notes").value.trim() || "-";
+    if (qty <= 0) return alert("Masukkan estimasi air terbuang dengan benar.");
+    
+    let payload = { logId: "CUC-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, outlet: currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
+    db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").add(payload);
+    document.getElementById("cuci-modal").classList.add("hidden");
+    alert("Laporan Cuci Tandon berhasil disimpan. Menunggu validasi Admin.");
+    runBackgroundSync();
+}
+
+window.openLaporModal = function() {
+    let select = document.getElementById("lapor-tank");
+    select.innerHTML = "";
+    let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
+    tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">⚠️ ${t.name}</option>`; });
+    if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">⚠️ Tangki Air RO</option><option value="Tangki Air Standar">⚠️ Tangki Air Standar</option>`; }
+    
+    document.getElementById("lapor-qty").value = "";
+    document.getElementById("lapor-notes").value = "";
+    document.getElementById("lapor-modal").classList.remove("hidden");
+}
+window.submitLaporMasalah = function() {
+    let tank = document.getElementById("lapor-tank").value;
+    let qty = Number(document.getElementById("lapor-qty").value);
+    let notes = document.getElementById("lapor-notes").value.trim();
+    if (qty <= 0 || notes === "") return alert("Harap masukkan estimasi air hilang dan kronologi kejadian dengan lengkap.");
+    
+    let payload = { logId: "LPR-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, outlet: currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
+    db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").add(payload);
+    document.getElementById("lapor-modal").classList.add("hidden");
+    alert("Laporan Masalah berhasil dikirim. Menunggu validasi Admin.");
     runBackgroundSync();
 }
 
@@ -907,7 +988,7 @@ async function runBackgroundSync() {
     if (!navigator.onLine || isSyncing) return;
     isSyncing = true; 
     try {
-        let tx = db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound"], "readonly");
+        let tx = db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah"], "readonly");
         
         let orders = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
         for (const order of orders) {
@@ -951,6 +1032,23 @@ async function runBackgroundSync() {
                 try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncInbound", data: inb }) }); if ((await r.json()).status === "Success") { db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").delete(inb.logId); } } catch(e) {}
             }
         }
+
+        // NEW: Sync Cuci Tandon
+        let cuciLogs = await new Promise(res => tx.objectStore("cuci_tandon").getAll().onsuccess = e => res(e.target.result));
+        for (const log of cuciLogs) {
+            if (log.syncStatus === "Pending") {
+                try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncCuciTandon", data: log }) }); if ((await r.json()).status === "Success") { db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").delete(log.logId); } } catch(e) {}
+            }
+        }
+
+        // NEW: Sync Lapor Masalah
+        let laporLogs = await new Promise(res => tx.objectStore("lapor_masalah").getAll().onsuccess = e => res(e.target.result));
+        for (const log of laporLogs) {
+            if (log.syncStatus === "Pending") {
+                try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncLaporMasalah", data: log }) }); if ((await r.json()).status === "Success") { db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").delete(log.logId); } } catch(e) {}
+            }
+        }
+
     } finally { isSyncing = false; }
 }
 
