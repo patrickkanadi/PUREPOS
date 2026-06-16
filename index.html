@@ -30,7 +30,10 @@
         .btn-action-group { display: flex; gap: 10px; flex: 1; }
         .btn-action-group button { flex: 1; padding: 12px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 14px; }
         
-        #active-customer-banner { display: flex; justify-content: space-between; align-items: center; background: #e8f4f8; padding: 12px 20px; border-radius: 8px; border: 1px solid #bce8f1; width: 100%; }
+        #active-customer-banner { display: flex; flex-direction: column; gap: 10px; background: #e8f4f8; padding: 15px 20px; border-radius: 8px; border: 1px solid #bce8f1; width: 100%; }
+        .active-customer-top { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+        
+        #promo-indicator-banner { background: #f1c40f; color: #856404; font-size: 13px; padding: 6px 10px; border-radius: 6px; font-weight: bold; width: 100%; }
 
         .autocomplete-wrapper { position: relative; flex: 1; }
         #autocomplete-results { position: absolute; top: 100%; left: 0; width: 100%; max-width: 500px; background: white; border: 2px solid #bdc3c7; border-top: none; border-radius: 0 0 8px 8px; max-height: 250px; overflow-y: auto; z-index: 100; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
@@ -51,8 +54,7 @@
         .price-badge { background: #e8f4f8; color: #2980b9; font-weight: bold; padding: 6px 12px; border-radius: 20px; display: inline-block; margin-top: 10px;}
 
         #cart-section { flex: 4; display: flex; flex-direction: column; background: #fdfbf7; }
-        #cart-header { padding: 15px; background: #2c3e50; color: white; font-weight: bold; text-align: center; display: flex; justify-content: space-between; align-items: center;}
-        #promo-indicator { background: #f1c40f; color: #856404; font-size: 12px; padding: 4px 8px; border-radius: 12px; font-weight: bold; }
+        #cart-header { padding: 15px; background: #2c3e50; color: white; font-weight: bold; text-align: center;}
         #cart-items { flex: 1; padding: 15px; overflow-y: auto; }
         
         #checkout-panel { padding: 20px; border-top: 2px dashed #ccc; background: #fff; box-shadow: 0 -4px 10px rgba(0,0,0,0.03); }
@@ -188,11 +190,14 @@
                     </div>
                     
                     <div id="active-customer-banner" class="hidden">
-                        <div style="font-size:16px; color:#2c3e50; font-weight:bold;">
-                            👤 <span id="active-cust-name">---</span> 
-                            <span style="font-size:12px; color:#7f8c8d; font-weight:normal; margin-left:5px;" id="active-cust-phone"></span>
+                        <div class="active-customer-top">
+                            <div style="font-size:16px; color:#2c3e50; font-weight:bold;">
+                                👤 <span id="active-cust-name">---</span> 
+                                <span style="font-size:12px; color:#7f8c8d; font-weight:normal; margin-left:5px;" id="active-cust-phone"></span>
+                            </div>
+                            <button onclick="lockMenu()" style="background:#e74c3c; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Ganti / Kunci</button>
                         </div>
-                        <button onclick="lockMenu()" style="background:#e74c3c; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Ganti / Kunci</button>
+                        <div id="promo-indicator-banner" class="hidden"></div>
                     </div>
                 </div>
                 
@@ -207,7 +212,7 @@
             </div>
             
             <div id="cart-section">
-                <div id="cart-header"><span>Keranjang Saat Ini</span> <span id="promo-indicator" class="hidden" style="max-width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></span></div>
+                <div id="cart-header">Keranjang Saat Ini</div>
                 <div id="cart-items"></div>
                 <div id="checkout-panel">
                     <div class="grand-total"><span>Total Akhir:</span> <span id="cart-total">Rp 0</span></div>
