@@ -21,17 +21,33 @@ let isMenuLocked = true; let isSyncing = false;
 window.loyaltyEnabled = false; 
 let deferredPrompt;
 
+// GMT+7 (WIB) Timestamp Generator
+function getWibDate() {
+    const d = new Date();
+    const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
+    const nd = new Date(utc + (3600000 * 7)); // Add 7 hours for WIB
+    const pad = n => n < 10 ? '0' + n : n;
+    return `${nd.getFullYear()}-${pad(nd.getMonth()+1)}-${pad(nd.getDate())}T${pad(nd.getHours())}:${pad(nd.getMinutes())}:${pad(nd.getSeconds())}+07:00`;
+}
+
 // PWA Install Prompt
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault(); deferredPrompt = e;
     const installBtn = document.getElementById('btn-install');
+    const installBtnLogin = document.getElementById('btn-install-login');
     if(installBtn) installBtn.classList.remove('hidden');
+    if(installBtnLogin) installBtnLogin.classList.remove('hidden');
 });
 function installPWA() {
     if (deferredPrompt) {
         deferredPrompt.prompt();
         deferredPrompt.userChoice.then((choiceResult) => {
-            if (choiceResult.outcome === 'accepted') document.getElementById('btn-install').classList.add('hidden');
+            if (choiceResult.outcome === 'accepted') {
+                const installBtn = document.getElementById('btn-install');
+                const installBtnLogin = document.getElementById('btn-install-login');
+                if(installBtn) installBtn.classList.add('hidden');
+                if(installBtnLogin) installBtnLogin.classList.add('hidden');
+            }
             deferredPrompt = null;
         });
     }
@@ -86,7 +102,7 @@ function attemptLogin() {
                     currentLoginTime = activeShift.loginTime; 
                     currentOutlet = activeShift.outlet || currentOutlet; 
                 } else {
-                    currentShiftId = "SHF-" + Date.now(); currentLoginTime = new Date().toISOString();
+                    currentShiftId = "SHF-" + Date.now(); currentLoginTime = getWibDate();
                     db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({
                         pin: pin, shiftId: currentShiftId, loginTime: currentLoginTime, outlet: currentOutlet
                     });
@@ -592,7 +608,7 @@ async function finalizeOrder(shouldPrint) {
     }
 
     const orderPayload = {
-        orderId: "ORD-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId,
+        orderId: "ORD-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId,
         customerName: custName, customerPhone: custPhone, orderStatus: status, items: currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
         paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, 
         loyaltyChanges: loyaltyChanges, freeItemsRedeemed: freeItemsRedeemed, outlet: currentOutlet, syncStatus: "Pending" 
@@ -621,7 +637,7 @@ async function buildPrintableReceipt(orderId, order, deposit, remaining, payMeth
     const f2 = settings["Footer_2"] || ""; 
     let f3 = settings["Footer_3"] || ""; if (settings["Footer_3_" + order.outlet]) f3 = settings["Footer_3_" + order.outlet]; 
 
-    const printArea = document.getElementById("printable-area"); const dateStr = new Date().toLocaleString('id-ID');
+    const printArea = document.getElementById("printable-area"); const dateStr = new Date(order.timestamp).toLocaleString('id-ID');
     
     let itemsHtml = "";
     order.items.forEach(item => { const lineTotal = item.qty * item.originalPrice; itemsHtml += `<div style="display:flex; justify-content:space-between; margin-bottom: 2px;"><span>${item.qty}x ${item.name}</span><span>${lineTotal.toLocaleString('id-ID')}</span></div>`; });
@@ -681,7 +697,7 @@ window.submitInbound = function() {
     if (qty <= 0) return alert("Masukkan jumlah liter air yang benar.");
 
     const payload = {
-        logId: "INB-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId,
+        logId: "INB-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId,
         itemName: targetTank, qty: qty, notes: notes, outlet: currentOutlet, syncStatus: "Pending"
     };
 
@@ -708,7 +724,7 @@ window.submitCuciTandon = function() {
     let notes = document.getElementById("cuci-notes").value.trim() || "-";
     if (qty <= 0) return alert("Masukkan estimasi air terbuang dengan benar.");
     
-    let payload = { logId: "CUC-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, outlet: currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
+    let payload = { logId: "CUC-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, outlet: currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
     db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").add(payload);
     document.getElementById("cuci-modal").classList.add("hidden");
     alert("Laporan Cuci Tandon berhasil disimpan. Menunggu validasi Admin.");
@@ -732,7 +748,7 @@ window.submitLaporMasalah = function() {
     let notes = document.getElementById("lapor-notes").value.trim();
     if (qty <= 0 || notes === "") return alert("Harap masukkan estimasi air hilang dan kronologi kejadian dengan lengkap.");
     
-    let payload = { logId: "LPR-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, outlet: currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
+    let payload = { logId: "LPR-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, outlet: currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
     db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").add(payload);
     document.getElementById("lapor-modal").classList.add("hidden");
     alert("Laporan Masalah berhasil dikirim. Menunggu validasi Admin.");
@@ -750,7 +766,7 @@ function saveExpense() {
     if (amount <= 0 || !category) return alert("Harap masukkan jumlah dan kategori yang benar.");
     db.transaction(["expense_categories"], "readwrite").objectStore("expense_categories").put({ name: category });
 
-    const payload = { expenseId: "EXP-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, category: category, description: document.getElementById("exp-desc").value || "-", amount: amount, status: "Active", outlet: currentOutlet, syncStatus: "Pending" };
+    const payload = { expenseId: "EXP-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, category: category, description: document.getElementById("exp-desc").value || "-", amount: amount, status: "Active", outlet: currentOutlet, syncStatus: "Pending" };
     db.transaction(["expenses"], "readwrite").objectStore("expenses").add(payload);
     document.getElementById("expense-modal").classList.add("hidden"); document.getElementById("exp-amount").value = ""; document.getElementById("exp-category").value = ""; document.getElementById("exp-desc").value = ""; alert("Pengeluaran Berhasil Dicatat!"); runBackgroundSync();
 }
@@ -766,7 +782,7 @@ function renderHistoryList(type) {
             shiftOrders.forEach(o => {
                 let badge = o.orderStatus === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : o.orderStatus === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">${o.orderStatus}</span>`; 
                 let btn = (o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending") ? `<button onclick="requestVoid('orders', '${o.orderId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Batal/Void</button>` : '';
-                container.innerHTML += `<div class="history-row"><div><strong>${o.customerName}</strong><br><small style="color:#7f8c8d;">${new Date(o.timestamp).toLocaleTimeString()} | Rp ${o.grandTotal.toLocaleString('id-ID')}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div>`;
+                container.innerHTML += `<div class="history-row"><div><strong>${o.customerName}</strong><br><small style="color:#7f8c8d;">${new Date(o.timestamp).toLocaleTimeString('id-ID')} | Rp ${o.grandTotal.toLocaleString('id-ID')}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div>`;
             });
         };
     } else if (type === 'expenses') {
@@ -776,7 +792,7 @@ function renderHistoryList(type) {
             shiftExpenses.forEach(exp => {
                 let badge = exp.status === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : exp.status === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">Aktif</span>`;
                 let btn = (exp.status !== "Voided" && exp.status !== "Void Pending") ? `<button onclick="requestVoid('expenses', '${exp.expenseId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Batal/Void</button>` : '';
-                container.innerHTML += `<div class="history-row"><div><strong>${exp.category}</strong><br><small style="color:#7f8c8d;">${new Date(exp.timestamp).toLocaleTimeString()} | Rp ${exp.amount.toLocaleString('id-ID')}</small><br><small>${exp.description}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div>`;
+                container.innerHTML += `<div class="history-row"><div><strong>${exp.category}</strong><br><small style="color:#7f8c8d;">${new Date(exp.timestamp).toLocaleTimeString('id-ID')} | Rp ${exp.amount.toLocaleString('id-ID')}</small><br><small>${exp.description}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div>`;
             });
         };
     } else if (type === 'shifts') {
@@ -918,7 +934,7 @@ function submitCashDrop() {
     
     calculateLiveDrawer((liveAmount) => {
         const leftInDrawer = liveAmount - pullAmount;
-        const payload = { dropId: "DRP-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: finalNotes, outlet: currentOutlet, syncStatus: "Pending" };
+        const payload = { dropId: "DRP-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: finalNotes, outlet: currentOutlet, syncStatus: "Pending" };
         db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").add(payload);
         document.getElementById("cash-drop-modal").classList.add("hidden"); runBackgroundSync();
         if (isLoggingOut) { executeFinalLogout(leftInDrawer); } else { alert(`Setor Uang Berhasil!\nTujuan: ${destination}\nSisa Tunai di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); }
@@ -963,7 +979,7 @@ function initiateLogoutSequence() {
 async function executeFinalLogout(netCash) { 
     const data = window.currentShiftData;
     const shiftPayload = {
-        shiftId: currentShiftId, timestamp: new Date().toISOString(), cashier: currentCashier, loginTime: currentLoginTime, logoutTime: new Date().toISOString(), 
+        shiftId: currentShiftId, timestamp: getWibDate(), cashier: currentCashier, loginTime: currentLoginTime, logoutTime: getWibDate(), 
         totalCustomers: data.totalCustomers, totalOrders: data.totalOrders, totalOmset: data.totalOmset, totalCash: data.totalCash, totalQris: data.totalQris, totalTransfer: data.totalTransfer, totalFree: data.totalFree,
         totalExpenses: data.totalExpenses, netCash: netCash, foodSummary: data.foodSummary, meterWater: data.meterWater, outlet: currentOutlet, syncStatus: "Pending"
     };
@@ -1033,7 +1049,6 @@ async function runBackgroundSync() {
             }
         }
 
-        // NEW: Sync Cuci Tandon
         let cuciLogs = await new Promise(res => tx.objectStore("cuci_tandon").getAll().onsuccess = e => res(e.target.result));
         for (const log of cuciLogs) {
             if (log.syncStatus === "Pending") {
@@ -1041,7 +1056,6 @@ async function runBackgroundSync() {
             }
         }
 
-        // NEW: Sync Lapor Masalah
         let laporLogs = await new Promise(res => tx.objectStore("lapor_masalah").getAll().onsuccess = e => res(e.target.result));
         for (const log of laporLogs) {
             if (log.syncStatus === "Pending") {
