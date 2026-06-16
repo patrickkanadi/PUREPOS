@@ -99,14 +99,12 @@ function updatePromoBanner(member) {
     let pointSummary = [];
     let wallet = member ? (member.wallet || {}) : {};
     
-    // Always show all products with a Loyalty Threshold, even if balance is 0
     let loyaltyItems = globalMenuData.filter(m => m.loyaltyThreshold > 0);
     loyaltyItems.forEach(item => {
         let w = wallet[item.name] || { points: 0, free: 0 };
         pointSummary.push(`💧 <strong>${item.name}</strong>: ${w.points}/${item.loyaltyThreshold} Poin${w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : ''}`);
     });
 
-    // Capture any legacy items floating in their wallet that aren't on the menu anymore
     for (let itemName in wallet) {
         if (!loyaltyItems.find(i => i.name === itemName)) {
              let w = wallet[itemName];
@@ -164,7 +162,7 @@ function unlockMenu(isGuest) {
                 updatePromoBanner(member);
             } else {
                 activeCustomerProfile = { phone: searchPhone, name: name, wallet: {}, bottlesBorrowed: 0 };
-                updatePromoBanner(activeCustomerProfile); // Renders 0 points nicely
+                updatePromoBanner(activeCustomerProfile); 
             }
 
             document.getElementById("active-cust-name").innerText = name;
@@ -356,16 +354,16 @@ function renderCart() {
             <div style="font-weight:bold; color:#2c3e50; min-width:80px; text-align:right;">Rp ${lineTotal.toLocaleString('id-ID')}</div>
         </div>`;
     });
-    document.getElementById("cart-total").innerText = `Rp ${total.toLocaleString('id-ID')}`; window.cartSubtotal = total; window.cartGrandTotal = total;
+    document.getElementById("cart-total").innerText = `Rp ${total.toLocaleString('id-ID')}`; window.cartSubtotal = total; window.cartGrandTotal = total; // Grand total matches subtotal initially
 }
 
 function clearCart() { lockMenu(); }
 
-// Checkout Flow & DYNAMIC Redemptions
+// Checkout Flow & Redemptions
 function reviewOrder() {
     if (currentCart.length === 0) return alert("Keranjang masih kosong!");
     
-    window.cartGrandTotal = window.cartSubtotal;
+    window.cartGrandTotal = window.cartSubtotal; // REVERT: Never reduce this visually
     
     const redeemContainer = document.getElementById("redemption-items");
     redeemContainer.innerHTML = "";
@@ -398,11 +396,13 @@ function reviewOrder() {
         document.getElementById("redemption-section").classList.add("hidden");
     }
 
+    // Reset Fields
     document.getElementById("pay-qris").value = 0; 
     document.getElementById("pay-transfer").value = 0; 
     document.getElementById("pay-free").value = 0; 
     let bottleRentBox = document.getElementById("rent-bottle-qty"); if(bottleRentBox) bottleRentBox.value = 0;
     
+    // REVERT: Standard display
     document.getElementById("review-subtotal").innerText = `Rp ${window.cartSubtotal.toLocaleString('id-ID')}`;
     document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
     
@@ -421,9 +421,8 @@ window.recalcRedemptions = function() {
         totalDiscount += (qty * price);
     });
     
+    // REVERT: Put the discount directly into the Free payment bucket, but do not touch the grand total
     document.getElementById("pay-free").value = totalDiscount; 
-    window.cartGrandTotal = Math.max(0, window.cartSubtotal - totalDiscount);
-    document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
     
     autoBalanceCash();
 }
@@ -431,8 +430,10 @@ window.recalcRedemptions = function() {
 window.autoBalanceCash = function() {
     const q = Number(document.getElementById("pay-qris").value) || 0;
     const t = Number(document.getElementById("pay-transfer").value) || 0;
+    const f = Number(document.getElementById("pay-free").value) || 0;
     
-    const totalAccounted = q + t;
+    // REVERT: Add the free field back into the total accounted calculation
+    const totalAccounted = q + t + f;
     const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     
     document.getElementById("pay-cash").value = remaining;
@@ -443,8 +444,10 @@ window.calculateRemaining = function() {
     const c = Number(document.getElementById("pay-cash").value) || 0; 
     const q = Number(document.getElementById("pay-qris").value) || 0;
     const t = Number(document.getElementById("pay-transfer").value) || 0; 
+    const f = Number(document.getElementById("pay-free").value) || 0;
 
-    const totalAccounted = c + q + t; 
+    // REVERT: Free counts as payment
+    const totalAccounted = c + q + t + f; 
     const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     document.getElementById("review-remaining").innerText = `Rp ${remaining.toLocaleString('id-ID')}`;
 }
@@ -455,7 +458,9 @@ async function finalizeOrder(shouldPrint) {
     const cash = Number(document.getElementById("pay-cash").value) || 0; const qris = Number(document.getElementById("pay-qris").value) || 0;
     const transfer = Number(document.getElementById("pay-transfer").value) || 0; const free = Number(document.getElementById("pay-free").value) || 0;
     const rentBottleQty = Number(document.getElementById("rent-bottle-qty").value) || 0;
-    const totalAccounted = cash + qris + transfer; const remaining = window.cartGrandTotal - totalAccounted; 
+    
+    // REVERT: Free counts as payment
+    const totalAccounted = cash + qris + transfer + free; const remaining = window.cartGrandTotal - totalAccounted; 
 
     let custPhoneRaw = document.getElementById("cust-phone").value.trim(); let custPhone = custPhoneRaw || "-";
     const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
