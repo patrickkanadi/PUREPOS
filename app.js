@@ -88,7 +88,41 @@ function attemptLogin() {
     };
 }
 
-// UI Locks & Search
+// UI Locks & Displaying Points Panel
+function updatePromoBanner(member) {
+    const promoBanner = document.getElementById("promo-indicator-banner");
+    if (!window.loyaltyEnabled || !promoBanner) {
+        if(promoBanner) promoBanner.classList.add("hidden"); 
+        return;
+    }
+
+    let pointSummary = [];
+    let wallet = member ? (member.wallet || {}) : {};
+    
+    // Always show all products with a Loyalty Threshold, even if balance is 0
+    let loyaltyItems = globalMenuData.filter(m => m.loyaltyThreshold > 0);
+    loyaltyItems.forEach(item => {
+        let w = wallet[item.name] || { points: 0, free: 0 };
+        pointSummary.push(`💧 <strong>${item.name}</strong>: ${w.points}/${item.loyaltyThreshold} Poin${w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : ''}`);
+    });
+
+    // Capture any legacy items floating in their wallet that aren't on the menu anymore
+    for (let itemName in wallet) {
+        if (!loyaltyItems.find(i => i.name === itemName)) {
+             let w = wallet[itemName];
+             pointSummary.push(`💧 <strong>${itemName}</strong>: ${w.points} Poin${w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : ''}`);
+        }
+    }
+    
+    if (pointSummary.length > 0) {
+        promoBanner.innerHTML = `🌟 <strong>Info Saldo Poin:</strong><br>` + pointSummary.join('<br>');
+        promoBanner.classList.remove("hidden");
+    } else {
+        promoBanner.innerHTML = `🌟 Promo Loyalty tidak ada barang aktif.`;
+        promoBanner.classList.remove("hidden");
+    }
+}
+
 function lockMenu() {
     isMenuLocked = true; activeCustomerProfile = null; 
     document.getElementById("customer-input-section").classList.remove("hidden");
@@ -116,7 +150,6 @@ function unlockMenu(isGuest) {
         name = document.getElementById("cust-name").value.trim() || "Pelanggan";
         if (phone.length < 5) return alert("Harap masukkan Nomor WhatsApp yang valid terlebih dahulu.");
 
-        // Clean up input phone to exactly match database "0812..." format
         let searchPhone = phone.replace(/\D/g, '');
         if (searchPhone.startsWith('62')) searchPhone = '0' + searchPhone.substring(2);
         if (searchPhone.length > 0 && !searchPhone.startsWith('0')) searchPhone = '0' + searchPhone;
@@ -128,29 +161,10 @@ function unlockMenu(isGuest) {
                 activeCustomerProfile = member;
                 name = member.name;
                 document.getElementById("cust-name").value = name;
-                
-                let pointSummary = [];
-                let wallet = member.wallet || {};
-                for(let item in wallet) {
-                    let w = wallet[item];
-                    if(w.points > 0 || w.free > 0) {
-                        pointSummary.push(`${item} (${w.points} Poin${w.free > 0 ? `, ${w.free} Gratis` : ''})`);
-                    }
-                }
-                
-                if (window.loyaltyEnabled && promoBanner && pointSummary.length > 0) {
-                    promoBanner.innerText = `🌟 Info Saldo Poin: ${pointSummary.join(' | ')}`;
-                    promoBanner.classList.remove("hidden");
-                } else if (promoBanner) {
-                    promoBanner.innerText = `🌟 Pelanggan belum memiliki poin tersimpan.`;
-                    promoBanner.classList.remove("hidden");
-                }
+                updatePromoBanner(member);
             } else {
                 activeCustomerProfile = { phone: searchPhone, name: name, wallet: {}, bottlesBorrowed: 0 };
-                if (promoBanner) {
-                    promoBanner.innerText = `🌟 Pelanggan Baru (Belum ada poin).`;
-                    promoBanner.classList.remove("hidden");
-                }
+                updatePromoBanner(activeCustomerProfile); // Renders 0 points nicely
             }
 
             document.getElementById("active-cust-name").innerText = name;
@@ -193,8 +207,6 @@ async function syncMasterData() {
             if (result.data.authStatuses) processVoidApprovals(result.data.authStatuses);
 
             globalMenuData = result.data.menu; 
-            
-            // FIX: Force toUpperCase to avoid Boolean mismatch from Google Sheets
             window.loyaltyEnabled = String(result.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
             
             const rawOutlets = result.data.settings["Outlet_List"] || "Pusat";
@@ -232,16 +244,15 @@ function handleAutocomplete(e) {
                 let nameStr = m.name.replace(/'/g, "\\'");
                 
                 let pointSummary = [];
-                for(let item in (m.wallet || {})) {
-                    let w = m.wallet[item];
-                    if(w.points > 0 || w.free > 0) {
-                        pointSummary.push(`${item} (${w.points} Poin${w.free > 0 ? `, ${w.free} Gratis` : ''})`);
-                    }
-                }
+                let loyaltyItems = globalMenuData.filter(item => item.loyaltyThreshold > 0);
+                loyaltyItems.forEach(item => {
+                    let w = (m.wallet || {})[item.name] || { points: 0, free: 0 };
+                    pointSummary.push(`${item.name} (${w.points}/${item.loyaltyThreshold})`);
+                });
                 
                 let pointHtml = pointSummary.length > 0 
                     ? `<div style="font-size:12px; color:#d35400; font-weight:bold; margin-top:6px; background:#fdf2e9; padding:4px 8px; border-radius:4px; display:inline-block;">🌟 ${pointSummary.join(' | ')}</div>` 
-                    : `<div style="font-size:12px; color:#95a5a6; margin-top:4px;">Belum ada poin</div>`;
+                    : ``;
 
                 return `<div class="autocomplete-item" onclick="selectMember('${m.phone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0})">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -269,27 +280,7 @@ window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed) {
     try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
 
     activeCustomerProfile = { phone: phone, name: name, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed };
-    
-    const promoBanner = document.getElementById("promo-indicator-banner");
-    if (!window.loyaltyEnabled || !promoBanner) {
-        if(promoBanner) promoBanner.classList.add("hidden"); return;
-    }
-    
-    let pointSummary = [];
-    for(let item in wallet) {
-        let w = wallet[item];
-        if(w.points > 0 || w.free > 0) {
-            pointSummary.push(`${item} (${w.points} Poin${w.free > 0 ? `, ${w.free} Gratis` : ''})`);
-        }
-    }
-    
-    if (pointSummary.length > 0) {
-        promoBanner.innerText = `🌟 Info Saldo Poin: ${pointSummary.join(' | ')}`; 
-        promoBanner.classList.remove("hidden");
-    } else {
-        promoBanner.innerText = `🌟 Pelanggan belum memiliki poin tersimpan.`; 
-        promoBanner.classList.remove("hidden");
-    }
+    updatePromoBanner(activeCustomerProfile);
 };
 
 function saveMemberToDB(phone, name) {
@@ -380,7 +371,6 @@ function reviewOrder() {
     redeemContainer.innerHTML = "";
     let hasRedeemable = false;
 
-    // Build the Promo Redemption box if they have items in cart that match free items in wallet
     if (window.loyaltyEnabled && activeCustomerProfile) {
         let wallet = activeCustomerProfile.wallet || {};
         currentCart.forEach(item => {
@@ -431,9 +421,7 @@ window.recalcRedemptions = function() {
         totalDiscount += (qty * price);
     });
     
-    document.getElementById("pay-free").value = totalDiscount; // Hidden UI element updates visually
-    
-    // Reduces Grand Total directly!
+    document.getElementById("pay-free").value = totalDiscount; 
     window.cartGrandTotal = Math.max(0, window.cartSubtotal - totalDiscount);
     document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
     
@@ -444,7 +432,6 @@ window.autoBalanceCash = function() {
     const q = Number(document.getElementById("pay-qris").value) || 0;
     const t = Number(document.getElementById("pay-transfer").value) || 0;
     
-    // DO NOT ADD `f` (Free) to totalAccounted because it already reduced the window.cartGrandTotal!
     const totalAccounted = q + t;
     const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     
@@ -468,7 +455,7 @@ async function finalizeOrder(shouldPrint) {
     const cash = Number(document.getElementById("pay-cash").value) || 0; const qris = Number(document.getElementById("pay-qris").value) || 0;
     const transfer = Number(document.getElementById("pay-transfer").value) || 0; const free = Number(document.getElementById("pay-free").value) || 0;
     const rentBottleQty = Number(document.getElementById("rent-bottle-qty").value) || 0;
-    const totalAccounted = cash + qris + transfer; const remaining = window.cartGrandTotal - totalAccounted; // Checks against discounted total
+    const totalAccounted = cash + qris + transfer; const remaining = window.cartGrandTotal - totalAccounted; 
 
     let custPhoneRaw = document.getElementById("cust-phone").value.trim(); let custPhone = custPhoneRaw || "-";
     const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
@@ -482,7 +469,6 @@ async function finalizeOrder(shouldPrint) {
 
     let status = "Completed"; 
     
-    // Read exact redemptions chosen by cashier
     currentCart.forEach(i => i.redeemed = 0);
     document.querySelectorAll(".redeem-input").forEach(input => {
         let itemId = input.getAttribute("data-item");
@@ -565,12 +551,12 @@ async function buildPrintableReceipt(orderId, order, deposit, remaining, payMeth
     let poinHtml = "";
     if (window.loyaltyEnabled && order.customerPhone && order.customerPhone !== "-") {
         let lines = [];
-        for (let itemName in updatedWallet) {
-            let data = updatedWallet[itemName];
-            if (data.points > 0 || data.free > 0) {
-                lines.push(`<strong>${itemName}</strong><br>Poin: ${data.points} | Gratis: ${data.free}`);
-            }
-        }
+        let loyaltyItems = globalMenuData.filter(m => m.loyaltyThreshold > 0);
+        loyaltyItems.forEach(item => {
+            let data = updatedWallet[item.name] || {points: 0, free: 0};
+            lines.push(`<strong>${item.name}</strong><br>Poin: ${data.points}/${item.loyaltyThreshold} | Gratis: ${data.free}`);
+        });
+
         if (lines.length > 0) {
             poinHtml = `
             <div style="margin-top:10px; padding-top:5px; border-top:1px dashed #000; font-size:11px; text-align:center;">
