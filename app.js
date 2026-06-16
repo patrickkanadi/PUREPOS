@@ -88,8 +88,7 @@ function attemptLogin() {
     };
 }
 
-// UI Locks
-
+// UI Locks & Search
 function lockMenu() {
     isMenuLocked = true; activeCustomerProfile = null; 
     document.getElementById("customer-input-section").classList.remove("hidden");
@@ -99,6 +98,7 @@ function lockMenu() {
     const promoBanner = document.getElementById("promo-indicator-banner");
     if(promoBanner) promoBanner.classList.add("hidden");
 }
+
 function unlockMenu(isGuest) {
     let phone = "-"; let name = "Walk-in";
     const promoBanner = document.getElementById("promo-indicator-banner");
@@ -116,16 +116,19 @@ function unlockMenu(isGuest) {
         name = document.getElementById("cust-name").value.trim() || "Pelanggan";
         if (phone.length < 5) return alert("Harap masukkan Nomor WhatsApp yang valid terlebih dahulu.");
 
-        // SAFETY NET: Query local database instantly to fetch point values
+        // Clean up input phone to exactly match database "0812..." format
+        let searchPhone = phone.replace(/\D/g, '');
+        if (searchPhone.startsWith('62')) searchPhone = '0' + searchPhone.substring(2);
+        if (searchPhone.length > 0 && !searchPhone.startsWith('0')) searchPhone = '0' + searchPhone;
+
         const tx = db.transaction(["members"], "readonly");
-        tx.objectStore("members").get(phone).onsuccess = (ev) => {
+        tx.objectStore("members").get(searchPhone).onsuccess = (ev) => {
             const member = ev.target.result;
             if (member) {
                 activeCustomerProfile = member;
                 name = member.name;
                 document.getElementById("cust-name").value = name;
                 
-                // Translate plain text database string into visual indicators
                 let pointSummary = [];
                 let wallet = member.wallet || {};
                 for(let item in wallet) {
@@ -143,8 +146,7 @@ function unlockMenu(isGuest) {
                     promoBanner.classList.remove("hidden");
                 }
             } else {
-                // Completely new member configuration
-                activeCustomerProfile = { phone: phone, name: name, wallet: {}, bottlesBorrowed: 0 };
+                activeCustomerProfile = { phone: searchPhone, name: name, wallet: {}, bottlesBorrowed: 0 };
                 if (promoBanner) {
                     promoBanner.innerText = `🌟 Pelanggan Baru (Belum ada poin).`;
                     promoBanner.classList.remove("hidden");
@@ -152,7 +154,7 @@ function unlockMenu(isGuest) {
             }
 
             document.getElementById("active-cust-name").innerText = name;
-            document.getElementById("active-cust-phone").innerText = `(${phone})`;
+            document.getElementById("active-cust-phone").innerText = `(${searchPhone})`;
             document.getElementById("customer-input-section").classList.add("hidden");
             document.getElementById("active-customer-banner").classList.remove("hidden");
             isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
@@ -166,6 +168,7 @@ async function manualPushSync() {
     document.getElementById("network-text").innerText = "Mengirim Data..."; document.getElementById("network-dot").style.backgroundColor = "#f39c12";
     await runBackgroundSync(); document.getElementById("network-text").innerText = "Menarik Data..."; await syncMasterData(); alert("Sinkronisasi Database Berhasil!");
 }
+
 async function syncMasterData() {
     if (!navigator.onLine) {
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Mode Offline";
@@ -190,7 +193,9 @@ async function syncMasterData() {
             if (result.data.authStatuses) processVoidApprovals(result.data.authStatuses);
 
             globalMenuData = result.data.menu; 
-            window.loyaltyEnabled = result.data.settings["Enable_Loyalty"] === "TRUE";
+            
+            // FIX: Force toUpperCase to avoid Boolean mismatch from Google Sheets
+            window.loyaltyEnabled = String(result.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
             
             const rawOutlets = result.data.settings["Outlet_List"] || "Pusat";
             const outletArray = rawOutlets.split(",").map(s => s.trim());
@@ -209,7 +214,7 @@ async function syncMasterData() {
     }
 }
 
-// Customers & Loyalty
+// Customers Handling
 function handleAutocomplete(e) {
     const val = e.target.value.toLowerCase().trim(); const resBox = document.getElementById("autocomplete-results");
     activeCustomerProfile = null; 
@@ -226,17 +231,31 @@ function handleAutocomplete(e) {
                 let wStr = JSON.stringify(m.wallet || {}).replace(/"/g, '&quot;');
                 let nameStr = m.name.replace(/'/g, "\\'");
                 
+                let pointSummary = [];
+                for(let item in (m.wallet || {})) {
+                    let w = m.wallet[item];
+                    if(w.points > 0 || w.free > 0) {
+                        pointSummary.push(`${item} (${w.points} Poin${w.free > 0 ? `, ${w.free} Gratis` : ''})`);
+                    }
+                }
+                
+                let pointHtml = pointSummary.length > 0 
+                    ? `<div style="font-size:12px; color:#d35400; font-weight:bold; margin-top:6px; background:#fdf2e9; padding:4px 8px; border-radius:4px; display:inline-block;">🌟 ${pointSummary.join(' | ')}</div>` 
+                    : `<div style="font-size:12px; color:#95a5a6; margin-top:4px;">Belum ada poin</div>`;
+
                 return `<div class="autocomplete-item" onclick="selectMember('${m.phone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0})">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div class="autocomplete-name">${m.name}</div>
                         <div class="autocomplete-phone" style="font-size:14px; color:#7f8c8d;">${m.phone}</div>
                     </div>
+                    ${pointHtml}
                 </div>`;
             }).join("");
             resBox.classList.remove("hidden");
         } else { resBox.classList.add("hidden"); }
     };
 }
+
 document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);document.getElementById("cust-name").addEventListener("input", handleAutocomplete);document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);document.getElementById("cust-name").addEventListener("click", handleAutocomplete);document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);document.addEventListener('click', (e) => { 
     if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { document.getElementById('autocomplete-results').classList.add('hidden'); }
 });
@@ -256,7 +275,6 @@ window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed) {
         if(promoBanner) promoBanner.classList.add("hidden"); return;
     }
     
-    // Build human readable wallet for the Active Customer Banner
     let pointSummary = [];
     for(let item in wallet) {
         let w = wallet[item];
@@ -362,7 +380,7 @@ function reviewOrder() {
     redeemContainer.innerHTML = "";
     let hasRedeemable = false;
 
-    // Check if what is in the cart matches what is in the wallet
+    // Build the Promo Redemption box if they have items in cart that match free items in wallet
     if (window.loyaltyEnabled && activeCustomerProfile) {
         let wallet = activeCustomerProfile.wallet || {};
         currentCart.forEach(item => {
@@ -392,10 +410,11 @@ function reviewOrder() {
 
     document.getElementById("pay-qris").value = 0; 
     document.getElementById("pay-transfer").value = 0; 
-    document.getElementById("pay-free").value = 0; // Starts at 0 until they type into the redeem boxes
+    document.getElementById("pay-free").value = 0; 
     let bottleRentBox = document.getElementById("rent-bottle-qty"); if(bottleRentBox) bottleRentBox.value = 0;
     
     document.getElementById("review-subtotal").innerText = `Rp ${window.cartSubtotal.toLocaleString('id-ID')}`;
+    document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
     
     document.getElementById("pay-cash").value = window.cartGrandTotal;
     calculateRemaining(); document.getElementById("review-modal").classList.remove("hidden");
@@ -411,16 +430,22 @@ window.recalcRedemptions = function() {
         let price = Number(input.getAttribute("data-price"));
         totalDiscount += (qty * price);
     });
-    document.getElementById("pay-free").value = totalDiscount;
+    
+    document.getElementById("pay-free").value = totalDiscount; // Hidden UI element updates visually
+    
+    // Reduces Grand Total directly!
+    window.cartGrandTotal = Math.max(0, window.cartSubtotal - totalDiscount);
+    document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
+    
     autoBalanceCash();
 }
 
 window.autoBalanceCash = function() {
     const q = Number(document.getElementById("pay-qris").value) || 0;
     const t = Number(document.getElementById("pay-transfer").value) || 0;
-    const f = Number(document.getElementById("pay-free").value) || 0;
     
-    const totalAccounted = q + t + f;
+    // DO NOT ADD `f` (Free) to totalAccounted because it already reduced the window.cartGrandTotal!
+    const totalAccounted = q + t;
     const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     
     document.getElementById("pay-cash").value = remaining;
@@ -431,8 +456,8 @@ window.calculateRemaining = function() {
     const c = Number(document.getElementById("pay-cash").value) || 0; 
     const q = Number(document.getElementById("pay-qris").value) || 0;
     const t = Number(document.getElementById("pay-transfer").value) || 0; 
-    const f = Number(document.getElementById("pay-free").value) || 0;
-    const totalAccounted = c + q + t + f; 
+
+    const totalAccounted = c + q + t; 
     const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     document.getElementById("review-remaining").innerText = `Rp ${remaining.toLocaleString('id-ID')}`;
 }
@@ -443,7 +468,7 @@ async function finalizeOrder(shouldPrint) {
     const cash = Number(document.getElementById("pay-cash").value) || 0; const qris = Number(document.getElementById("pay-qris").value) || 0;
     const transfer = Number(document.getElementById("pay-transfer").value) || 0; const free = Number(document.getElementById("pay-free").value) || 0;
     const rentBottleQty = Number(document.getElementById("rent-bottle-qty").value) || 0;
-    const totalAccounted = cash + qris + transfer + free; const remaining = window.cartGrandTotal - totalAccounted;
+    const totalAccounted = cash + qris + transfer; const remaining = window.cartGrandTotal - totalAccounted; // Checks against discounted total
 
     let custPhoneRaw = document.getElementById("cust-phone").value.trim(); let custPhone = custPhoneRaw || "-";
     const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
