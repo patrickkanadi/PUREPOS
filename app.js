@@ -192,7 +192,6 @@ window.selectMember = function(phone, name, dbPoints, dbFreeCoins, dbBottlesBorr
     let currentPoints = dbPoints || 0;
     let currentFree = dbFreeCoins || 0;
 
-    // LAZY EVALUATION for Loyalty Deflation/Inflation
     if (window.loyaltyEnabled && currentPoints >= window.loyaltyThreshold) {
         let convertedFree = Math.floor(currentPoints / window.loyaltyThreshold);
         currentPoints = currentPoints % window.loyaltyThreshold;
@@ -206,7 +205,6 @@ window.selectMember = function(phone, name, dbPoints, dbFreeCoins, dbBottlesBorr
         document.getElementById("promo-indicator").classList.add("hidden"); return;
     }
     
-    // Explicitly mention the Buy X Get 1 Rules
     if (currentFree > 0) promoText = `🎁 PROMO Beli ${window.loyaltyThreshold} Gratis 1: (${currentFree} Gratis Tersedia!)`;
     else promoText = `🎁 PROMO Beli ${window.loyaltyThreshold} Gratis 1 (Poin: ${currentPoints}/${window.loyaltyThreshold})`;
     
@@ -291,7 +289,7 @@ function renderCart() {
 
 function clearCart() { lockMenu(); }
 
-// Checkout Flow & Auto Balancing
+// Checkout Flow
 function reviewOrder() {
     if (currentCart.length === 0) return alert("Keranjang masih kosong!");
     
@@ -299,10 +297,9 @@ function reviewOrder() {
     let autoDiscount = 0;
     let coinsToRedeem = 0;
 
-    // Automatic Promotion / Free Calculation
     if (window.loyaltyEnabled && activeCustomerProfile && activeCustomerProfile.freeCoins > 0) {
         let eligibleItems = currentCart.filter(i => i.autoDeduct).flatMap(i => Array(i.qty).fill(i.price));
-        eligibleItems.sort((a, b) => b - a); // Find highest priced items to make free first
+        eligibleItems.sort((a, b) => b - a); 
         
         coinsToRedeem = Math.min(activeCustomerProfile.freeCoins, eligibleItems.length);
         for(let i=0; i<coinsToRedeem; i++) {
@@ -318,7 +315,6 @@ function reviewOrder() {
     
     document.getElementById("review-subtotal").innerText = `Rp ${window.cartSubtotal.toLocaleString('id-ID')}`;
     
-    // Auto-fill Cash with whatever is remaining after the free discount
     const remainingToPay = Math.max(0, window.cartGrandTotal - autoDiscount);
     document.getElementById("pay-cash").value = remainingToPay;
     
@@ -326,7 +322,6 @@ function reviewOrder() {
 }
 
 window.autoBalanceCash = function() {
-    // When Qris, Transfer, or Free changes, automatically adjust Cash to balance to 0.
     const q = Number(document.getElementById("pay-qris").value) || 0;
     const t = Number(document.getElementById("pay-transfer").value) || 0;
     const f = Number(document.getElementById("pay-free").value) || 0;
@@ -368,11 +363,9 @@ async function finalizeOrder(shouldPrint) {
 
     let status = "Completed"; 
     
-    // Loyalty Math Integration
     let refillsEarned = currentCart.filter(i => i.autoDeduct).reduce((sum, i) => sum + i.qty, 0);
     let redeemCount = 0; 
     
-    // If there is a free amount logged, and we suggested redemptions, consume the coins.
     if (free > 0 && window.activeRedeemCount > 0) {
         redeemCount = window.activeRedeemCount;
     }
@@ -412,8 +405,18 @@ async function getDynamicSettings() { return new Promise(res => { let req = db.t
 
 async function buildPrintableReceipt(orderId, order, deposit, remaining, payMethod, newPoints, newFree) {
     const settings = await getDynamicSettings();
-    const h1 = settings["Header_1"] || "PURE WATER"; const h2 = settings["Header_2"] || ""; const h3 = settings["Header_3"] || ""; 
-    const f1 = settings["Footer_1"] || "TERIMA KASIH"; const f2 = settings["Footer_2"] || ""; const f3 = settings["Footer_3"] || ""; 
+    const h1 = settings["Header_1"] || "PURE WATER"; 
+    const h2 = settings["Header_2"] || ""; 
+    
+    let h3 = settings["Header_3"] || ""; 
+    if (settings["Header_3_" + order.outlet]) h3 = settings["Header_3_" + order.outlet]; 
+
+    const f1 = settings["Footer_1"] || "TERIMA KASIH"; 
+    const f2 = settings["Footer_2"] || ""; 
+    
+    let f3 = settings["Footer_3"] || ""; 
+    if (settings["Footer_3_" + order.outlet]) f3 = settings["Footer_3_" + order.outlet]; 
+
     const printArea = document.getElementById("printable-area"); const dateStr = new Date().toLocaleString('id-ID');
     
     let itemsHtml = "";
