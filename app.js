@@ -8,10 +8,10 @@ let globalMenuData = []; let currentCategory = ""; let currentCart = [];
 window.masterDrawerBalance = 0; let isLoggingOut = false;
 let currentVoidTarget = { type: null, id: null };
 let isMenuLocked = true; let isSyncing = false; let activeCustomerProfile = null; 
-window.loyaltyEnabled = false;
+window.loyaltyEnabled = false; 
+let deferredPrompt;
 
 // PWA Install Prompt
-let deferredPrompt;
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault(); deferredPrompt = e;
     const installBtn = document.getElementById('btn-install');
@@ -95,7 +95,8 @@ function lockMenu() {
     document.getElementById("active-customer-banner").classList.add("hidden");
     document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
     document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = ""; currentCart = []; renderCart();
-    document.getElementById("promo-indicator").classList.add("hidden");
+    const promoBanner = document.getElementById("promo-indicator-banner");
+    if(promoBanner) promoBanner.classList.add("hidden");
 }
 function unlockMenu(isGuest) {
     let phone = "-"; let name = "Walk-in";
@@ -165,7 +166,9 @@ async function syncMasterData() {
 // Customers & Loyalty
 function handleAutocomplete(e) {
     const val = e.target.value.toLowerCase().trim(); const resBox = document.getElementById("autocomplete-results");
-    activeCustomerProfile = null; document.getElementById("promo-indicator").classList.add("hidden");
+    activeCustomerProfile = null; 
+    const promoBanner = document.getElementById("promo-indicator-banner");
+    if(promoBanner) promoBanner.classList.add("hidden");
 
     db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (ev) => {
         const members = ev.target.result; let matches = members;
@@ -173,11 +176,16 @@ function handleAutocomplete(e) {
         matches.sort((a, b) => (b.spent || 0) - (a.spent || 0));
 
         if (matches.length > 0) {
-            // Updated mapping to pass the entire wallet object correctly via JSON string
             resBox.innerHTML = matches.map(m => {
                 let wStr = JSON.stringify(m.wallet || {}).replace(/"/g, '&quot;');
                 let nameStr = m.name.replace(/'/g, "\\'");
-                return `<div class="autocomplete-item" onclick="selectMember('${m.phone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0})"><div class="autocomplete-phone">${m.phone}</div><div class="autocomplete-name">${m.name}</div></div>`;
+                
+                return `<div class="autocomplete-item" onclick="selectMember('${m.phone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0})">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div class="autocomplete-name">${m.name}</div>
+                        <div class="autocomplete-phone" style="font-size:14px; color:#7f8c8d;">${m.phone}</div>
+                    </div>
+                </div>`;
             }).join("");
             resBox.classList.remove("hidden");
         } else { resBox.classList.add("hidden"); }
@@ -197,25 +205,27 @@ window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed) {
 
     activeCustomerProfile = { phone: phone, name: name, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed };
     
-    if (!window.loyaltyEnabled) {
-        document.getElementById("promo-indicator").classList.add("hidden"); return;
+    const promoBanner = document.getElementById("promo-indicator-banner");
+    if (!window.loyaltyEnabled || !promoBanner) {
+        if(promoBanner) promoBanner.classList.add("hidden"); return;
     }
     
-    // Generate Per-Item Promo Text
-    let promoParts = [];
-    let pointsParts = [];
-    for (let itemName in wallet) {
-        if (wallet[itemName].free > 0) promoParts.push(`${wallet[itemName].free}x ${itemName}`);
-        if (wallet[itemName].points > 0) pointsParts.push(`${itemName} (${wallet[itemName].points})`);
+    // Build human readable wallet for the Active Customer Banner
+    let pointSummary = [];
+    for(let item in wallet) {
+        let w = wallet[item];
+        if(w.points > 0 || w.free > 0) {
+            pointSummary.push(`${item} (${w.points} Poin${w.free > 0 ? `, ${w.free} Gratis` : ''})`);
+        }
     }
     
-    let promoText = "";
-    if (promoParts.length > 0) promoText += `🎁 GRATIS: ${promoParts.join(', ')} `;
-    if (pointsParts.length > 0) promoText += `${promoParts.length > 0 ? '| ' : ''}Poin: ${pointsParts.join(', ')}`;
-    if (promoText === "") promoText = "Belum ada poin tersimpan.";
-    
-    document.getElementById("promo-indicator").innerText = promoText; 
-    document.getElementById("promo-indicator").classList.remove("hidden");
+    if (pointSummary.length > 0) {
+        promoBanner.innerText = `🌟 Info Saldo Poin: ${pointSummary.join(' | ')}`; 
+        promoBanner.classList.remove("hidden");
+    } else {
+        promoBanner.innerText = `🌟 Pelanggan belum memiliki poin tersimpan.`; 
+        promoBanner.classList.remove("hidden");
+    }
 };
 
 function saveMemberToDB(phone, name) {
@@ -296,37 +306,67 @@ function renderCart() {
 
 function clearCart() { lockMenu(); }
 
-// Checkout Flow & Per-Item Loyalty
+// Checkout Flow & DYNAMIC Redemptions
 function reviewOrder() {
     if (currentCart.length === 0) return alert("Keranjang masih kosong!");
     
     window.cartGrandTotal = window.cartSubtotal;
-    let autoDiscount = 0;
     
-    currentCart.forEach(i => i.redeemed = 0); // Reset
+    const redeemContainer = document.getElementById("redemption-items");
+    redeemContainer.innerHTML = "";
+    let hasRedeemable = false;
 
+    // Check if what is in the cart matches what is in the wallet
     if (window.loyaltyEnabled && activeCustomerProfile) {
         let wallet = activeCustomerProfile.wallet || {};
         currentCart.forEach(item => {
             if (item.loyaltyThreshold > 0 && wallet[item.name] && wallet[item.name].free > 0) {
-                let redeemable = Math.min(wallet[item.name].free, item.qty);
-                item.redeemed = redeemable;
-                autoDiscount += redeemable * item.price;
+                let maxRedeemable = Math.min(wallet[item.name].free, item.qty);
+                if (maxRedeemable > 0) {
+                    hasRedeemable = true;
+                    redeemContainer.innerHTML += `
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding-bottom:8px; border-bottom:1px dashed #bce8f1;">
+                            <span style="font-size:14px; font-weight:bold; color:#2c3e50;">${item.name} <br><small style="font-weight:normal; color:#7f8c8d;">(Tersedia: ${wallet[item.name].free}, Dibeli: ${item.qty})</small></span>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <label style="font-size:12px;">Pakai:</label>
+                                <input type="number" class="redeem-input" data-item="${item.itemId}" data-price="${item.price}" max="${maxRedeemable}" min="0" value="0" style="width:60px; padding:8px; text-align:center; font-size:16px; border:2px solid #bdc3c7; border-radius:6px;" onclick="this.select()" oninput="recalcRedemptions()">
+                            </div>
+                        </div>
+                    `;
+                }
             }
         });
     }
 
+    if (hasRedeemable) {
+        document.getElementById("redemption-section").classList.remove("hidden");
+    } else {
+        document.getElementById("redemption-section").classList.add("hidden");
+    }
+
     document.getElementById("pay-qris").value = 0; 
     document.getElementById("pay-transfer").value = 0; 
-    document.getElementById("pay-free").value = autoDiscount;
+    document.getElementById("pay-free").value = 0; // Starts at 0 until they type into the redeem boxes
     let bottleRentBox = document.getElementById("rent-bottle-qty"); if(bottleRentBox) bottleRentBox.value = 0;
     
     document.getElementById("review-subtotal").innerText = `Rp ${window.cartSubtotal.toLocaleString('id-ID')}`;
     
-    const remainingToPay = Math.max(0, window.cartGrandTotal - autoDiscount);
-    document.getElementById("pay-cash").value = remainingToPay;
-    
+    document.getElementById("pay-cash").value = window.cartGrandTotal;
     calculateRemaining(); document.getElementById("review-modal").classList.remove("hidden");
+}
+
+window.recalcRedemptions = function() {
+    let totalDiscount = 0;
+    document.querySelectorAll(".redeem-input").forEach(input => {
+        let qty = Number(input.value) || 0;
+        let max = Number(input.getAttribute("max"));
+        if(qty > max) { qty = max; input.value = max; }
+        if(qty < 0) { qty = 0; input.value = 0; }
+        let price = Number(input.getAttribute("data-price"));
+        totalDiscount += (qty * price);
+    });
+    document.getElementById("pay-free").value = totalDiscount;
+    autoBalanceCash();
 }
 
 window.autoBalanceCash = function() {
@@ -371,11 +411,23 @@ async function finalizeOrder(shouldPrint) {
 
     let status = "Completed"; 
     
-    // Per-Item Loyalty Processing
+    // Read exact redemptions chosen by cashier
+    currentCart.forEach(i => i.redeemed = 0);
+    document.querySelectorAll(".redeem-input").forEach(input => {
+        let itemId = input.getAttribute("data-item");
+        let qty = Number(input.value) || 0;
+        let cartItem = currentCart.find(i => i.itemId === itemId);
+        if (cartItem) cartItem.redeemed = qty;
+    });
+
     let loyaltyChanges = {};
+    let freeItemsRedeemed = [];
     currentCart.forEach(item => {
+        if (item.redeemed > 0) {
+            freeItemsRedeemed.push({ name: item.name, qty: item.redeemed });
+        }
         if (item.loyaltyThreshold > 0) {
-            let earned = item.qty - (item.redeemed || 0); // Only earn on paid items
+            let earned = item.qty - (item.redeemed || 0); 
             if (earned > 0 || (item.redeemed || 0) > 0) {
                 if(!loyaltyChanges[item.name]) loyaltyChanges[item.name] = { earned: 0, redeemed: 0, threshold: item.loyaltyThreshold };
                 loyaltyChanges[item.name].earned += earned;
@@ -408,7 +460,7 @@ async function finalizeOrder(shouldPrint) {
         orderId: "ORD-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId,
         customerName: custName, customerPhone: custPhone, orderStatus: status, items: currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
         paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, 
-        loyaltyChanges: loyaltyChanges, outlet: currentOutlet, syncStatus: "Pending" 
+        loyaltyChanges: loyaltyChanges, freeItemsRedeemed: freeItemsRedeemed, outlet: currentOutlet, syncStatus: "Pending" 
     };
 
     const txMenu = db.transaction(["menu"], "readwrite"); const storeMenu = txMenu.objectStore("menu");
