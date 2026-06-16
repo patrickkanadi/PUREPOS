@@ -11,6 +11,7 @@ let isMenuLocked = true; let isSyncing = false; let activeCustomerProfile = null
 window.loyaltyEnabled = false; window.loyaltyThreshold = 10;
 let deferredPrompt;
 
+// PWA Install Prompt
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault(); deferredPrompt = e;
     const installBtn = document.getElementById('btn-install');
@@ -25,6 +26,8 @@ function installPWA() {
         });
     }
 }
+
+// Database Init
 function initDB() {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -48,6 +51,8 @@ function initDB() {
         request.onsuccess = (e) => { db = e.target.result; resolve(db); };
     });
 }
+
+// Login Logic
 function attemptLogin() {
     const pin = document.getElementById("cashier-pin").value;
     db.transaction(["staff"], "readonly").objectStore("staff").get(pin).onsuccess = (e) => {
@@ -82,6 +87,8 @@ function attemptLogin() {
         } else { alert("PIN Salah!"); }
     };
 }
+
+// UI Locks
 function lockMenu() {
     isMenuLocked = true; activeCustomerProfile = null; 
     document.getElementById("customer-input-section").classList.remove("hidden");
@@ -105,6 +112,8 @@ function unlockMenu(isGuest) {
     document.getElementById("active-customer-banner").classList.remove("hidden");
     isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
 }
+
+// Core Sync Engine
 async function manualPushSync() {
     if (!navigator.onLine) return alert("Anda sedang offline!");
     document.getElementById("network-text").innerText = "Mengirim Data..."; document.getElementById("network-dot").style.backgroundColor = "#f39c12";
@@ -153,6 +162,8 @@ async function syncMasterData() {
         if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c";
     }
 }
+
+// Customers & Loyalty
 function handleAutocomplete(e) {
     const val = e.target.value.toLowerCase().trim(); const resBox = document.getElementById("autocomplete-results");
     activeCustomerProfile = null; document.getElementById("promo-indicator").classList.add("hidden");
@@ -180,6 +191,7 @@ window.selectMember = function(phone, name, dbPoints, dbFreeCoins, dbBottlesBorr
     let currentPoints = dbPoints || 0;
     let currentFree = dbFreeCoins || 0;
 
+    // LAZY EVALUATION for Loyalty Deflation/Inflation
     if (window.loyaltyEnabled && currentPoints >= window.loyaltyThreshold) {
         let convertedFree = Math.floor(currentPoints / window.loyaltyThreshold);
         currentPoints = currentPoints % window.loyaltyThreshold;
@@ -206,8 +218,11 @@ function saveMemberToDB(phone, name) {
         db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").put(mem);
     };
 }
+
+// Menu & Cart
 function loadMenuUI() {
-    const categories = [...new Set(globalMenuData.map(i => i.category))]; currentCategory = categories[0];
+    const categories = [...new Set(globalMenuData.map(i => i.category))].filter(c => c !== "Tandon"); 
+    currentCategory = categories[0];
     const catContainer = document.getElementById("category-container"); catContainer.innerHTML = "";
     categories.forEach(cat => {
         const btn = document.createElement("button"); btn.className = `cat-btn ${cat === currentCategory ? "active" : ""}`; btn.innerText = cat;
@@ -233,11 +248,13 @@ function renderProductGrid() {
         grid.appendChild(card);
     });
 }
+
 function addToCart(item, qty) {
     const existing = currentCart.find(i => i.itemId === item.itemId);
-    if (existing) { existing.qty += qty; } else { currentCart.push({ ...item, qty: qty, originalPrice: item.price }); }
+    if (existing) { existing.qty += qty; } else { currentCart.push({ ...item, qty: qty, originalPrice: item.price, autoDeduct: item.autoDeduct }); }
     renderCart();
 }
+
 window.updateCartQty = function(itemId, delta) {
     const item = currentCart.find(i => i.itemId === itemId);
     if (item) {
@@ -246,6 +263,7 @@ window.updateCartQty = function(itemId, delta) {
         renderCart();
     }
 }
+
 function renderCart() {
     const container = document.getElementById("cart-items"); container.innerHTML = ""; let total = 0;
     currentCart.forEach(item => {
@@ -263,7 +281,10 @@ function renderCart() {
     });
     document.getElementById("cart-total").innerText = `Rp ${total.toLocaleString('id-ID')}`; window.cartSubtotal = total; window.cartGrandTotal = total;
 }
+
 function clearCart() { lockMenu(); }
+
+// Checkout Flow
 function reviewOrder() {
     if (currentCart.length === 0) return alert("Keranjang masih kosong!");
     document.getElementById("pay-cash").value = 0; document.getElementById("pay-qris").value = 0; document.getElementById("pay-transfer").value = 0; document.getElementById("pay-free").value = 0;
@@ -272,13 +293,16 @@ function reviewOrder() {
     document.getElementById("review-subtotal").innerText = `Rp ${window.cartSubtotal.toLocaleString('id-ID')}`;
     calculateRemaining(); document.getElementById("review-modal").classList.remove("hidden");
 }
+
 window.calculateRemaining = function() {
     const c = Number(document.getElementById("pay-cash").value) || 0; const q = Number(document.getElementById("pay-qris").value) || 0;
     const t = Number(document.getElementById("pay-transfer").value) || 0; const f = Number(document.getElementById("pay-free").value) || 0;
     const totalAccounted = c + q + t + f; const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     document.getElementById("review-remaining").innerText = `Rp ${remaining.toLocaleString('id-ID')}`;
 }
+
 function closeReview() { document.getElementById("review-modal").classList.add("hidden"); }
+
 async function finalizeOrder(shouldPrint) {
     const cash = Number(document.getElementById("pay-cash").value) || 0; const qris = Number(document.getElementById("pay-qris").value) || 0;
     const transfer = Number(document.getElementById("pay-transfer").value) || 0; const free = Number(document.getElementById("pay-free").value) || 0;
@@ -296,8 +320,10 @@ async function finalizeOrder(shouldPrint) {
     if(custPhone !== "-") saveMemberToDB(custPhone, custName);
 
     let status = "Completed"; 
+    
+    // Loyalty Math
     let refillsEarned = currentCart.filter(i => i.autoDeduct).reduce((sum, i) => sum + i.qty, 0);
-    let redeemCount = 0; 
+    let redeemCount = 0; // Handled manually by cashiers adjusting free values
     
     let newPoints = 0; let newFree = 0;
     if (window.loyaltyEnabled && activeCustomerProfile) {
@@ -329,7 +355,9 @@ async function finalizeOrder(shouldPrint) {
     if (shouldPrint) { await buildPrintableReceipt(orderPayload.orderId, orderPayload, totalAccounted, 0, payString, newPoints, newFree); window.print(); }
     closeReview(); lockMenu(); renderProductGrid(); runBackgroundSync();
 }
+
 async function getDynamicSettings() { return new Promise(res => { let req = db.transaction(["settings"], "readonly").objectStore("settings").getAll(); req.onsuccess = e => { let s = {}; e.target.result.forEach(row => s[row.key] = row.value); res(s); }; }); }
+
 async function buildPrintableReceipt(orderId, order, deposit, remaining, payMethod, newPoints, newFree) {
     const settings = await getDynamicSettings();
     const h1 = settings["Header_1"] || "PURE WATER"; const h2 = settings["Header_2"] || ""; const h3 = settings["Header_3"] || ""; 
@@ -360,6 +388,8 @@ async function buildPrintableReceipt(orderId, order, deposit, remaining, payMeth
         <div style="text-align:center; margin-top:15px; font-weight:bold; font-size: 12px;">${f1}</div>${f2 ? `<div style="text-align:center; margin-top:2px; font-size: 10px;">${f2}</div>` : ''}${f3 ? `<div style="text-align:center; margin-top:2px; font-size: 10px;">${f3}</div>` : ''}
     `;
 }
+
+// Inbound / Truck Logic
 window.openInboundModal = function() {
     document.getElementById("inbound-qty").value = "";
     document.getElementById("inbound-notes").value = "";
@@ -367,19 +397,23 @@ window.openInboundModal = function() {
 }
 window.submitInbound = function() {
     const qty = Number(document.getElementById("inbound-qty").value);
+    const targetTank = document.getElementById("inbound-tank-target").value;
     const notes = document.getElementById("inbound-notes").value.trim() || "-";
+    
     if (qty <= 0) return alert("Masukkan jumlah liter air yang benar.");
 
     const payload = {
         logId: "INB-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId,
-        itemName: "Air Baku", qty: qty, notes: notes, outlet: currentOutlet, syncStatus: "Pending"
+        itemName: targetTank, qty: qty, notes: notes, outlet: currentOutlet, syncStatus: "Pending"
     };
 
     db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").add(payload);
     document.getElementById("inbound-modal").classList.add("hidden");
-    alert(`Berhasil mencatat kedatangan ${qty} Liter air ke tandon.`);
+    alert(`Berhasil mencatat kedatangan ${qty} Liter ke ${targetTank}.`);
     runBackgroundSync();
 }
+
+// Expenses
 function openExpenseModal() {
     document.getElementById("expense-modal").classList.remove("hidden");
     const list = document.getElementById("expense-category-list"); list.innerHTML = "";
@@ -394,6 +428,8 @@ function saveExpense() {
     db.transaction(["expenses"], "readwrite").objectStore("expenses").add(payload);
     document.getElementById("expense-modal").classList.add("hidden"); document.getElementById("exp-amount").value = ""; document.getElementById("exp-category").value = ""; document.getElementById("exp-desc").value = ""; alert("Pengeluaran Berhasil Dicatat!"); runBackgroundSync();
 }
+
+// History & Voids
 function openHistoryModal() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
 function renderHistoryList(type) {
     const container = document.getElementById("history-container"); container.innerHTML = "";
@@ -510,6 +546,8 @@ function applyVoidAftermath(order) {
     tx.oncomplete = () => { renderProductGrid(); };
     if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: itemsToReturn, rentBottleQty: order.rentBottleQty, coinsEarned: order.coinsEarned, coinsRedeemed: order.coinsRedeemed, loyaltyThresholdUsed: order.loyaltyThresholdUsed } }) });
 }
+
+// Cash Management
 function calculateLiveDrawer(callback) {
     let liveDrawer = window.masterDrawerBalance || 0; 
     let tx = db.transaction(["orders", "cash_drops", "expenses"], "readonly");
@@ -545,6 +583,8 @@ function submitCashDrop() {
         if (isLoggingOut) { executeFinalLogout(leftInDrawer); } else { alert(`Setor Uang Berhasil!\nTujuan: ${destination}\nSisa Tunai di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); }
     });
 }
+
+// Shift Reports
 function openShiftReport() {
     let tCust = 0; let tOrders = 0; let tOmset = 0; let tCash = 0; let tQris = 0; let tTransfer = 0; let tFree = 0; let tExpense = 0; let foodSummary = {};
     document.getElementById("meter-water").value = "";
@@ -601,6 +641,8 @@ async function executeFinalLogout(netCash) {
     window.location.reload(); 
 }
 function lockScreen() { window.location.reload(); }
+
+// Background Sync Task
 async function runBackgroundSync() {
     if (!navigator.onLine || isSyncing) return;
     isSyncing = true; 
@@ -651,4 +693,5 @@ async function runBackgroundSync() {
         }
     } finally { isSyncing = false; }
 }
+
 window.onload = async () => { await initDB(); await syncMasterData(); window.setInterval(runBackgroundSync, 15000); };
