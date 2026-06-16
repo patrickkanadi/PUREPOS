@@ -142,6 +142,10 @@
     <div id="login-screen">
         <div class="login-box">
             <h2 style="margin-top:0;">Pure Water POS</h2>
+            
+            <!-- NEW: Install App Button directly on the Login Page -->
+            <button id="btn-install-login" class="hidden" onclick="installPWA()" style="background:#f39c12; color:white; border:none; padding:15px; border-radius:8px; width:100%; font-weight:bold; margin-bottom: 20px; cursor:pointer; font-size:16px;">📲 Install App (Home Screen)</button>
+
             <div style="margin-bottom: 20px; font-size: 14px; color: #7f8c8d; display: flex; flex-direction: column; align-items: center; gap: 10px; background: #f9f9f9; padding: 15px; border-radius: 8px; border: 1px solid #eee;">
                 <div style="display: flex; align-items: center; gap: 8px;"><span class="dot-online" id="login-network-dot" style="background-color: #f39c12;"></span> <strong id="login-network-text">Mengecek koneksi...</strong></div>
                 <button onclick="syncMasterData()" style="background: #3498db; color: white; padding: 8px 15px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; width: 100%; font-weight: bold;">🔄 Sinkronisasi Paksa</button>
@@ -233,6 +237,7 @@
         </div>
     </div>
 
+    <!-- Modals -->
     <div id="review-modal" class="modal-overlay hidden">
         <div class="modal-content modal-large">
             <h2 style="margin-top:0; border-bottom:2px solid #eee; padding-bottom:10px;">🧾 Rincian Pembayaran</h2>
@@ -275,6 +280,7 @@
         </div>
     </div>
 
+    <!-- NEW: Cuci Tandon Modal -->
     <div id="cuci-modal" class="modal-overlay hidden">
         <div class="modal-content" style="max-width: 400px;">
             <h2 style="margin-top:0; color: #27ae60;">🧹 Lapor Cuci Tandon</h2>
@@ -299,6 +305,7 @@
         </div>
     </div>
 
+    <!-- NEW: Lapor Masalah Modal -->
     <div id="lapor-modal" class="modal-overlay hidden">
         <div class="modal-content" style="max-width: 450px;">
             <h2 style="margin-top:0; color: #c0392b;">⚠️ Lapor Masalah Lapangan</h2>
