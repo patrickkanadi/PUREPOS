@@ -89,6 +89,7 @@ function attemptLogin() {
 }
 
 // UI Locks
+
 function lockMenu() {
     isMenuLocked = true; activeCustomerProfile = null; 
     document.getElementById("customer-input-section").classList.remove("hidden");
@@ -100,18 +101,63 @@ function lockMenu() {
 }
 function unlockMenu(isGuest) {
     let phone = "-"; let name = "Walk-in";
+    const promoBanner = document.getElementById("promo-indicator-banner");
+
     if (isGuest) { 
         document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = "Walk-in"; activeCustomerProfile = null; 
+        document.getElementById("active-cust-name").innerText = name;
+        document.getElementById("active-cust-phone").innerText = "";
+        document.getElementById("customer-input-section").classList.add("hidden");
+        document.getElementById("active-customer-banner").classList.remove("hidden");
+        if(promoBanner) promoBanner.classList.add("hidden");
+        isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
     } else {
         phone = document.getElementById("cust-phone").value.trim();
         name = document.getElementById("cust-name").value.trim() || "Pelanggan";
         if (phone.length < 5) return alert("Harap masukkan Nomor WhatsApp yang valid terlebih dahulu.");
+
+        // SAFETY NET: Query local database instantly to fetch point values
+        const tx = db.transaction(["members"], "readonly");
+        tx.objectStore("members").get(phone).onsuccess = (ev) => {
+            const member = ev.target.result;
+            if (member) {
+                activeCustomerProfile = member;
+                name = member.name;
+                document.getElementById("cust-name").value = name;
+                
+                // Translate plain text database string into visual indicators
+                let pointSummary = [];
+                let wallet = member.wallet || {};
+                for(let item in wallet) {
+                    let w = wallet[item];
+                    if(w.points > 0 || w.free > 0) {
+                        pointSummary.push(`${item} (${w.points} Poin${w.free > 0 ? `, ${w.free} Gratis` : ''})`);
+                    }
+                }
+                
+                if (window.loyaltyEnabled && promoBanner && pointSummary.length > 0) {
+                    promoBanner.innerText = `🌟 Info Saldo Poin: ${pointSummary.join(' | ')}`;
+                    promoBanner.classList.remove("hidden");
+                } else if (promoBanner) {
+                    promoBanner.innerText = `🌟 Pelanggan belum memiliki poin tersimpan.`;
+                    promoBanner.classList.remove("hidden");
+                }
+            } else {
+                // Completely new member configuration
+                activeCustomerProfile = { phone: phone, name: name, wallet: {}, bottlesBorrowed: 0 };
+                if (promoBanner) {
+                    promoBanner.innerText = `🌟 Pelanggan Baru (Belum ada poin).`;
+                    promoBanner.classList.remove("hidden");
+                }
+            }
+
+            document.getElementById("active-cust-name").innerText = name;
+            document.getElementById("active-cust-phone").innerText = `(${phone})`;
+            document.getElementById("customer-input-section").classList.add("hidden");
+            document.getElementById("active-customer-banner").classList.remove("hidden");
+            isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
+        };
     }
-    document.getElementById("active-cust-name").innerText = name;
-    document.getElementById("active-cust-phone").innerText = phone !== "-" ? `(${phone})` : "";
-    document.getElementById("customer-input-section").classList.add("hidden");
-    document.getElementById("active-customer-banner").classList.remove("hidden");
-    isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
 }
 
 // Core Sync Engine
