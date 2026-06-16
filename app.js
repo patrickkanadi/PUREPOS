@@ -8,11 +8,10 @@ let globalMenuData = []; let currentCategory = ""; let currentCart = [];
 window.masterDrawerBalance = 0; let isLoggingOut = false;
 let currentVoidTarget = { type: null, id: null };
 let isMenuLocked = true; let isSyncing = false; let activeCustomerProfile = null; 
-window.loyaltyEnabled = false; window.loyaltyThreshold = 10;
-window.activeRedeemCount = 0;
-let deferredPrompt;
+window.loyaltyEnabled = false;
 
 // PWA Install Prompt
+let deferredPrompt;
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault(); deferredPrompt = e;
     const installBtn = document.getElementById('btn-install');
@@ -145,7 +144,6 @@ async function syncMasterData() {
 
             globalMenuData = result.data.menu; 
             window.loyaltyEnabled = result.data.settings["Enable_Loyalty"] === "TRUE";
-            window.loyaltyThreshold = Number(result.data.settings["Loyalty_Threshold"]) || 10;
             
             const rawOutlets = result.data.settings["Outlet_List"] || "Pusat";
             const outletArray = rawOutlets.split(",").map(s => s.trim());
@@ -175,7 +173,12 @@ function handleAutocomplete(e) {
         matches.sort((a, b) => (b.spent || 0) - (a.spent || 0));
 
         if (matches.length > 0) {
-            resBox.innerHTML = matches.map(m => `<div class="autocomplete-item" onclick="selectMember('${m.phone}', '${m.name.replace(/'/g, "\\'")}', ${m.points || 0}, ${m.freeCoins || 0}, ${m.bottlesBorrowed || 0})"><div class="autocomplete-phone">${m.phone}</div><div class="autocomplete-name">${m.name}</div></div>`).join("");
+            // Updated mapping to pass the entire wallet object correctly via JSON string
+            resBox.innerHTML = matches.map(m => {
+                let wStr = JSON.stringify(m.wallet || {}).replace(/"/g, '&quot;');
+                let nameStr = m.name.replace(/'/g, "\\'");
+                return `<div class="autocomplete-item" onclick="selectMember('${m.phone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0})"><div class="autocomplete-phone">${m.phone}</div><div class="autocomplete-name">${m.name}</div></div>`;
+            }).join("");
             resBox.classList.remove("hidden");
         } else { resBox.classList.add("hidden"); }
     };
@@ -184,37 +187,41 @@ document.getElementById("cust-phone").addEventListener("input", handleAutocomple
     if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { document.getElementById('autocomplete-results').classList.add('hidden'); }
 });
 
-window.selectMember = function(phone, name, dbPoints, dbFreeCoins, dbBottlesBorrowed) {
+window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed) {
     document.getElementById("cust-phone").value = phone; 
     document.getElementById("cust-name").value = name; 
     document.getElementById("autocomplete-results").classList.add("hidden");
     
-    let currentPoints = dbPoints || 0;
-    let currentFree = dbFreeCoins || 0;
+    let wallet = {};
+    try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
 
-    if (window.loyaltyEnabled && currentPoints >= window.loyaltyThreshold) {
-        let convertedFree = Math.floor(currentPoints / window.loyaltyThreshold);
-        currentPoints = currentPoints % window.loyaltyThreshold;
-        currentFree += convertedFree;
-    }
-
-    activeCustomerProfile = { phone: phone, name: name, points: currentPoints, freeCoins: currentFree, bottlesBorrowed: dbBottlesBorrowed };
+    activeCustomerProfile = { phone: phone, name: name, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed };
     
-    let promoText = "";
     if (!window.loyaltyEnabled) {
         document.getElementById("promo-indicator").classList.add("hidden"); return;
     }
     
-    if (currentFree > 0) promoText = `🎁 PROMO Beli ${window.loyaltyThreshold} Gratis 1: (${currentFree} Gratis Tersedia!)`;
-    else promoText = `🎁 PROMO Beli ${window.loyaltyThreshold} Gratis 1 (Poin: ${currentPoints}/${window.loyaltyThreshold})`;
+    // Generate Per-Item Promo Text
+    let promoParts = [];
+    let pointsParts = [];
+    for (let itemName in wallet) {
+        if (wallet[itemName].free > 0) promoParts.push(`${wallet[itemName].free}x ${itemName}`);
+        if (wallet[itemName].points > 0) pointsParts.push(`${itemName} (${wallet[itemName].points})`);
+    }
     
-    document.getElementById("promo-indicator").innerText = promoText; document.getElementById("promo-indicator").classList.remove("hidden");
+    let promoText = "";
+    if (promoParts.length > 0) promoText += `🎁 GRATIS: ${promoParts.join(', ')} `;
+    if (pointsParts.length > 0) promoText += `${promoParts.length > 0 ? '| ' : ''}Poin: ${pointsParts.join(', ')}`;
+    if (promoText === "") promoText = "Belum ada poin tersimpan.";
+    
+    document.getElementById("promo-indicator").innerText = promoText; 
+    document.getElementById("promo-indicator").classList.remove("hidden");
 };
 
 function saveMemberToDB(phone, name) {
     if(!phone || phone === "-") return; 
     db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
-        let mem = e.target.result || { phone: phone, name: name, points: 0, freeCoins: 0, spent: 0, bottlesBorrowed: 0 }; mem.name = name;
+        let mem = e.target.result || { phone: phone, name: name, wallet: {}, spent: 0, bottlesBorrowed: 0 }; mem.name = name;
         db.transaction(["members"], "readwrite").objectStore("members").put(mem);
         db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").put(mem);
     };
@@ -256,7 +263,7 @@ function renderProductGrid() {
 
 function addToCart(item, qty) {
     const existing = currentCart.find(i => i.itemId === item.itemId);
-    if (existing) { existing.qty += qty; } else { currentCart.push({ ...item, qty: qty, originalPrice: item.price, autoDeduct: item.autoDeduct }); }
+    if (existing) { existing.qty += qty; } else { currentCart.push({ ...item, qty: qty, originalPrice: item.price, autoDeduct: item.autoDeduct, loyaltyThreshold: item.loyaltyThreshold, redeemed: 0 }); }
     renderCart();
 }
 
@@ -289,24 +296,25 @@ function renderCart() {
 
 function clearCart() { lockMenu(); }
 
-// Checkout Flow
+// Checkout Flow & Per-Item Loyalty
 function reviewOrder() {
     if (currentCart.length === 0) return alert("Keranjang masih kosong!");
     
     window.cartGrandTotal = window.cartSubtotal;
     let autoDiscount = 0;
-    let coinsToRedeem = 0;
+    
+    currentCart.forEach(i => i.redeemed = 0); // Reset
 
-    if (window.loyaltyEnabled && activeCustomerProfile && activeCustomerProfile.freeCoins > 0) {
-        let eligibleItems = currentCart.filter(i => i.autoDeduct).flatMap(i => Array(i.qty).fill(i.price));
-        eligibleItems.sort((a, b) => b - a); 
-        
-        coinsToRedeem = Math.min(activeCustomerProfile.freeCoins, eligibleItems.length);
-        for(let i=0; i<coinsToRedeem; i++) {
-            autoDiscount += eligibleItems[i];
-        }
+    if (window.loyaltyEnabled && activeCustomerProfile) {
+        let wallet = activeCustomerProfile.wallet || {};
+        currentCart.forEach(item => {
+            if (item.loyaltyThreshold > 0 && wallet[item.name] && wallet[item.name].free > 0) {
+                let redeemable = Math.min(wallet[item.name].free, item.qty);
+                item.redeemed = redeemable;
+                autoDiscount += redeemable * item.price;
+            }
+        });
     }
-    window.activeRedeemCount = coinsToRedeem;
 
     document.getElementById("pay-qris").value = 0; 
     document.getElementById("pay-transfer").value = 0; 
@@ -363,22 +371,36 @@ async function finalizeOrder(shouldPrint) {
 
     let status = "Completed"; 
     
-    let refillsEarned = currentCart.filter(i => i.autoDeduct).reduce((sum, i) => sum + i.qty, 0);
-    let redeemCount = 0; 
-    
-    if (free > 0 && window.activeRedeemCount > 0) {
-        redeemCount = window.activeRedeemCount;
-    }
-    
-    let newPoints = 0; let newFree = 0;
+    // Per-Item Loyalty Processing
+    let loyaltyChanges = {};
+    currentCart.forEach(item => {
+        if (item.loyaltyThreshold > 0) {
+            let earned = item.qty - (item.redeemed || 0); // Only earn on paid items
+            if (earned > 0 || (item.redeemed || 0) > 0) {
+                if(!loyaltyChanges[item.name]) loyaltyChanges[item.name] = { earned: 0, redeemed: 0, threshold: item.loyaltyThreshold };
+                loyaltyChanges[item.name].earned += earned;
+                loyaltyChanges[item.name].redeemed += (item.redeemed || 0);
+            }
+        }
+    });
+
+    let updatedWallet = {};
     if (window.loyaltyEnabled && activeCustomerProfile) {
-        let currentPoints = activeCustomerProfile.points || 0; let currentFree = activeCustomerProfile.freeCoins || 0;
-        currentFree -= redeemCount; currentPoints += refillsEarned; 
-        let newlyEarnedFree = Math.floor(currentPoints / window.loyaltyThreshold); currentPoints = currentPoints % window.loyaltyThreshold; currentFree += newlyEarnedFree;
-        newPoints = currentPoints; newFree = currentFree;
+        updatedWallet = JSON.parse(JSON.stringify(activeCustomerProfile.wallet || {})); 
+        for(let itemName in loyaltyChanges) {
+            if(!updatedWallet[itemName]) updatedWallet[itemName] = {points:0, free:0};
+            let c = loyaltyChanges[itemName];
+            updatedWallet[itemName].points += c.earned;
+            updatedWallet[itemName].free -= c.redeemed;
+            if(c.threshold > 0) {
+                let newFree = Math.floor(updatedWallet[itemName].points / c.threshold);
+                updatedWallet[itemName].points = updatedWallet[itemName].points % c.threshold;
+                updatedWallet[itemName].free += newFree;
+            }
+        }
         
         db.transaction(["members"], "readwrite").objectStore("members").get(activeCustomerProfile.phone).onsuccess = (e) => {
-            let mem = e.target.result; if (mem) { mem.points = newPoints; mem.freeCoins = newFree; mem.bottlesBorrowed += rentBottleQty; db.transaction(["members"], "readwrite").objectStore("members").put(mem); }
+            let mem = e.target.result; if (mem) { mem.wallet = updatedWallet; mem.bottlesBorrowed += rentBottleQty; db.transaction(["members"], "readwrite").objectStore("members").put(mem); }
         };
     }
 
@@ -386,7 +408,7 @@ async function finalizeOrder(shouldPrint) {
         orderId: "ORD-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId,
         customerName: custName, customerPhone: custPhone, orderStatus: status, items: currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
         paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, 
-        coinsEarned: refillsEarned, coinsRedeemed: redeemCount, loyaltyThresholdUsed: window.loyaltyThreshold, outlet: currentOutlet, syncStatus: "Pending" 
+        loyaltyChanges: loyaltyChanges, outlet: currentOutlet, syncStatus: "Pending" 
     };
 
     const txMenu = db.transaction(["menu"], "readwrite"); const storeMenu = txMenu.objectStore("menu");
@@ -397,25 +419,20 @@ async function finalizeOrder(shouldPrint) {
     });
 
     db.transaction(["orders"], "readwrite").objectStore("orders").add(orderPayload);
-    if (shouldPrint) { await buildPrintableReceipt(orderPayload.orderId, orderPayload, totalAccounted, 0, payString, newPoints, newFree); window.print(); }
+    if (shouldPrint) { await buildPrintableReceipt(orderPayload.orderId, orderPayload, totalAccounted, 0, payString, updatedWallet); window.print(); }
     closeReview(); lockMenu(); renderProductGrid(); runBackgroundSync();
 }
 
 async function getDynamicSettings() { return new Promise(res => { let req = db.transaction(["settings"], "readonly").objectStore("settings").getAll(); req.onsuccess = e => { let s = {}; e.target.result.forEach(row => s[row.key] = row.value); res(s); }; }); }
 
-async function buildPrintableReceipt(orderId, order, deposit, remaining, payMethod, newPoints, newFree) {
+async function buildPrintableReceipt(orderId, order, deposit, remaining, payMethod, updatedWallet) {
     const settings = await getDynamicSettings();
     const h1 = settings["Header_1"] || "PURE WATER"; 
     const h2 = settings["Header_2"] || ""; 
-    
-    let h3 = settings["Header_3"] || ""; 
-    if (settings["Header_3_" + order.outlet]) h3 = settings["Header_3_" + order.outlet]; 
-
+    let h3 = settings["Header_3"] || ""; if (settings["Header_3_" + order.outlet]) h3 = settings["Header_3_" + order.outlet]; 
     const f1 = settings["Footer_1"] || "TERIMA KASIH"; 
     const f2 = settings["Footer_2"] || ""; 
-    
-    let f3 = settings["Footer_3"] || ""; 
-    if (settings["Footer_3_" + order.outlet]) f3 = settings["Footer_3_" + order.outlet]; 
+    let f3 = settings["Footer_3"] || ""; if (settings["Footer_3_" + order.outlet]) f3 = settings["Footer_3_" + order.outlet]; 
 
     const printArea = document.getElementById("printable-area"); const dateStr = new Date().toLocaleString('id-ID');
     
@@ -424,13 +441,20 @@ async function buildPrintableReceipt(orderId, order, deposit, remaining, payMeth
     
     let poinHtml = "";
     if (window.loyaltyEnabled && order.customerPhone && order.customerPhone !== "-") {
-        poinHtml = `
-        <div style="margin-top:10px; padding-top:5px; border-top:1px dashed #000; font-size:11px; text-align:center;">
-            <strong>-- INFO POIN PURE --</strong><br>
-            <em>(Promo Beli ${window.loyaltyThreshold} Gratis 1)</em><br>
-            Sisa Poin: ${newPoints} / ${window.loyaltyThreshold}<br>
-            Gratis Refill Tersedia: ${newFree}
-        </div>`;
+        let lines = [];
+        for (let itemName in updatedWallet) {
+            let data = updatedWallet[itemName];
+            if (data.points > 0 || data.free > 0) {
+                lines.push(`<strong>${itemName}</strong><br>Poin: ${data.points} | Gratis: ${data.free}`);
+            }
+        }
+        if (lines.length > 0) {
+            poinHtml = `
+            <div style="margin-top:10px; padding-top:5px; border-top:1px dashed #000; font-size:11px; text-align:center;">
+                <strong>-- INFO POIN PURE --</strong><br>
+                ${lines.join('<br>')}
+            </div>`;
+        }
     }
 
     printArea.innerHTML = `
@@ -577,18 +601,19 @@ function processVoidApprovals(authStatuses) {
     };
 }
 function applyVoidAftermath(order) {
-    let itemsToReturn = []; if(order.items) order.items.forEach(i => itemsToReturn.push({ name: i.name, qty: i.qty }));
     const tx = db.transaction(["menu", "members"], "readwrite"); const menuStore = tx.objectStore("menu"); const memberStore = tx.objectStore("members");
 
-    itemsToReturn.forEach(item => {
-        menuStore.openCursor().onsuccess = (e) => {
-            const cursor = e.target.result;
-            if (cursor) { 
-                if (cursor.value.name === item.name && cursor.value.trackStock) { const updated = cursor.value; updated.currentStock += item.qty; cursor.update(updated); } 
-                cursor.continue(); 
-            }
-        };
-    });
+    if (order.items) {
+        order.items.forEach(item => {
+            menuStore.openCursor().onsuccess = (e) => {
+                const cursor = e.target.result;
+                if (cursor) { 
+                    if (cursor.value.name === item.name && cursor.value.trackStock) { const updated = cursor.value; updated.currentStock += item.qty; cursor.update(updated); } 
+                    cursor.continue(); 
+                }
+            };
+        });
+    }
 
     if (order.customerPhone && order.customerPhone !== "Walk-in" && order.customerPhone !== "-") {
         memberStore.get(order.customerPhone).onsuccess = (e) => { 
@@ -596,16 +621,30 @@ function applyVoidAftermath(order) {
             if (mem) { 
                 mem.spent = Math.max(0, (mem.spent || 0) - order.grandTotal); 
                 mem.bottlesBorrowed = Math.max(0, (mem.bottlesBorrowed || 0) - (order.rentBottleQty || 0));
-                let kBal = mem.points || 0; let fAvail = mem.freeCoins || 0; let threshold = order.loyaltyThresholdUsed || 10;
-                kBal -= (order.coinsEarned || 0); fAvail += (order.coinsRedeemed || 0);
-                while (kBal < 0) { kBal += threshold; fAvail -= 1; }
-                mem.points = kBal; mem.freeCoins = Math.max(0, fAvail);
+                
+                if (order.loyaltyChanges && mem.wallet) {
+                    for(let itemName in order.loyaltyChanges) {
+                        let c = order.loyaltyChanges[itemName];
+                        if(!mem.wallet[itemName]) mem.wallet[itemName] = {points:0, free:0};
+                        
+                        mem.wallet[itemName].points -= c.earned;
+                        mem.wallet[itemName].free += c.redeemed;
+                        
+                        while (mem.wallet[itemName].points < 0 && mem.wallet[itemName].free > 0) {
+                            mem.wallet[itemName].points += c.threshold;
+                            mem.wallet[itemName].free -= 1;
+                        }
+                        if(mem.wallet[itemName].free < 0) mem.wallet[itemName].free = 0;
+                        if(mem.wallet[itemName].points < 0) mem.wallet[itemName].points = 0;
+                    }
+                }
                 memberStore.put(mem); 
             } 
         };
     }
     tx.oncomplete = () => { renderProductGrid(); };
-    if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: itemsToReturn, rentBottleQty: order.rentBottleQty, coinsEarned: order.coinsEarned, coinsRedeemed: order.coinsRedeemed, loyaltyThresholdUsed: order.loyaltyThresholdUsed, outlet: order.outlet } }) });
+    let payloadItems = []; if (order.items) order.items.forEach(i => payloadItems.push({name: i.name, qty: i.qty}));
+    if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: payloadItems, rentBottleQty: order.rentBottleQty, loyaltyChanges: order.loyaltyChanges, outlet: order.outlet } }) });
 }
 
 // Cash Management
