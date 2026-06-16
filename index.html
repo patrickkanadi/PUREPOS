@@ -54,7 +54,6 @@
         #cart-header { padding: 15px; background: #2c3e50; color: white; font-weight: bold; text-align: center; display: flex; justify-content: space-between; align-items: center;}
         #promo-indicator { background: #f1c40f; color: #856404; font-size: 12px; padding: 4px 8px; border-radius: 12px; font-weight: bold; }
         #cart-items { flex: 1; padding: 15px; overflow-y: auto; }
-        .cart-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px dashed #ccc; font-size: 15px; }
         
         #checkout-panel { padding: 20px; border-top: 2px dashed #ccc; background: #fff; box-shadow: 0 -4px 10px rgba(0,0,0,0.03); }
         .grand-total { font-size: 24px; font-weight: bold; color: #e74c3c; display: flex; justify-content: space-between;}
@@ -253,12 +252,21 @@
         <div class="modal-content" style="max-width: 400px;">
             <h2 style="margin-top:0; color: #3498db;">🚚 Terima Truk Air</h2>
             <p style="color: #7f8c8d; font-size: 14px;">Catat kedatangan air baku ke dalam tandon.</p>
+            
+            <div class="form-box">
+                <label>Pilih Tandon Tujuan</label>
+                <select id="inbound-tank-target" style="font-size: 18px; font-weight: bold;">
+                    <option value="Tangki Air RO">💧 Tangki Air RO</option>
+                    <option value="Tangki Air Standar">💧 Tangki Air Standar</option>
+                </select>
+            </div>
+
             <div class="form-box">
                 <label>Volume Air (Liter)</label>
                 <input type="number" id="inbound-qty" placeholder="Misal: 8000" style="font-size: 20px; font-weight: bold;">
             </div>
             <div class="form-box">
-                <label>Nama Supplier / Keterangan Plat Truk</label>
+                <label>Keterangan / Plat Truk</label>
                 <input type="text" id="inbound-notes" placeholder="Misal: Tangki Biru L 1234 AB">
             </div>
             <div style="display: flex; gap: 10px; margin-top: 20px;">
