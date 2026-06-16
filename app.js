@@ -9,6 +9,7 @@ window.masterDrawerBalance = 0; let isLoggingOut = false;
 let currentVoidTarget = { type: null, id: null };
 let isMenuLocked = true; let isSyncing = false; let activeCustomerProfile = null; 
 window.loyaltyEnabled = false; window.loyaltyThreshold = 10;
+window.activeRedeemCount = 0;
 let deferredPrompt;
 
 // PWA Install Prompt
@@ -64,7 +65,6 @@ function attemptLogin() {
                 
                 const dropdownSelection = document.getElementById("login-outlet").value;
                 if (dropdownSelection === "AUTO") {
-                    // Fallback to the first available outlet in the dropdown if staff default is blank
                     currentOutlet = staff.defaultOutlet || document.getElementById("login-outlet").options[1].value; 
                 } else {
                     currentOutlet = dropdownSelection; 
@@ -205,8 +205,10 @@ window.selectMember = function(phone, name, dbPoints, dbFreeCoins, dbBottlesBorr
     if (!window.loyaltyEnabled) {
         document.getElementById("promo-indicator").classList.add("hidden"); return;
     }
-    if (currentFree > 0) promoText = `🎁 ${currentFree} Gratis Tersedia! (Sisa Poin: ${currentPoints}/${window.loyaltyThreshold})`;
-    else promoText = `🎁 Poin Saat Ini: ${currentPoints}/${window.loyaltyThreshold}`;
+    
+    // Explicitly mention the Buy X Get 1 Rules
+    if (currentFree > 0) promoText = `🎁 PROMO Beli ${window.loyaltyThreshold} Gratis 1: (${currentFree} Gratis Tersedia!)`;
+    else promoText = `🎁 PROMO Beli ${window.loyaltyThreshold} Gratis 1 (Poin: ${currentPoints}/${window.loyaltyThreshold})`;
     
     document.getElementById("promo-indicator").innerText = promoText; document.getElementById("promo-indicator").classList.remove("hidden");
 };
@@ -222,8 +224,10 @@ function saveMemberToDB(phone, name) {
 
 // Menu & Cart
 function loadMenuUI() {
-    const categories = [...new Set(globalMenuData.map(i => i.category))].filter(c => c !== "Tandon"); 
-    currentCategory = categories[0];
+    const visibleItems = globalMenuData.filter(i => !i.hideOnPos); 
+    const categories = [...new Set(visibleItems.map(i => i.category))]; 
+    if(categories.length > 0) currentCategory = categories[0];
+    
     const catContainer = document.getElementById("category-container"); catContainer.innerHTML = "";
     categories.forEach(cat => {
         const btn = document.createElement("button"); btn.className = `cat-btn ${cat === currentCategory ? "active" : ""}`; btn.innerText = cat;
@@ -236,7 +240,9 @@ function renderProductGrid() {
     const grid = document.getElementById("product-grid"); grid.innerHTML = "";
     
     const filteredMenu = globalMenuData.filter(i => {
+        if (i.hideOnPos) return false; 
         if (i.category !== currentCategory) return false;
+        
         const availableList = (i.availableAt || "ALL").toUpperCase();
         if (availableList === "ALL" || availableList === "") return true;
         return availableList.includes(currentOutlet.toUpperCase());
@@ -285,20 +291,60 @@ function renderCart() {
 
 function clearCart() { lockMenu(); }
 
-// Checkout Flow
+// Checkout Flow & Auto Balancing
 function reviewOrder() {
     if (currentCart.length === 0) return alert("Keranjang masih kosong!");
-    document.getElementById("pay-cash").value = 0; document.getElementById("pay-qris").value = 0; document.getElementById("pay-transfer").value = 0; document.getElementById("pay-free").value = 0;
-    let bottleRentBox = document.getElementById("rent-bottle-qty"); if(bottleRentBox) bottleRentBox.value = 0;
+    
     window.cartGrandTotal = window.cartSubtotal;
+    let autoDiscount = 0;
+    let coinsToRedeem = 0;
+
+    // Automatic Promotion / Free Calculation
+    if (window.loyaltyEnabled && activeCustomerProfile && activeCustomerProfile.freeCoins > 0) {
+        let eligibleItems = currentCart.filter(i => i.autoDeduct).flatMap(i => Array(i.qty).fill(i.price));
+        eligibleItems.sort((a, b) => b - a); // Find highest priced items to make free first
+        
+        coinsToRedeem = Math.min(activeCustomerProfile.freeCoins, eligibleItems.length);
+        for(let i=0; i<coinsToRedeem; i++) {
+            autoDiscount += eligibleItems[i];
+        }
+    }
+    window.activeRedeemCount = coinsToRedeem;
+
+    document.getElementById("pay-qris").value = 0; 
+    document.getElementById("pay-transfer").value = 0; 
+    document.getElementById("pay-free").value = autoDiscount;
+    let bottleRentBox = document.getElementById("rent-bottle-qty"); if(bottleRentBox) bottleRentBox.value = 0;
+    
     document.getElementById("review-subtotal").innerText = `Rp ${window.cartSubtotal.toLocaleString('id-ID')}`;
+    
+    // Auto-fill Cash with whatever is remaining after the free discount
+    const remainingToPay = Math.max(0, window.cartGrandTotal - autoDiscount);
+    document.getElementById("pay-cash").value = remainingToPay;
+    
     calculateRemaining(); document.getElementById("review-modal").classList.remove("hidden");
 }
 
+window.autoBalanceCash = function() {
+    // When Qris, Transfer, or Free changes, automatically adjust Cash to balance to 0.
+    const q = Number(document.getElementById("pay-qris").value) || 0;
+    const t = Number(document.getElementById("pay-transfer").value) || 0;
+    const f = Number(document.getElementById("pay-free").value) || 0;
+    
+    const totalAccounted = q + t + f;
+    const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
+    
+    document.getElementById("pay-cash").value = remaining;
+    calculateRemaining();
+}
+
 window.calculateRemaining = function() {
-    const c = Number(document.getElementById("pay-cash").value) || 0; const q = Number(document.getElementById("pay-qris").value) || 0;
-    const t = Number(document.getElementById("pay-transfer").value) || 0; const f = Number(document.getElementById("pay-free").value) || 0;
-    const totalAccounted = c + q + t + f; const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
+    const c = Number(document.getElementById("pay-cash").value) || 0; 
+    const q = Number(document.getElementById("pay-qris").value) || 0;
+    const t = Number(document.getElementById("pay-transfer").value) || 0; 
+    const f = Number(document.getElementById("pay-free").value) || 0;
+    const totalAccounted = c + q + t + f; 
+    const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     document.getElementById("review-remaining").innerText = `Rp ${remaining.toLocaleString('id-ID')}`;
 }
 
@@ -322,9 +368,14 @@ async function finalizeOrder(shouldPrint) {
 
     let status = "Completed"; 
     
-    // Loyalty Math
+    // Loyalty Math Integration
     let refillsEarned = currentCart.filter(i => i.autoDeduct).reduce((sum, i) => sum + i.qty, 0);
-    let redeemCount = 0; // Handled manually by cashiers adjusting free values
+    let redeemCount = 0; 
+    
+    // If there is a free amount logged, and we suggested redemptions, consume the coins.
+    if (free > 0 && window.activeRedeemCount > 0) {
+        redeemCount = window.activeRedeemCount;
+    }
     
     let newPoints = 0; let newFree = 0;
     if (window.loyaltyEnabled && activeCustomerProfile) {
@@ -370,7 +421,13 @@ async function buildPrintableReceipt(orderId, order, deposit, remaining, payMeth
     
     let poinHtml = "";
     if (window.loyaltyEnabled && order.customerPhone && order.customerPhone !== "-") {
-        poinHtml = `<div style="margin-top:10px; padding-top:5px; border-top:1px dashed #000; font-size:11px; text-align:center;"><strong>-- INFO POIN PURE --</strong><br>Sisa Poin: ${newPoints} / ${window.loyaltyThreshold}<br>Gratis Refill Tersedia: ${newFree}</div>`;
+        poinHtml = `
+        <div style="margin-top:10px; padding-top:5px; border-top:1px dashed #000; font-size:11px; text-align:center;">
+            <strong>-- INFO POIN PURE --</strong><br>
+            <em>(Promo Beli ${window.loyaltyThreshold} Gratis 1)</em><br>
+            Sisa Poin: ${newPoints} / ${window.loyaltyThreshold}<br>
+            Gratis Refill Tersedia: ${newFree}
+        </div>`;
     }
 
     printArea.innerHTML = `
@@ -545,7 +602,7 @@ function applyVoidAftermath(order) {
         };
     }
     tx.oncomplete = () => { renderProductGrid(); };
-    if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: itemsToReturn, rentBottleQty: order.rentBottleQty, coinsEarned: order.coinsEarned, coinsRedeemed: order.coinsRedeemed, loyaltyThresholdUsed: order.loyaltyThresholdUsed } }) });
+    if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: itemsToReturn, rentBottleQty: order.rentBottleQty, coinsEarned: order.coinsEarned, coinsRedeemed: order.coinsRedeemed, loyaltyThresholdUsed: order.loyaltyThresholdUsed, outlet: order.outlet } }) });
 }
 
 // Cash Management
