@@ -64,7 +64,8 @@ function attemptLogin() {
                 
                 const dropdownSelection = document.getElementById("login-outlet").value;
                 if (dropdownSelection === "AUTO") {
-                    currentOutlet = staff.defaultOutlet || "Depot Pusat"; 
+                    // Fallback to the first available outlet in the dropdown if staff default is blank
+                    currentOutlet = staff.defaultOutlet || document.getElementById("login-outlet").options[1].value; 
                 } else {
                     currentOutlet = dropdownSelection; 
                 }
