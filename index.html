@@ -53,7 +53,6 @@
         .product-card:active { transform: scale(0.96); box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
         .price-badge { background: #e8f4f8; color: #2980b9; font-weight: bold; padding: 6px 12px; border-radius: 20px; display: inline-block; margin-top: 10px;}
 
-        /* NEW MULTI-TAB CSS */
         #cart-section { flex: 4; display: flex; flex-direction: column; background: #fdfbf7; }
         #cart-tabs { display: flex; width: 100%; background: #34495e; border-bottom: 1px solid #2c3e50; }
         .cart-tab { flex: 1; padding: 15px 10px; font-weight: bold; border: none; background: #34495e; color: #bdc3c7; cursor: pointer; border-right: 1px solid #2c3e50; transition: 0.2s; font-size: 14px;}
@@ -71,7 +70,7 @@
         
         .form-box { margin-bottom: 15px; }
         .form-box label { display: block; font-weight: bold; margin-bottom: 5px; color: #2c3e50; font-size:14px; }
-        .form-box input, .form-box select { width: 100%; padding: 12px; font-size: 16px; border: 2px solid #bdc3c7; border-radius: 6px; background: white; }
+        .form-box input, .form-box select, .form-box textarea { width: 100%; padding: 12px; font-size: 16px; border: 2px solid #bdc3c7; border-radius: 6px; background: white; resize: vertical; }
 
         .split-pay-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; background: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; }
 
@@ -130,7 +129,7 @@
             
             .split-pay-grid { grid-template-columns: 1fr; gap: 8px; padding: 10px; }
             .form-box label { font-size: 12px; }
-            .form-box input, .form-box select { padding: 10px; font-size: 14px; }
+            .form-box input, .form-box select, .form-box textarea { padding: 10px; font-size: 14px; }
             
             .stats-grid { grid-template-columns: 1fr; }
             
@@ -167,6 +166,8 @@
                 <span class="dot-online" id="network-dot"></span><span id="network-text" style="margin-right: 10px;">Memuat...</span>
                 <button class="btn-top hidden" id="btn-install" style="background:#2980b9; border-color:#2980b9;" onclick="installPWA()">📲 Install App</button>
                 <button class="btn-top" style="background:#34495e; border-color:#34495e;" onclick="manualPushSync()">🔄 Sinkron</button>
+                <button class="btn-top" style="background:#27ae60; border-color:#27ae60;" onclick="openCuciModal()">🧹 Cuci Tandon</button>
+                <button class="btn-top" style="background:#c0392b; border-color:#c0392b;" onclick="openLaporModal()">⚠️ Lapor Masalah</button>
                 <button class="btn-top" style="background:#3498db; border-color:#3498db;" onclick="openInboundModal()">🚚 Truk Air</button>
                 <button class="btn-top" style="background:#16a085; border-color:#16a085;" onclick="openCashDrop(false)">🏦 Laci Uang</button>
                 <button class="btn-top" style="background:#8e44ad; border-color:#8e44ad;" onclick="openHistoryModal()">📋 Riwayat</button>
@@ -246,7 +247,7 @@
                     <span>Subtotal:</span> <span id="review-subtotal">Rp 0</span>
                 </div>
                 <div style="display:flex; justify-content:space-between; font-size:16px; color:#27ae60; margin-bottom:5px;">
-                    <span>Diskon/Promo:</span> 
+                    <span>Gratis / Complimentary:</span> 
                     <span>- <input type="number" id="pay-free" value="0" readonly style="background:transparent; border:none; color:#27ae60; font-size:16px; text-align:right; font-weight:bold; width:80px; outline:none; pointer-events:none;"></span>
                 </div>
                 <div style="display:flex; justify-content:space-between; font-size:24px; color:#2c3e50; font-weight:bold; border-top:1px solid #ccc; padding-top:10px; margin-top:5px;">
@@ -274,6 +275,54 @@
         </div>
     </div>
 
+    <div id="cuci-modal" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width: 400px;">
+            <h2 style="margin-top:0; color: #27ae60;">🧹 Lapor Cuci Tandon</h2>
+            <p style="color: #7f8c8d; font-size: 14px;">Catat air yang terbuang selama proses pengurasan/pencucian. Stok akan terpotong setelah disetujui Admin.</p>
+            
+            <div class="form-box">
+                <label>Pilih Tandon</label>
+                <select id="cuci-tank" style="font-size: 18px; font-weight: bold;"></select>
+            </div>
+            <div class="form-box">
+                <label>Estimasi Air Terbuang (Liter)</label>
+                <input type="number" id="cuci-qty" placeholder="Misal: 50" style="font-size: 20px; font-weight: bold;">
+            </div>
+            <div class="form-box">
+                <label>Catatan</label>
+                <input type="text" id="cuci-notes" placeholder="Misal: Pengurasan rutin bulanan">
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                <button onclick="document.getElementById('cuci-modal').classList.add('hidden')" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold;">Batal</button>
+                <button onclick="submitCuciTandon()" style="flex:2; padding:15px; background:#27ae60; color:white; border:none; border-radius:8px; font-weight:bold;">Kirim Laporan</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="lapor-modal" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width: 450px;">
+            <h2 style="margin-top:0; color: #c0392b;">⚠️ Lapor Masalah Lapangan</h2>
+            <p style="color: #7f8c8d; font-size: 14px;">Laporkan kehilangan air (bocor, tumpah, dll). Stok akan terpotong setelah disetujui Admin.</p>
+            
+            <div class="form-box">
+                <label>Pilih Tandon</label>
+                <select id="lapor-tank" style="font-size: 18px; font-weight: bold;"></select>
+            </div>
+            <div class="form-box">
+                <label>Estimasi Air Hilang (Liter)</label>
+                <input type="number" id="lapor-qty" placeholder="Misal: 100" style="font-size: 20px; font-weight: bold; border-color: #c0392b;">
+            </div>
+            <div class="form-box">
+                <label>Kronologi Kejadian</label>
+                <textarea id="lapor-notes" rows="3" placeholder="Misal: Pipa filter pecah saat subuh, air bocor halus..."></textarea>
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                <button onclick="document.getElementById('lapor-modal').classList.add('hidden')" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold;">Batal</button>
+                <button onclick="submitLaporMasalah()" style="flex:2; padding:15px; background:#c0392b; color:white; border:none; border-radius:8px; font-weight:bold;">Kirim Laporan</button>
+            </div>
+        </div>
+    </div>
+
     <div id="inbound-modal" class="modal-overlay hidden">
         <div class="modal-content" style="max-width: 400px;">
             <h2 style="margin-top:0; color: #3498db;">🚚 Terima Truk Air</h2>
@@ -281,10 +330,7 @@
             
             <div class="form-box">
                 <label>Pilih Tandon Tujuan</label>
-                <select id="inbound-tank-target" style="font-size: 18px; font-weight: bold;">
-                    <option value="Tangki Air RO">💧 Tangki Air RO</option>
-                    <option value="Tangki Air Standar">💧 Tangki Air Standar</option>
-                </select>
+                <select id="inbound-tank-target" style="font-size: 18px; font-weight: bold;"></select>
             </div>
 
             <div class="form-box">
