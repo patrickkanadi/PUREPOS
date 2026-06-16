@@ -53,8 +53,12 @@
         .product-card:active { transform: scale(0.96); box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
         .price-badge { background: #e8f4f8; color: #2980b9; font-weight: bold; padding: 6px 12px; border-radius: 20px; display: inline-block; margin-top: 10px;}
 
+        /* NEW MULTI-TAB CSS */
         #cart-section { flex: 4; display: flex; flex-direction: column; background: #fdfbf7; }
-        #cart-header { padding: 15px; background: #2c3e50; color: white; font-weight: bold; text-align: center;}
+        #cart-tabs { display: flex; width: 100%; background: #34495e; border-bottom: 1px solid #2c3e50; }
+        .cart-tab { flex: 1; padding: 15px 10px; font-weight: bold; border: none; background: #34495e; color: #bdc3c7; cursor: pointer; border-right: 1px solid #2c3e50; transition: 0.2s; font-size: 14px;}
+        .cart-tab.active { background: #2c3e50; color: white; border-top: 3px solid #3498db; }
+        
         #cart-items { flex: 1; padding: 15px; overflow-y: auto; }
         
         #checkout-panel { padding: 20px; border-top: 2px dashed #ccc; background: #fff; box-shadow: 0 -4px 10px rgba(0,0,0,0.03); }
@@ -116,7 +120,7 @@
             .product-card h4 { font-size: 14px; margin-bottom: 5px; }
             .price-badge { font-size: 12px; padding: 4px 8px; margin-top: 5px; }
 
-            #cart-header { padding: 10px; font-size: 14px; }
+            .cart-tab { padding: 10px; font-size: 12px; }
             #cart-items { padding: 10px; }
             #checkout-panel { padding: 15px; }
             .grand-total { font-size: 20px; }
@@ -212,7 +216,12 @@
             </div>
             
             <div id="cart-section">
-                <div id="cart-header">Keranjang Saat Ini</div>
+                <div id="cart-tabs">
+                    <button id="tab-btn-0" class="cart-tab active" style="background:#2c3e50; color:white; border-top:3px solid #3498db;" onclick="switchCart(0)">🛒 Antrean 1</button>
+                    <button id="tab-btn-1" class="cart-tab" onclick="switchCart(1)">🛒 Antrean 2</button>
+                    <button id="tab-btn-2" class="cart-tab" onclick="switchCart(2)">🛒 Antrean 3</button>
+                </div>
+
                 <div id="cart-items"></div>
                 <div id="checkout-panel">
                     <div class="grand-total"><span>Total Akhir:</span> <span id="cart-total">Rp 0</span></div>
@@ -236,7 +245,11 @@
                 <div style="display:flex; justify-content:space-between; font-size:16px; color:#7f8c8d; margin-bottom:5px;">
                     <span>Subtotal:</span> <span id="review-subtotal">Rp 0</span>
                 </div>
-                <div style="display:flex; justify-content:space-between; font-size:24px; color:#2c3e50; font-weight:bold;">
+                <div style="display:flex; justify-content:space-between; font-size:16px; color:#27ae60; margin-bottom:5px;">
+                    <span>Diskon/Promo:</span> 
+                    <span>- <input type="number" id="pay-free" value="0" readonly style="background:transparent; border:none; color:#27ae60; font-size:16px; text-align:right; font-weight:bold; width:80px; outline:none; pointer-events:none;"></span>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:24px; color:#2c3e50; font-weight:bold; border-top:1px solid #ccc; padding-top:10px; margin-top:5px;">
                     <span>Total Akhir:</span> <span id="review-grandtotal">Rp 0</span>
                 </div>
             </div>
@@ -246,11 +259,7 @@
                 <div class="form-box" style="margin-bottom:0;"><label>Tunai / Cash (Rp)</label><input type="number" id="pay-cash" value="0" onclick="this.select()" oninput="calculateRemaining()"></div>
                 <div class="form-box" style="margin-bottom:0;"><label>QRIS (Rp)</label><input type="number" id="pay-qris" value="0" onclick="this.select()" oninput="autoBalanceCash()"></div>
                 <div class="form-box" style="margin-bottom:0;"><label>Transfer Bank (Rp)</label><input type="number" id="pay-transfer" value="0" onclick="this.select()" oninput="autoBalanceCash()"></div>
-                <div class="form-box" style="margin-bottom:0;"><label style="color:#27ae60;">Gratis / Promo (Rp)</label><input type="number" id="pay-free" value="0" onclick="this.select()" oninput="autoBalanceCash()"></div>
-                <div class="form-box" style="margin-bottom:0; background:#fdf2e9; padding:5px; border-radius:6px; grid-column: span 2;">
-                    <label style="color:#e67e22;">Galon Dipinjam (Jumlah Botol)</label>
-                    <input type="number" id="rent-bottle-qty" value="0" onclick="this.select()" oninput="calculateRemaining()">
-                </div>
+                <div class="form-box" style="margin-bottom:0;"><label style="color:#e67e22;">Galon Dipinjam (Jml Botol)</label><input type="number" id="rent-bottle-qty" value="0" onclick="this.select()" oninput="calculateRemaining()"></div>
             </div>
             
             <div style="display:flex; justify-content:space-between; font-size:18px; color:#c0392b; font-weight:bold; margin-bottom: 20px; padding:10px; background:#fdf2e9; border-radius:8px;">
