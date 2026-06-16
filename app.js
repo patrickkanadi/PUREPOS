@@ -3,11 +3,21 @@ const DB_NAME = "PureWater_POS";
 const DB_VERSION = 2; 
 let db;
 
+// MULTI-SESSION ARCHITECTURE
+let posSessions = [
+    { cart: [], customer: null },
+    { cart: [], customer: null },
+    { cart: [], customer: null }
+];
+let activeSessionIndex = 0;
+let currentCart = posSessions[0].cart;
+let activeCustomerProfile = posSessions[0].customer;
+
 let currentCashier = ""; let currentPin = ""; let currentShiftId = ""; let currentLoginTime = ""; let currentOutlet = "";
-let globalMenuData = []; let currentCategory = ""; let currentCart = []; 
+let globalMenuData = []; let currentCategory = ""; 
 window.masterDrawerBalance = 0; let isLoggingOut = false;
 let currentVoidTarget = { type: null, id: null };
-let isMenuLocked = true; let isSyncing = false; let activeCustomerProfile = null; 
+let isMenuLocked = true; let isSyncing = false; 
 window.loyaltyEnabled = false; 
 let deferredPrompt;
 
@@ -88,7 +98,54 @@ function attemptLogin() {
     };
 }
 
-// UI Locks & Displaying Points Panel
+// UI Locks & Multi-Session Tab Switching
+window.switchCart = function(index) {
+    posSessions[activeSessionIndex].customer = activeCustomerProfile;
+    
+    activeSessionIndex = index;
+    currentCart = posSessions[activeSessionIndex].cart;
+    activeCustomerProfile = posSessions[activeSessionIndex].customer;
+    
+    document.querySelectorAll(".cart-tab").forEach((btn, i) => {
+        if (i === index) {
+            btn.classList.add("active");
+            btn.style.background = "#2c3e50";
+            btn.style.color = "white";
+            btn.style.borderTop = "3px solid #3498db";
+        } else {
+            btn.classList.remove("active");
+            btn.style.background = "#34495e";
+            btn.style.color = "#bdc3c7";
+            btn.style.borderTop = "none";
+        }
+    });
+    
+    renderCart();
+    
+    if (activeCustomerProfile) {
+        document.getElementById("cust-name").value = activeCustomerProfile.name;
+        document.getElementById("cust-phone").value = activeCustomerProfile.phone || "";
+        document.getElementById("active-cust-name").innerText = activeCustomerProfile.name;
+        document.getElementById("active-cust-phone").innerText = activeCustomerProfile.phone !== "-" ? `(${activeCustomerProfile.phone})` : "";
+        
+        document.getElementById("customer-input-section").classList.add("hidden");
+        document.getElementById("active-customer-banner").classList.remove("hidden");
+        isMenuLocked = false; 
+        document.getElementById("glass-overlay").style.opacity = "0"; 
+        document.getElementById("glass-overlay").style.pointerEvents = "none";
+        
+        updatePromoBanner(activeCustomerProfile);
+    } else {
+        document.getElementById("customer-input-section").classList.remove("hidden");
+        document.getElementById("active-customer-banner").classList.add("hidden");
+        document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
+        document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = ""; 
+        const promoBanner = document.getElementById("promo-indicator-banner");
+        if(promoBanner) promoBanner.classList.add("hidden");
+        isMenuLocked = true;
+    }
+}
+
 function updatePromoBanner(member) {
     const promoBanner = document.getElementById("promo-indicator-banner");
     if (!window.loyaltyEnabled || !promoBanner) {
@@ -123,10 +180,15 @@ function updatePromoBanner(member) {
 
 function lockMenu() {
     isMenuLocked = true; activeCustomerProfile = null; 
+    posSessions[activeSessionIndex].customer = null;
+    posSessions[activeSessionIndex].cart = [];
+    currentCart = posSessions[activeSessionIndex].cart;
+    
     document.getElementById("customer-input-section").classList.remove("hidden");
     document.getElementById("active-customer-banner").classList.add("hidden");
     document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
-    document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = ""; currentCart = []; renderCart();
+    document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = ""; 
+    renderCart();
     const promoBanner = document.getElementById("promo-indicator-banner");
     if(promoBanner) promoBanner.classList.add("hidden");
 }
@@ -227,10 +289,7 @@ async function syncMasterData() {
 // Customers Handling
 function handleAutocomplete(e) {
     const val = e.target.value.toLowerCase().trim(); const resBox = document.getElementById("autocomplete-results");
-    activeCustomerProfile = null; 
-    const promoBanner = document.getElementById("promo-indicator-banner");
-    if(promoBanner) promoBanner.classList.add("hidden");
-
+    
     db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (ev) => {
         const members = ev.target.result; let matches = members;
         if (val.length > 0) matches = members.filter(m => String(m.phone).toLowerCase().includes(val) || String(m.name).toLowerCase().includes(val));
@@ -241,23 +300,11 @@ function handleAutocomplete(e) {
                 let wStr = JSON.stringify(m.wallet || {}).replace(/"/g, '&quot;');
                 let nameStr = m.name.replace(/'/g, "\\'");
                 
-                let pointSummary = [];
-                let loyaltyItems = globalMenuData.filter(item => item.loyaltyThreshold > 0);
-                loyaltyItems.forEach(item => {
-                    let w = (m.wallet || {})[item.name] || { points: 0, free: 0 };
-                    pointSummary.push(`${item.name} (${w.points}/${item.loyaltyThreshold})`);
-                });
-                
-                let pointHtml = pointSummary.length > 0 
-                    ? `<div style="font-size:12px; color:#d35400; font-weight:bold; margin-top:6px; background:#fdf2e9; padding:4px 8px; border-radius:4px; display:inline-block;">🌟 ${pointSummary.join(' | ')}</div>` 
-                    : ``;
-
                 return `<div class="autocomplete-item" onclick="selectMember('${m.phone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0})">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div class="autocomplete-name">${m.name}</div>
                         <div class="autocomplete-phone" style="font-size:14px; color:#7f8c8d;">${m.phone}</div>
                     </div>
-                    ${pointHtml}
                 </div>`;
             }).join("");
             resBox.classList.remove("hidden");
@@ -273,12 +320,6 @@ window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed) {
     document.getElementById("cust-phone").value = phone; 
     document.getElementById("cust-name").value = name; 
     document.getElementById("autocomplete-results").classList.add("hidden");
-    
-    let wallet = {};
-    try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
-
-    activeCustomerProfile = { phone: phone, name: name, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed };
-    updatePromoBanner(activeCustomerProfile);
 };
 
 function saveMemberToDB(phone, name) {
@@ -354,16 +395,28 @@ function renderCart() {
             <div style="font-weight:bold; color:#2c3e50; min-width:80px; text-align:right;">Rp ${lineTotal.toLocaleString('id-ID')}</div>
         </div>`;
     });
-    document.getElementById("cart-total").innerText = `Rp ${total.toLocaleString('id-ID')}`; window.cartSubtotal = total; window.cartGrandTotal = total; // Grand total matches subtotal initially
+    document.getElementById("cart-total").innerText = `Rp ${total.toLocaleString('id-ID')}`; window.cartSubtotal = total; window.cartGrandTotal = total; 
+    
+    // Multi-Session: Update Cart Indicators
+    posSessions.forEach((session, i) => {
+        let qty = session.cart.reduce((sum, item) => sum + item.qty, 0);
+        let btn = document.getElementById(`tab-btn-${i}`);
+        let isActive = i === activeSessionIndex;
+        if (qty > 0) {
+            btn.innerHTML = `🛒 Antrean ${i+1} <span style="background:#e74c3c; color:white; border-radius:12px; padding:2px 6px; font-size:11px; margin-left:5px;">${qty}</span>`;
+        } else {
+            btn.innerHTML = `🛒 Antrean ${i+1}`;
+        }
+    });
 }
 
 function clearCart() { lockMenu(); }
 
-// Checkout Flow & Redemptions
+// Checkout Flow & DYNAMIC Redemptions
 function reviewOrder() {
     if (currentCart.length === 0) return alert("Keranjang masih kosong!");
     
-    window.cartGrandTotal = window.cartSubtotal; // REVERT: Never reduce this visually
+    window.cartGrandTotal = window.cartSubtotal;
     
     const redeemContainer = document.getElementById("redemption-items");
     redeemContainer.innerHTML = "";
@@ -396,13 +449,11 @@ function reviewOrder() {
         document.getElementById("redemption-section").classList.add("hidden");
     }
 
-    // Reset Fields
     document.getElementById("pay-qris").value = 0; 
     document.getElementById("pay-transfer").value = 0; 
     document.getElementById("pay-free").value = 0; 
     let bottleRentBox = document.getElementById("rent-bottle-qty"); if(bottleRentBox) bottleRentBox.value = 0;
     
-    // REVERT: Standard display
     document.getElementById("review-subtotal").innerText = `Rp ${window.cartSubtotal.toLocaleString('id-ID')}`;
     document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
     
@@ -421,8 +472,9 @@ window.recalcRedemptions = function() {
         totalDiscount += (qty * price);
     });
     
-    // REVERT: Put the discount directly into the Free payment bucket, but do not touch the grand total
     document.getElementById("pay-free").value = totalDiscount; 
+    window.cartGrandTotal = Math.max(0, window.cartSubtotal - totalDiscount);
+    document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
     
     autoBalanceCash();
 }
@@ -430,10 +482,8 @@ window.recalcRedemptions = function() {
 window.autoBalanceCash = function() {
     const q = Number(document.getElementById("pay-qris").value) || 0;
     const t = Number(document.getElementById("pay-transfer").value) || 0;
-    const f = Number(document.getElementById("pay-free").value) || 0;
     
-    // REVERT: Add the free field back into the total accounted calculation
-    const totalAccounted = q + t + f;
+    const totalAccounted = q + t;
     const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     
     document.getElementById("pay-cash").value = remaining;
@@ -444,10 +494,8 @@ window.calculateRemaining = function() {
     const c = Number(document.getElementById("pay-cash").value) || 0; 
     const q = Number(document.getElementById("pay-qris").value) || 0;
     const t = Number(document.getElementById("pay-transfer").value) || 0; 
-    const f = Number(document.getElementById("pay-free").value) || 0;
 
-    // REVERT: Free counts as payment
-    const totalAccounted = c + q + t + f; 
+    const totalAccounted = c + q + t; 
     const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     document.getElementById("review-remaining").innerText = `Rp ${remaining.toLocaleString('id-ID')}`;
 }
@@ -458,9 +506,7 @@ async function finalizeOrder(shouldPrint) {
     const cash = Number(document.getElementById("pay-cash").value) || 0; const qris = Number(document.getElementById("pay-qris").value) || 0;
     const transfer = Number(document.getElementById("pay-transfer").value) || 0; const free = Number(document.getElementById("pay-free").value) || 0;
     const rentBottleQty = Number(document.getElementById("rent-bottle-qty").value) || 0;
-    
-    // REVERT: Free counts as payment
-    const totalAccounted = cash + qris + transfer + free; const remaining = window.cartGrandTotal - totalAccounted; 
+    const totalAccounted = cash + qris + transfer; const remaining = window.cartGrandTotal - totalAccounted; 
 
     let custPhoneRaw = document.getElementById("cust-phone").value.trim(); let custPhone = custPhoneRaw || "-";
     const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
