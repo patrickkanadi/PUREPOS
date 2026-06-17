@@ -133,7 +133,6 @@ function updatePromoBanner(member) {
     const promoBanner = document.getElementById("promo-indicator-banner");
     const piutangBanner = document.getElementById("piutang-indicator-banner");
 
-    // Piutang Check
     if (member && member.piutang > 0) {
         piutangBanner.innerHTML = `<span>⚠️ <strong>Total Piutang:</strong> Rp ${member.piutang.toLocaleString('id-ID')}</span> <button onclick="openPiutangModal()" style="padding:5px 10px; background:#c0392b; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Lunasi Piutang</button>`;
         piutangBanner.classList.remove("hidden");
@@ -193,7 +192,7 @@ function unlockMenu(isGuest) {
         tx.objectStore("members").get(searchPhone).onsuccess = (ev) => {
             const member = ev.target.result;
             if (member) { activeCustomerProfile = member; name = member.name; document.getElementById("cust-name").value = name; updatePromoBanner(member); } 
-            else { activeCustomerProfile = { phone: searchPhone, name: name, wallet: {}, bottlesBorrowed: 0, piutang: 0 }; updatePromoBanner(activeCustomerProfile); }
+            else { activeCustomerProfile = { phone: searchPhone, name: name, wallet: {}, bottlesBorrowed: 0, piutang: 0, firstOutlet: currentOutlet, recentOutlets: currentOutlet }; updatePromoBanner(activeCustomerProfile); }
 
             document.getElementById("active-cust-name").innerText = name; document.getElementById("active-cust-phone").innerText = `(${searchPhone})`;
             document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
@@ -258,7 +257,8 @@ function handleAutocomplete(e) {
         if (matches.length > 0) {
             resBox.innerHTML = matches.map(m => {
                 let wStr = JSON.stringify(m.wallet || {}).replace(/"/g, '&quot;'); let nameStr = m.name.replace(/'/g, "\\'");
-                return `<div class="autocomplete-item" onclick="selectMember('${m.phone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0})">
+                let fOut = m.firstOutlet || ""; let rOut = m.recentOutlets || "";
+                return `<div class="autocomplete-item" onclick="selectMember('${m.phone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0}, '${fOut}', '${rOut}')">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div class="autocomplete-name">${m.name}</div><div class="autocomplete-phone" style="font-size:14px; color:#7f8c8d;">${m.phone}</div>
                     </div>
@@ -270,22 +270,23 @@ function handleAutocomplete(e) {
 }
 document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);document.getElementById("cust-name").addEventListener("input", handleAutocomplete);document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);document.getElementById("cust-name").addEventListener("click", handleAutocomplete);document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);document.addEventListener('click', (e) => { if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { document.getElementById('autocomplete-results').classList.add('hidden'); } });
 
-window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, dbPiutang) {
+window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, dbPiutang, firstOutlet, recentOutlets) {
     document.getElementById("autocomplete-results").classList.add("hidden");
     let lockedQueue = isCustomerLocked(phone);
     if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan atau batalkan pesanan di sana terlebih dahulu untuk mencegah konflik poin.`); }
 
     document.getElementById("cust-phone").value = phone; document.getElementById("cust-name").value = name; 
     let wallet = {}; try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
-    activeCustomerProfile = { phone: phone, name: name, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed, piutang: dbPiutang };
+    activeCustomerProfile = { phone: phone, name: name, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed, piutang: dbPiutang, firstOutlet: firstOutlet, recentOutlets: recentOutlets };
     updatePromoBanner(activeCustomerProfile);
 };
 
-function saveMemberToDB(phone, name, wallet, bottles, piutang) {
+function saveMemberToDB(phone, name, wallet, bottles, piutang, fOut, rOut) {
     if(!phone || phone === "-") return; 
     db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
-        let mem = e.target.result || { phone: phone, name: name, wallet: {}, spent: 0, bottlesBorrowed: 0, piutang: 0 }; 
+        let mem = e.target.result || { phone: phone, name: name, wallet: {}, spent: 0, bottlesBorrowed: 0, piutang: 0, firstOutlet: fOut || currentOutlet, recentOutlets: rOut || currentOutlet }; 
         mem.name = name; if(wallet !== undefined) mem.wallet = wallet; if(bottles !== undefined) mem.bottlesBorrowed = bottles; if(piutang !== undefined) mem.piutang = piutang;
+        if(fOut !== undefined) mem.firstOutlet = fOut; if(rOut !== undefined) mem.recentOutlets = rOut;
         db.transaction(["members"], "readwrite").objectStore("members").put(mem);
         db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").put(mem);
     };
@@ -438,7 +439,7 @@ window.submitPiutang = function() {
     db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").add(payload);
     
     activeCustomerProfile.piutang -= payAmount;
-    saveMemberToDB(activeCustomerProfile.phone, activeCustomerProfile.name, activeCustomerProfile.wallet, activeCustomerProfile.bottlesBorrowed, activeCustomerProfile.piutang);
+    saveMemberToDB(activeCustomerProfile.phone, activeCustomerProfile.name, activeCustomerProfile.wallet, activeCustomerProfile.bottlesBorrowed, activeCustomerProfile.piutang, activeCustomerProfile.firstOutlet, activeCustomerProfile.recentOutlets);
     updatePromoBanner(activeCustomerProfile);
     
     document.getElementById("piutang-modal").classList.add("hidden");
@@ -497,9 +498,11 @@ async function finalizeOrder(shouldPrint, isDebt) {
             }
         }
         activeCustomerProfile.piutang = newPiutang;
-        saveMemberToDB(activeCustomerProfile.phone, activeCustomerProfile.name, updatedWallet, activeCustomerProfile.bottlesBorrowed + rentBottleQty, newPiutang);
+        saveMemberToDB(activeCustomerProfile.phone, activeCustomerProfile.name, updatedWallet, activeCustomerProfile.bottlesBorrowed + rentBottleQty, newPiutang, activeCustomerProfile.firstOutlet, activeCustomerProfile.recentOutlets);
     } else if (custPhone !== "-") {
-        saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount);
+        let fOut = activeCustomerProfile ? activeCustomerProfile.firstOutlet : currentOutlet;
+        let rOut = activeCustomerProfile ? activeCustomerProfile.recentOutlets : currentOutlet;
+        saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount, fOut, rOut);
     }
 
     const orderPayload = {
@@ -753,7 +756,6 @@ function calculateLiveDrawer(callback) {
     let expReq = tx.objectStore("expenses").getAll(); let bpReq = tx.objectStore("bayar_piutang").getAll();
     
     tx.oncomplete = () => {
-        // Add unsynced local cash activity
         ordersReq.result.forEach(o => { if (o.syncStatus === "Pending" && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending") liveDrawer += (o.cashAmount || 0); });
         dropReq.result.forEach(d => { if (d.syncStatus === "Pending") liveDrawer -= (d.toAdmin + d.toBank); });
         expReq.result.forEach(e => { if (e.syncStatus === "Pending" && e.status === "Active") liveDrawer -= (e.amount || 0); });
