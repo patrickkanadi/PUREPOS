@@ -1,4 +1,4 @@
-const API_URL = "YOUR_NEW_WEB_APP_URL_HERE"; 
+const API_URL = "https://script.google.com/macros/s/AKfycbxFbXjkE3N2Q8T0oJ9gHOKSKFSefg3T01ezUcFuyNUNfGXh-lC700oKo57qwakeJ-Y/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 4; // Upgraded to add bayar_piutang
 let db;
