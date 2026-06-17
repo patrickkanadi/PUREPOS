@@ -1,31 +1,21 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbxFbXjkE3N2Q8T0oJ9gHOKSKFSefg3T01ezUcFuyNUNfGXh-lC700oKo57qwakeJ-Y/exec"; 
+const API_URL = "YOUR_NEW_WEB_APP_URL_HERE"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 3; 
+const DB_VERSION = 4; // Upgraded to add bayar_piutang
 let db;
 
 // MULTI-SESSION ARCHITECTURE
-let posSessions = [
-    { cart: [], customer: null },
-    { cart: [], customer: null },
-    { cart: [], customer: null }
-];
-let activeSessionIndex = 0;
-let currentCart = posSessions[0].cart;
-let activeCustomerProfile = posSessions[0].customer;
+let posSessions = [{ cart: [], customer: null }, { cart: [], customer: null }, { cart: [], customer: null }];
+let activeSessionIndex = 0; let currentCart = posSessions[0].cart; let activeCustomerProfile = posSessions[0].customer;
 
 let currentCashier = ""; let currentPin = ""; let currentShiftId = ""; let currentLoginTime = ""; let currentOutlet = "";
 let globalMenuData = []; let currentCategory = ""; 
-window.masterDrawerBalance = 0; let isLoggingOut = false;
-let currentVoidTarget = { type: null, id: null };
-let isMenuLocked = true; let isSyncing = false; 
-window.loyaltyEnabled = false; 
+window.outletStocks = {}; let isLoggingOut = false; let currentVoidTarget = { type: null, id: null };
+let isMenuLocked = true; let isSyncing = false; window.loyaltyEnabled = false; 
 let deferredPrompt;
 
 // GMT+7 (WIB) Timestamp Generator
 function getWibDate() {
-    const d = new Date();
-    const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
-    const nd = new Date(utc + (3600000 * 7)); // Add 7 hours for WIB
+    const d = new Date(); const utc = d.getTime() + (d.getTimezoneOffset() * 60000); const nd = new Date(utc + (3600000 * 7)); 
     const pad = n => n < 10 ? '0' + n : n;
     return `${nd.getFullYear()}-${pad(nd.getMonth()+1)}-${pad(nd.getDate())}T${pad(nd.getHours())}:${pad(nd.getMinutes())}:${pad(nd.getSeconds())}+07:00`;
 }
@@ -33,20 +23,16 @@ function getWibDate() {
 // PWA Install Prompt
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault(); deferredPrompt = e;
-    const installBtn = document.getElementById('btn-install');
-    const installBtnLogin = document.getElementById('btn-install-login');
-    if(installBtn) installBtn.classList.remove('hidden');
-    if(installBtnLogin) installBtnLogin.classList.remove('hidden');
+    const installBtn = document.getElementById('btn-install'); const installBtnLogin = document.getElementById('btn-install-login');
+    if(installBtn) installBtn.classList.remove('hidden'); if(installBtnLogin) installBtnLogin.classList.remove('hidden');
 });
 function installPWA() {
     if (deferredPrompt) {
         deferredPrompt.prompt();
         deferredPrompt.userChoice.then((choiceResult) => {
             if (choiceResult.outcome === 'accepted') {
-                const installBtn = document.getElementById('btn-install');
-                const installBtnLogin = document.getElementById('btn-install-login');
-                if(installBtn) installBtn.classList.add('hidden');
-                if(installBtnLogin) installBtnLogin.classList.add('hidden');
+                const installBtn = document.getElementById('btn-install'); const installBtnLogin = document.getElementById('btn-install-login');
+                if(installBtn) installBtn.classList.add('hidden'); if(installBtnLogin) installBtnLogin.classList.add('hidden');
             }
             deferredPrompt = null;
         });
@@ -75,6 +61,7 @@ function initDB() {
             if (!db.objectStoreNames.contains("stock_inbound")) db.createObjectStore("stock_inbound", { keyPath: "logId" });
             if (!db.objectStoreNames.contains("cuci_tandon")) db.createObjectStore("cuci_tandon", { keyPath: "logId" });
             if (!db.objectStoreNames.contains("lapor_masalah")) db.createObjectStore("lapor_masalah", { keyPath: "logId" });
+            if (!db.objectStoreNames.contains("bayar_piutang")) db.createObjectStore("bayar_piutang", { keyPath: "payId" });
         };
         request.onsuccess = (e) => { db = e.target.result; resolve(db); };
     });
@@ -91,25 +78,17 @@ function attemptLogin() {
                 currentCashier = staff.name; currentPin = staff.pin;
                 
                 const dropdownSelection = document.getElementById("login-outlet").value;
-                if (dropdownSelection === "AUTO") {
-                    currentOutlet = staff.defaultOutlet || document.getElementById("login-outlet").options[1].value; 
-                } else {
-                    currentOutlet = dropdownSelection; 
-                }
+                if (dropdownSelection === "AUTO") { currentOutlet = staff.defaultOutlet || document.getElementById("login-outlet").options[1].value; } 
+                else { currentOutlet = dropdownSelection; }
 
                 if (activeShift) { 
-                    currentShiftId = activeShift.shiftId; 
-                    currentLoginTime = activeShift.loginTime; 
-                    currentOutlet = activeShift.outlet || currentOutlet; 
+                    currentShiftId = activeShift.shiftId; currentLoginTime = activeShift.loginTime; currentOutlet = activeShift.outlet || currentOutlet; 
                 } else {
                     currentShiftId = "SHF-" + Date.now(); currentLoginTime = getWibDate();
-                    db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({
-                        pin: pin, shiftId: currentShiftId, loginTime: currentLoginTime, outlet: currentOutlet
-                    });
+                    db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({ pin: pin, shiftId: currentShiftId, loginTime: currentLoginTime, outlet: currentOutlet });
                 }
                 document.getElementById("login-screen").classList.add("hidden"); document.getElementById("pos-screen").classList.remove("hidden");
-                document.getElementById("display-cashier").innerText = currentCashier;
-                document.getElementById("display-outlet").innerText = currentOutlet;
+                document.getElementById("display-cashier").innerText = currentCashier; document.getElementById("display-outlet").innerText = currentOutlet;
                 syncMasterData(); lockMenu(); 
             };
         } else { alert("PIN Salah!"); }
@@ -119,151 +98,105 @@ function attemptLogin() {
 // UI Locks & Multi-Session Tab Switching
 window.switchCart = function(index) {
     posSessions[activeSessionIndex].customer = activeCustomerProfile;
-    
-    activeSessionIndex = index;
-    currentCart = posSessions[activeSessionIndex].cart;
-    activeCustomerProfile = posSessions[activeSessionIndex].customer;
+    activeSessionIndex = index; currentCart = posSessions[activeSessionIndex].cart; activeCustomerProfile = posSessions[activeSessionIndex].customer;
     
     document.querySelectorAll(".cart-tab").forEach((btn, i) => {
-        if (i === index) {
-            btn.classList.add("active");
-            btn.style.background = "#2c3e50";
-            btn.style.color = "white";
-            btn.style.borderTop = "3px solid #3498db";
-        } else {
-            btn.classList.remove("active");
-            btn.style.background = "#34495e";
-            btn.style.color = "#bdc3c7";
-            btn.style.borderTop = "none";
-        }
+        if (i === index) { btn.classList.add("active"); btn.style.background = "#2c3e50"; btn.style.color = "white"; btn.style.borderTop = "3px solid #3498db"; } 
+        else { btn.classList.remove("active"); btn.style.background = "#34495e"; btn.style.color = "#bdc3c7"; btn.style.borderTop = "none"; }
     });
     
     renderCart();
     
     if (activeCustomerProfile) {
-        document.getElementById("cust-name").value = activeCustomerProfile.name;
-        document.getElementById("cust-phone").value = activeCustomerProfile.phone || "";
-        document.getElementById("active-cust-name").innerText = activeCustomerProfile.name;
-        document.getElementById("active-cust-phone").innerText = activeCustomerProfile.phone !== "-" ? `(${activeCustomerProfile.phone})` : "";
-        
-        document.getElementById("customer-input-section").classList.add("hidden");
-        document.getElementById("active-customer-banner").classList.remove("hidden");
-        isMenuLocked = false; 
-        document.getElementById("glass-overlay").style.opacity = "0"; 
-        document.getElementById("glass-overlay").style.pointerEvents = "none";
-        
+        document.getElementById("cust-name").value = activeCustomerProfile.name; document.getElementById("cust-phone").value = activeCustomerProfile.phone || "";
+        document.getElementById("active-cust-name").innerText = activeCustomerProfile.name; document.getElementById("active-cust-phone").innerText = activeCustomerProfile.phone !== "-" ? `(${activeCustomerProfile.phone})` : "";
+        document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
+        isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; document.getElementById("glass-overlay").style.pointerEvents = "none";
         updatePromoBanner(activeCustomerProfile);
     } else {
-        document.getElementById("customer-input-section").classList.remove("hidden");
-        document.getElementById("active-customer-banner").classList.add("hidden");
+        document.getElementById("customer-input-section").classList.remove("hidden"); document.getElementById("active-customer-banner").classList.add("hidden");
         document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
         document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = ""; 
-        const promoBanner = document.getElementById("promo-indicator-banner");
-        if(promoBanner) promoBanner.classList.add("hidden");
+        const promoBanner = document.getElementById("promo-indicator-banner"); if(promoBanner) promoBanner.classList.add("hidden");
+        const piutangBanner = document.getElementById("piutang-indicator-banner"); if(piutangBanner) piutangBanner.classList.add("hidden");
         isMenuLocked = true;
     }
 }
 
 function isCustomerLocked(phone) {
     if (!phone || phone === "-") return false;
-    for (let i = 0; i < posSessions.length; i++) {
-        if (i !== activeSessionIndex && posSessions[i].customer && posSessions[i].customer.phone === phone) {
-            return i + 1; 
-        }
-    }
+    for (let i = 0; i < posSessions.length; i++) { if (i !== activeSessionIndex && posSessions[i].customer && posSessions[i].customer.phone === phone) { return i + 1; } }
     return false;
 }
 
 function updatePromoBanner(member) {
     const promoBanner = document.getElementById("promo-indicator-banner");
-    if (!window.loyaltyEnabled || !promoBanner) {
-        if(promoBanner) promoBanner.classList.add("hidden"); 
-        return;
+    const piutangBanner = document.getElementById("piutang-indicator-banner");
+
+    // Piutang Check
+    if (member && member.piutang > 0) {
+        piutangBanner.innerHTML = `<span>⚠️ <strong>Total Piutang:</strong> Rp ${member.piutang.toLocaleString('id-ID')}</span> <button onclick="openPiutangModal()" style="padding:5px 10px; background:#c0392b; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Lunasi Piutang</button>`;
+        piutangBanner.classList.remove("hidden");
+    } else {
+        if(piutangBanner) piutangBanner.classList.add("hidden");
     }
 
-    let pointSummary = [];
-    let wallet = member ? (member.wallet || {}) : {};
-    
+    if (!window.loyaltyEnabled || !promoBanner) { if(promoBanner) promoBanner.classList.add("hidden"); return; }
+
+    let pointSummary = []; let wallet = member ? (member.wallet || {}) : {};
     let loyaltyItems = globalMenuData.filter(m => m.loyaltyThreshold > 0);
     loyaltyItems.forEach(item => {
         let w = wallet[item.name] || { points: 0, free: 0 };
         pointSummary.push(`💧 <strong>${item.name}</strong>: ${w.points}/${item.loyaltyThreshold} Poin${w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : ''}`);
     });
-
     for (let itemName in wallet) {
         if (!loyaltyItems.find(i => i.name === itemName)) {
-             let w = wallet[itemName];
-             pointSummary.push(`💧 <strong>${itemName}</strong>: ${w.points} Poin${w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : ''}`);
+             let w = wallet[itemName]; pointSummary.push(`💧 <strong>${itemName}</strong>: ${w.points} Poin${w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : ''}`);
         }
     }
-    
-    if (pointSummary.length > 0) {
-        promoBanner.innerHTML = `🌟 <strong>Info Saldo Poin:</strong><br>` + pointSummary.join('<br>');
-        promoBanner.classList.remove("hidden");
-    } else {
-        promoBanner.innerHTML = `🌟 Promo Loyalty tidak ada barang aktif.`;
-        promoBanner.classList.remove("hidden");
-    }
+    if (pointSummary.length > 0) { promoBanner.innerHTML = `🌟 <strong>Info Saldo Poin:</strong><br>` + pointSummary.join('<br>'); promoBanner.classList.remove("hidden"); } 
+    else { promoBanner.innerHTML = `🌟 Promo Loyalty tidak ada barang aktif.`; promoBanner.classList.remove("hidden"); }
 }
 
 function lockMenu() {
-    isMenuLocked = true; activeCustomerProfile = null; 
-    posSessions[activeSessionIndex].customer = null;
-    posSessions[activeSessionIndex].cart = [];
-    currentCart = posSessions[activeSessionIndex].cart;
-    
-    document.getElementById("customer-input-section").classList.remove("hidden");
-    document.getElementById("active-customer-banner").classList.add("hidden");
+    isMenuLocked = true; activeCustomerProfile = null; posSessions[activeSessionIndex].customer = null; posSessions[activeSessionIndex].cart = []; currentCart = posSessions[activeSessionIndex].cart;
+    document.getElementById("customer-input-section").classList.remove("hidden"); document.getElementById("active-customer-banner").classList.add("hidden");
     document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
     document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = ""; 
     renderCart();
-    const promoBanner = document.getElementById("promo-indicator-banner");
-    if(promoBanner) promoBanner.classList.add("hidden");
+    const promoBanner = document.getElementById("promo-indicator-banner"); if(promoBanner) promoBanner.classList.add("hidden");
+    const piutangBanner = document.getElementById("piutang-indicator-banner"); if(piutangBanner) piutangBanner.classList.add("hidden");
 }
 
 function unlockMenu(isGuest) {
     let phone = "-"; let name = "Walk-in";
     const promoBanner = document.getElementById("promo-indicator-banner");
+    const piutangBanner = document.getElementById("piutang-indicator-banner");
 
     if (isGuest) { 
         document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = "Walk-in"; activeCustomerProfile = null; 
-        document.getElementById("active-cust-name").innerText = name;
-        document.getElementById("active-cust-phone").innerText = "";
-        document.getElementById("customer-input-section").classList.add("hidden");
-        document.getElementById("active-customer-banner").classList.remove("hidden");
-        if(promoBanner) promoBanner.classList.add("hidden");
+        document.getElementById("active-cust-name").innerText = name; document.getElementById("active-cust-phone").innerText = "";
+        document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
+        if(promoBanner) promoBanner.classList.add("hidden"); if(piutangBanner) piutangBanner.classList.add("hidden");
         isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
     } else {
-        phone = document.getElementById("cust-phone").value.trim();
-        name = document.getElementById("cust-name").value.trim() || "Pelanggan";
+        phone = document.getElementById("cust-phone").value.trim(); name = document.getElementById("cust-name").value.trim() || "Pelanggan";
         if (phone.length < 5) return alert("Harap masukkan Nomor WhatsApp yang valid terlebih dahulu.");
 
-        let searchPhone = phone.replace(/\D/g, '');
-        if (searchPhone.startsWith('62')) searchPhone = '0' + searchPhone.substring(2);
+        let searchPhone = phone.replace(/\D/g, ''); if (searchPhone.startsWith('62')) searchPhone = '0' + searchPhone.substring(2);
         if (searchPhone.length > 0 && !searchPhone.startsWith('0')) searchPhone = '0' + searchPhone;
 
         let lockedQueue = isCustomerLocked(searchPhone);
-        if (lockedQueue) {
-            return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan atau batalkan pesanan di sana terlebih dahulu untuk mencegah konflik poin.`);
-        }
+        if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan atau batalkan pesanan di sana terlebih dahulu untuk mencegah konflik poin.`); }
 
         const tx = db.transaction(["members"], "readonly");
         tx.objectStore("members").get(searchPhone).onsuccess = (ev) => {
             const member = ev.target.result;
-            if (member) {
-                activeCustomerProfile = member;
-                name = member.name;
-                document.getElementById("cust-name").value = name;
-                updatePromoBanner(member);
-            } else {
-                activeCustomerProfile = { phone: searchPhone, name: name, wallet: {}, bottlesBorrowed: 0 };
-                updatePromoBanner(activeCustomerProfile); 
-            }
+            if (member) { activeCustomerProfile = member; name = member.name; document.getElementById("cust-name").value = name; updatePromoBanner(member); } 
+            else { activeCustomerProfile = { phone: searchPhone, name: name, wallet: {}, bottlesBorrowed: 0, piutang: 0 }; updatePromoBanner(activeCustomerProfile); }
 
-            document.getElementById("active-cust-name").innerText = name;
-            document.getElementById("active-cust-phone").innerText = `(${searchPhone})`;
-            document.getElementById("customer-input-section").classList.add("hidden");
-            document.getElementById("active-customer-banner").classList.remove("hidden");
+            document.getElementById("active-cust-name").innerText = name; document.getElementById("active-cust-phone").innerText = `(${searchPhone})`;
+            document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
             isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
         };
     }
@@ -287,7 +220,7 @@ async function syncMasterData() {
     try {
         const response = await fetch(API_URL); const result = await response.json();
         if (result.status === "Success") {
-            window.masterDrawerBalance = result.masterDrawerBalance || 0; 
+            window.outletStocks = result.data.outletStocks; // CACHE DRAWER AMOUNTS
             const tx = db.transaction(["staff", "menu", "settings", "members", "expense_categories"], "readwrite");
             
             const staffStore = tx.objectStore("staff"); staffStore.clear(); result.data.staff.forEach(s => staffStore.add(s));
@@ -299,15 +232,9 @@ async function syncMasterData() {
             for (const [key, value] of Object.entries(result.data.settings)) { settingsStore.add({ key: key, value: value }); }
             if (result.data.authStatuses) processVoidApprovals(result.data.authStatuses);
 
-            globalMenuData = result.data.menu; 
-            window.loyaltyEnabled = String(result.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
-            
-            const rawOutlets = result.data.settings["Outlet_List"] || "Pusat";
-            const outletArray = rawOutlets.split(",").map(s => s.trim());
-            const selectBox = document.getElementById("login-outlet");
-            if(selectBox) {
-                selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join("");
-            }
+            globalMenuData = result.data.menu; window.loyaltyEnabled = String(result.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
+            const rawOutlets = result.data.settings["Outlet_List"] || "Pusat"; const outletArray = rawOutlets.split(",").map(s => s.trim()); const selectBox = document.getElementById("login-outlet");
+            if(selectBox) { selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); }
 
             if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
             if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
@@ -330,13 +257,10 @@ function handleAutocomplete(e) {
 
         if (matches.length > 0) {
             resBox.innerHTML = matches.map(m => {
-                let wStr = JSON.stringify(m.wallet || {}).replace(/"/g, '&quot;');
-                let nameStr = m.name.replace(/'/g, "\\'");
-                
-                return `<div class="autocomplete-item" onclick="selectMember('${m.phone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0})">
+                let wStr = JSON.stringify(m.wallet || {}).replace(/"/g, '&quot;'); let nameStr = m.name.replace(/'/g, "\\'");
+                return `<div class="autocomplete-item" onclick="selectMember('${m.phone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0})">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div class="autocomplete-name">${m.name}</div>
-                        <div class="autocomplete-phone" style="font-size:14px; color:#7f8c8d;">${m.phone}</div>
+                        <div class="autocomplete-name">${m.name}</div><div class="autocomplete-phone" style="font-size:14px; color:#7f8c8d;">${m.phone}</div>
                     </div>
                 </div>`;
             }).join("");
@@ -344,33 +268,24 @@ function handleAutocomplete(e) {
         } else { resBox.classList.add("hidden"); }
     };
 }
+document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);document.getElementById("cust-name").addEventListener("input", handleAutocomplete);document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);document.getElementById("cust-name").addEventListener("click", handleAutocomplete);document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);document.addEventListener('click', (e) => { if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { document.getElementById('autocomplete-results').classList.add('hidden'); } });
 
-document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);document.getElementById("cust-name").addEventListener("input", handleAutocomplete);document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);document.getElementById("cust-name").addEventListener("click", handleAutocomplete);document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);document.addEventListener('click', (e) => { 
-    if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { document.getElementById('autocomplete-results').classList.add('hidden'); }
-});
-
-window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed) {
+window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, dbPiutang) {
     document.getElementById("autocomplete-results").classList.add("hidden");
-    
     let lockedQueue = isCustomerLocked(phone);
-    if (lockedQueue) {
-        return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan atau batalkan pesanan di sana terlebih dahulu untuk mencegah konflik poin.`);
-    }
+    if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan atau batalkan pesanan di sana terlebih dahulu untuk mencegah konflik poin.`); }
 
-    document.getElementById("cust-phone").value = phone; 
-    document.getElementById("cust-name").value = name; 
-    
-    let wallet = {};
-    try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
-
-    activeCustomerProfile = { phone: phone, name: name, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed };
+    document.getElementById("cust-phone").value = phone; document.getElementById("cust-name").value = name; 
+    let wallet = {}; try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
+    activeCustomerProfile = { phone: phone, name: name, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed, piutang: dbPiutang };
     updatePromoBanner(activeCustomerProfile);
 };
 
-function saveMemberToDB(phone, name) {
+function saveMemberToDB(phone, name, wallet, bottles, piutang) {
     if(!phone || phone === "-") return; 
     db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
-        let mem = e.target.result || { phone: phone, name: name, wallet: {}, spent: 0, bottlesBorrowed: 0 }; mem.name = name;
+        let mem = e.target.result || { phone: phone, name: name, wallet: {}, spent: 0, bottlesBorrowed: 0, piutang: 0 }; 
+        mem.name = name; if(wallet !== undefined) mem.wallet = wallet; if(bottles !== undefined) mem.bottlesBorrowed = bottles; if(piutang !== undefined) mem.piutang = piutang;
         db.transaction(["members"], "readwrite").objectStore("members").put(mem);
         db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").put(mem);
     };
@@ -378,35 +293,26 @@ function saveMemberToDB(phone, name) {
 
 // Menu & Cart
 function loadMenuUI() {
-    const visibleItems = globalMenuData.filter(i => !i.hideOnPos); 
-    const categories = [...new Set(visibleItems.map(i => i.category))]; 
+    const visibleItems = globalMenuData.filter(i => !i.hideOnPos); const categories = [...new Set(visibleItems.map(i => i.category))]; 
     if(categories.length > 0) currentCategory = categories[0];
-    
     const catContainer = document.getElementById("category-container"); catContainer.innerHTML = "";
     categories.forEach(cat => {
         const btn = document.createElement("button"); btn.className = `cat-btn ${cat === currentCategory ? "active" : ""}`; btn.innerText = cat;
         btn.onclick = () => { currentCategory = cat; document.querySelectorAll(".cat-btn").forEach(b => b.classList.remove("active")); btn.classList.add("active"); renderProductGrid(); };
         catContainer.appendChild(btn);
-    });
-    renderProductGrid();
+    }); renderProductGrid();
 }
 function renderProductGrid() {
     const grid = document.getElementById("product-grid"); grid.innerHTML = "";
-    
     const filteredMenu = globalMenuData.filter(i => {
-        if (i.hideOnPos) return false; 
-        if (i.category !== currentCategory) return false;
-        
-        const availableList = (i.availableAt || "ALL").toUpperCase();
-        if (availableList === "ALL" || availableList === "") return true;
+        if (i.hideOnPos) return false; if (i.category !== currentCategory) return false;
+        const availableList = (i.availableAt || "ALL").toUpperCase(); if (availableList === "ALL" || availableList === "") return true;
         return availableList.includes(currentOutlet.toUpperCase());
     });
-
     filteredMenu.forEach(item => {
         const card = document.createElement("div"); card.className = "product-card";
         card.innerHTML = `<div><h4 style="margin-top:0;">${item.name}</h4></div> <div class="price-badge">Rp ${item.price.toLocaleString('id-ID')}</div>`;
-        card.onclick = () => { if(isMenuLocked) return; addToCart(item, 1); };
-        grid.appendChild(card);
+        card.onclick = () => { if(isMenuLocked) return; addToCart(item, 1); }; grid.appendChild(card);
     });
 }
 
@@ -418,11 +324,7 @@ function addToCart(item, qty) {
 
 window.updateCartQty = function(itemId, delta) {
     const item = currentCart.find(i => i.itemId === itemId);
-    if (item) {
-        item.qty += delta;
-        if (item.qty <= 0) { currentCart = currentCart.filter(i => i.itemId !== itemId); posSessions[activeSessionIndex].cart = currentCart; }
-        renderCart();
-    }
+    if (item) { item.qty += delta; if (item.qty <= 0) { currentCart = currentCart.filter(i => i.itemId !== itemId); posSessions[activeSessionIndex].cart = currentCart; } renderCart(); }
 }
 
 function renderCart() {
@@ -443,13 +345,9 @@ function renderCart() {
     document.getElementById("cart-total").innerText = `Rp ${total.toLocaleString('id-ID')}`; window.cartSubtotal = total; window.cartGrandTotal = total; 
     
     posSessions.forEach((session, i) => {
-        let qty = session.cart.reduce((sum, item) => sum + item.qty, 0);
-        let btn = document.getElementById(`tab-btn-${i}`);
-        if (qty > 0) {
-            btn.innerHTML = `🛒 Antrean ${i+1} <span style="background:#e74c3c; color:white; border-radius:12px; padding:2px 6px; font-size:11px; margin-left:5px;">${qty}</span>`;
-        } else {
-            btn.innerHTML = `🛒 Antrean ${i+1}`;
-        }
+        let qty = session.cart.reduce((sum, item) => sum + item.qty, 0); let btn = document.getElementById(`tab-btn-${i}`);
+        if (qty > 0) { btn.innerHTML = `🛒 Antrean ${i+1} <span style="background:#e74c3c; color:white; border-radius:12px; padding:2px 6px; font-size:11px; margin-left:5px;">${qty}</span>`; } 
+        else { btn.innerHTML = `🛒 Antrean ${i+1}`; }
     });
 }
 
@@ -458,12 +356,8 @@ function clearCart() { lockMenu(); }
 // Checkout Flow & DYNAMIC Redemptions
 function reviewOrder() {
     if (currentCart.length === 0) return alert("Keranjang masih kosong!");
-    
     window.cartGrandTotal = window.cartSubtotal;
-    
-    const redeemContainer = document.getElementById("redemption-items");
-    redeemContainer.innerHTML = "";
-    let hasRedeemable = false;
+    const redeemContainer = document.getElementById("redemption-items"); redeemContainer.innerHTML = ""; let hasRedeemable = false;
 
     if (window.loyaltyEnabled && activeCustomerProfile) {
         let wallet = activeCustomerProfile.wallet || {};
@@ -475,31 +369,19 @@ function reviewOrder() {
                     redeemContainer.innerHTML += `
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding-bottom:8px; border-bottom:1px dashed #bce8f1;">
                             <span style="font-size:14px; font-weight:bold; color:#2c3e50;">${item.name} <br><small style="font-weight:normal; color:#7f8c8d;">(Tersedia: ${wallet[item.name].free}, Dibeli: ${item.qty})</small></span>
-                            <div style="display:flex; align-items:center; gap:8px;">
-                                <label style="font-size:12px;">Pakai:</label>
-                                <input type="number" class="redeem-input" data-item="${item.itemId}" data-price="${item.price}" max="${maxRedeemable}" min="0" value="0" style="width:60px; padding:8px; text-align:center; font-size:16px; border:2px solid #bdc3c7; border-radius:6px;" onclick="this.select()" oninput="recalcRedemptions()">
-                            </div>
-                        </div>
-                    `;
+                            <div style="display:flex; align-items:center; gap:8px;"><label style="font-size:12px;">Pakai:</label><input type="number" class="redeem-input" data-item="${item.itemId}" data-price="${item.price}" max="${maxRedeemable}" min="0" value="0" style="width:60px; padding:8px; text-align:center; font-size:16px; border:2px solid #bdc3c7; border-radius:6px;" onclick="this.select()" oninput="recalcRedemptions()"></div>
+                        </div>`;
                 }
             }
         });
     }
 
-    if (hasRedeemable) {
-        document.getElementById("redemption-section").classList.remove("hidden");
-    } else {
-        document.getElementById("redemption-section").classList.add("hidden");
-    }
+    if (hasRedeemable) { document.getElementById("redemption-section").classList.remove("hidden"); } else { document.getElementById("redemption-section").classList.add("hidden"); }
 
-    document.getElementById("pay-qris").value = 0; 
-    document.getElementById("pay-transfer").value = 0; 
-    document.getElementById("pay-free").value = 0; 
+    document.getElementById("pay-qris").value = 0; document.getElementById("pay-transfer").value = 0; document.getElementById("pay-free").value = 0; 
     let bottleRentBox = document.getElementById("rent-bottle-qty"); if(bottleRentBox) bottleRentBox.value = 0;
     
-    document.getElementById("review-subtotal").innerText = `Rp ${window.cartSubtotal.toLocaleString('id-ID')}`;
-    document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
-    
+    document.getElementById("review-subtotal").innerText = `Rp ${window.cartSubtotal.toLocaleString('id-ID')}`; document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
     document.getElementById("pay-cash").value = window.cartGrandTotal;
     calculateRemaining(); document.getElementById("review-modal").classList.remove("hidden");
 }
@@ -507,128 +389,139 @@ function reviewOrder() {
 window.recalcRedemptions = function() {
     let totalDiscount = 0;
     document.querySelectorAll(".redeem-input").forEach(input => {
-        let qty = Number(input.value) || 0;
-        let max = Number(input.getAttribute("max"));
-        if(qty > max) { qty = max; input.value = max; }
-        if(qty < 0) { qty = 0; input.value = 0; }
-        let price = Number(input.getAttribute("data-price"));
-        totalDiscount += (qty * price);
+        let qty = Number(input.value) || 0; let max = Number(input.getAttribute("max"));
+        if(qty > max) { qty = max; input.value = max; } if(qty < 0) { qty = 0; input.value = 0; }
+        let price = Number(input.getAttribute("data-price")); totalDiscount += (qty * price);
     });
-    
     document.getElementById("pay-free").value = totalDiscount; 
     autoBalanceCash();
 }
 
 window.autoBalanceCash = function() {
-    const q = Number(document.getElementById("pay-qris").value) || 0;
-    const t = Number(document.getElementById("pay-transfer").value) || 0;
-    const f = Number(document.getElementById("pay-free").value) || 0;
-    
-    const totalAccounted = q + t + f;
-    const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
-    
-    document.getElementById("pay-cash").value = remaining;
-    calculateRemaining();
+    const q = Number(document.getElementById("pay-qris").value) || 0; const t = Number(document.getElementById("pay-transfer").value) || 0; const f = Number(document.getElementById("pay-free").value) || 0;
+    const totalAccounted = q + t + f; const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
+    document.getElementById("pay-cash").value = remaining; calculateRemaining();
 }
 
 window.calculateRemaining = function() {
-    const c = Number(document.getElementById("pay-cash").value) || 0; 
-    const q = Number(document.getElementById("pay-qris").value) || 0;
-    const t = Number(document.getElementById("pay-transfer").value) || 0; 
-    const f = Number(document.getElementById("pay-free").value) || 0;
+    const c = Number(document.getElementById("pay-cash").value) || 0; const q = Number(document.getElementById("pay-qris").value) || 0;
+    const t = Number(document.getElementById("pay-transfer").value) || 0; const f = Number(document.getElementById("pay-free").value) || 0;
 
     const totalAccounted = c + q + t + f; 
     const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     document.getElementById("review-remaining").innerText = `Rp ${remaining.toLocaleString('id-ID')}`;
+    
+    const btnPiutang = document.getElementById("btn-piutang");
+    if (remaining > 0 && activeCustomerProfile && activeCustomerProfile.phone && activeCustomerProfile.phone !== "-") { btnPiutang.classList.remove("hidden"); } 
+    else { btnPiutang.classList.add("hidden"); }
 }
 
 function closeReview() { document.getElementById("review-modal").classList.add("hidden"); }
 
-async function finalizeOrder(shouldPrint) {
+// PIUTANG (DEBT) PAYMENT
+window.openPiutangModal = function() {
+    if(!activeCustomerProfile || activeCustomerProfile.piutang <= 0) return;
+    document.getElementById("piutang-target-name").innerText = activeCustomerProfile.name;
+    document.getElementById("piutang-target-amount").innerText = "Rp " + activeCustomerProfile.piutang.toLocaleString('id-ID');
+    document.getElementById("piutang-pay-amount").value = activeCustomerProfile.piutang;
+    document.getElementById("piutang-modal").classList.remove("hidden");
+}
+
+window.submitPiutang = function() {
+    let payAmount = Number(document.getElementById("piutang-pay-amount").value); let method = document.getElementById("piutang-method").value;
+    if(payAmount <= 0) return alert("Jumlah tidak valid");
+    if(payAmount > activeCustomerProfile.piutang) return alert("Jumlah yang dimasukkan melebihi total piutang pelanggan!");
+    
+    let cashAmt = method === "Tunai" ? payAmount : 0;
+    let payload = { payId: "BYR-" + Date.now(), timestamp: getWibDate(), customerName: activeCustomerProfile.name, customerPhone: activeCustomerProfile.phone, amountPaid: payAmount, paymentMethod: method, cashAmount: cashAmt, cashier: currentCashier, outlet: currentOutlet, syncStatus: "Pending" };
+    
+    db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").add(payload);
+    
+    activeCustomerProfile.piutang -= payAmount;
+    saveMemberToDB(activeCustomerProfile.phone, activeCustomerProfile.name, activeCustomerProfile.wallet, activeCustomerProfile.bottlesBorrowed, activeCustomerProfile.piutang);
+    updatePromoBanner(activeCustomerProfile);
+    
+    document.getElementById("piutang-modal").classList.add("hidden");
+    alert("Pembayaran Piutang Berhasil Dicatat!"); runBackgroundSync();
+}
+
+async function finalizeOrder(shouldPrint, isDebt) {
     const cash = Number(document.getElementById("pay-cash").value) || 0; const qris = Number(document.getElementById("pay-qris").value) || 0;
     const transfer = Number(document.getElementById("pay-transfer").value) || 0; const free = Number(document.getElementById("pay-free").value) || 0;
     const rentBottleQty = Number(document.getElementById("rent-bottle-qty").value) || 0;
     
-    const totalAccounted = cash + qris + transfer + free; const remaining = window.cartGrandTotal - totalAccounted; 
+    const totalAccounted = cash + qris + transfer + free; 
+    const remaining = window.cartGrandTotal - totalAccounted; 
 
     let custPhoneRaw = document.getElementById("cust-phone").value.trim(); let custPhone = custPhoneRaw || "-";
     const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
 
-    if (remaining > 0) return alert("⚠️ PEMBAYARAN DITOLAK:\nSisa Kurang Bayar harus Rp 0.");
-    if (rentBottleQty > 0 && (!custPhone || custPhone === "-")) return alert("⚠️ PEMBAYARAN DITOLAK:\nAnda WAJIB memasukkan nomor WhatsApp pelanggan untuk mencatat Peminjaman Galon.");
+    if (remaining < 0) return alert("⚠️ PEMBAYARAN DITOLAK:\nPembayaran berlebih. Pastikan Sisa Kurang Bayar Rp 0.");
+    if (remaining > 0 && !isDebt) return alert("⚠️ PEMBAYARAN DITOLAK:\nSisa Kurang Bayar harus Rp 0. Jika ini hutang, klik tombol 'Catat Sisa sbg Piutang'.");
 
-    let payMethods = []; if(cash > 0) payMethods.push("Tunai"); if(qris > 0) payMethods.push("QRIS"); if(transfer > 0) payMethods.push("Trf.Bank"); if(free > 0) payMethods.push("Gratis");
+    let debtAmount = isDebt ? remaining : 0;
+    if (debtAmount > 0 && (!custPhone || custPhone === "-")) return alert("⚠️ TRANSAKSI DITOLAK:\nAnda WAJIB memasukkan nomor WhatsApp pelanggan untuk mencatat Piutang.");
+    if (rentBottleQty > 0 && (!custPhone || custPhone === "-")) return alert("⚠️ TRANSAKSI DITOLAK:\nAnda WAJIB memasukkan nomor WhatsApp pelanggan untuk mencatat Peminjaman Galon.");
+
+    let payMethods = []; if(cash > 0) payMethods.push("Tunai"); if(qris > 0) payMethods.push("QRIS"); if(transfer > 0) payMethods.push("Trf.Bank"); if(free > 0) payMethods.push("Gratis"); if(debtAmount > 0) payMethods.push("Piutang");
     const payString = payMethods.length > 0 ? payMethods.join("+") : "Belum Bayar";
-    if(custPhone !== "-") saveMemberToDB(custPhone, custName);
 
     let status = "Completed"; 
-    
     currentCart.forEach(i => i.redeemed = 0);
     document.querySelectorAll(".redeem-input").forEach(input => {
-        let itemId = input.getAttribute("data-item");
-        let qty = Number(input.value) || 0;
-        let cartItem = currentCart.find(i => i.itemId === itemId);
-        if (cartItem) cartItem.redeemed = qty;
+        let itemId = input.getAttribute("data-item"); let qty = Number(input.value) || 0;
+        let cartItem = currentCart.find(i => i.itemId === itemId); if (cartItem) cartItem.redeemed = qty;
     });
 
-    let loyaltyChanges = {};
-    let freeItemsRedeemed = [];
+    let loyaltyChanges = {}; let freeItemsRedeemed = [];
     currentCart.forEach(item => {
-        if (item.redeemed > 0) {
-            freeItemsRedeemed.push({ name: item.name, qty: item.redeemed });
-        }
+        if (item.redeemed > 0) { freeItemsRedeemed.push({ name: item.name, qty: item.redeemed }); }
         if (item.loyaltyThreshold > 0) {
             let earned = item.qty - (item.redeemed || 0); 
             if (earned > 0 || (item.redeemed || 0) > 0) {
                 if(!loyaltyChanges[item.name]) loyaltyChanges[item.name] = { earned: 0, redeemed: 0, threshold: item.loyaltyThreshold };
-                loyaltyChanges[item.name].earned += earned;
-                loyaltyChanges[item.name].redeemed += (item.redeemed || 0);
+                loyaltyChanges[item.name].earned += earned; loyaltyChanges[item.name].redeemed += (item.redeemed || 0);
             }
         }
     });
 
-    let updatedWallet = {};
+    let updatedWallet = {}; let newPiutang = (activeCustomerProfile ? activeCustomerProfile.piutang || 0 : 0) + debtAmount;
     if (window.loyaltyEnabled && activeCustomerProfile) {
         updatedWallet = JSON.parse(JSON.stringify(activeCustomerProfile.wallet || {})); 
         for(let itemName in loyaltyChanges) {
             if(!updatedWallet[itemName]) updatedWallet[itemName] = {points:0, free:0};
-            let c = loyaltyChanges[itemName];
-            updatedWallet[itemName].points += c.earned;
-            updatedWallet[itemName].free -= c.redeemed;
+            let c = loyaltyChanges[itemName]; updatedWallet[itemName].points += c.earned; updatedWallet[itemName].free -= c.redeemed;
             if(c.threshold > 0) {
                 let newFree = Math.floor(updatedWallet[itemName].points / c.threshold);
-                updatedWallet[itemName].points = updatedWallet[itemName].points % c.threshold;
-                updatedWallet[itemName].free += newFree;
+                updatedWallet[itemName].points = updatedWallet[itemName].points % c.threshold; updatedWallet[itemName].free += newFree;
             }
         }
-        
-        db.transaction(["members"], "readwrite").objectStore("members").get(activeCustomerProfile.phone).onsuccess = (e) => {
-            let mem = e.target.result; if (mem) { mem.wallet = updatedWallet; mem.bottlesBorrowed += rentBottleQty; db.transaction(["members"], "readwrite").objectStore("members").put(mem); }
-        };
+        activeCustomerProfile.piutang = newPiutang;
+        saveMemberToDB(activeCustomerProfile.phone, activeCustomerProfile.name, updatedWallet, activeCustomerProfile.bottlesBorrowed + rentBottleQty, newPiutang);
+    } else if (custPhone !== "-") {
+        saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount);
     }
 
     const orderPayload = {
         orderId: "ORD-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId,
         customerName: custName, customerPhone: custPhone, orderStatus: status, items: currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
-        paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, 
+        paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, debtAmount: debtAmount,
         loyaltyChanges: loyaltyChanges, freeItemsRedeemed: freeItemsRedeemed, outlet: currentOutlet, syncStatus: "Pending" 
     };
 
     const txMenu = db.transaction(["menu"], "readwrite"); const storeMenu = txMenu.objectStore("menu");
     currentCart.forEach(cartItem => {
-        storeMenu.get(cartItem.itemId).onsuccess = (ev) => {
-            const menuItem = ev.target.result; if (menuItem && menuItem.trackStock) { menuItem.currentStock = Math.max(0, menuItem.currentStock - cartItem.qty); storeMenu.put(menuItem); }
-        };
+        storeMenu.get(cartItem.itemId).onsuccess = (ev) => { const menuItem = ev.target.result; if (menuItem && menuItem.trackStock) { menuItem.currentStock = Math.max(0, menuItem.currentStock - cartItem.qty); storeMenu.put(menuItem); } };
     });
 
     db.transaction(["orders"], "readwrite").objectStore("orders").add(orderPayload);
-    if (shouldPrint) { await buildPrintableReceipt(orderPayload.orderId, orderPayload, totalAccounted, 0, payString, updatedWallet); window.print(); }
+    if (shouldPrint) { await buildPrintableReceipt(orderPayload.orderId, orderPayload, totalAccounted, debtAmount, payString, updatedWallet); window.print(); }
     closeReview(); lockMenu(); renderProductGrid(); runBackgroundSync();
 }
 
 async function getDynamicSettings() { return new Promise(res => { let req = db.transaction(["settings"], "readonly").objectStore("settings").getAll(); req.onsuccess = e => { let s = {}; e.target.result.forEach(row => s[row.key] = row.value); res(s); }; }); }
 
-async function buildPrintableReceipt(orderId, order, deposit, remaining, payMethod, updatedWallet) {
+async function buildPrintableReceipt(orderId, order, deposit, debt, payMethod, updatedWallet) {
     const settings = await getDynamicSettings();
     const h1 = settings["Header_1"] || "PURE WATER"; 
     const h2 = settings["Header_2"] || ""; 
@@ -650,14 +543,7 @@ async function buildPrintableReceipt(orderId, order, deposit, remaining, payMeth
             let data = updatedWallet[item.name] || {points: 0, free: 0};
             lines.push(`<strong>${item.name}</strong><br>Poin: ${data.points}/${item.loyaltyThreshold} | Gratis: ${data.free}`);
         });
-
-        if (lines.length > 0) {
-            poinHtml = `
-            <div style="margin-top:10px; padding-top:5px; border-top:1px dashed #000; font-size:11px; text-align:center;">
-                <strong>-- INFO POIN PURE --</strong><br>
-                ${lines.join('<br>')}
-            </div>`;
-        }
+        if (lines.length > 0) { poinHtml = `<div style="margin-top:10px; padding-top:5px; border-top:1px dashed #000; font-size:11px; text-align:center;"><strong>-- INFO POIN PURE --</strong><br>${lines.join('<br>')}</div>`; }
     }
 
     printArea.innerHTML = `
@@ -670,108 +556,68 @@ async function buildPrintableReceipt(orderId, order, deposit, remaining, payMeth
         </div>
         <div style="margin-top:5px; font-size:11px;">
             <div style="display:flex; justify-content:space-between;"><span>Tercatat (${payMethod}):</span><span>Rp ${deposit.toLocaleString('id-ID')}</span></div>
-            <div style="display:flex; justify-content:space-between; font-weight:bold; margin-top: 5px;"><span>STATUS:</span><span>LUNAS</span></div>
+            ${debt > 0 ? `<div style="display:flex; justify-content:space-between; color:#c0392b; margin-top:2px;"><span>PIUTANG:</span><span>Rp ${debt.toLocaleString('id-ID')}</span></div>` : ''}
+            <div style="display:flex; justify-content:space-between; font-weight:bold; margin-top: 5px;"><span>STATUS:</span><span>${debt > 0 ? 'HUTANG' : 'LUNAS'}</span></div>
         </div>
         ${poinHtml}
         <div style="text-align:center; margin-top:15px; font-weight:bold; font-size: 12px;">${f1}</div>${f2 ? `<div style="text-align:center; margin-top:2px; font-size: 10px;">${f2}</div>` : ''}${f3 ? `<div style="text-align:center; margin-top:2px; font-size: 10px;">${f3}</div>` : ''}
     `;
 }
 
-// Inbound, Cuci Tandon & Lapor Masalah Logic
 window.openInboundModal = function() {
-    let select = document.getElementById("inbound-tank-target");
-    select.innerHTML = "";
+    let select = document.getElementById("inbound-tank-target"); select.innerHTML = "";
     let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
     tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">💧 ${t.name}</option>`; });
     if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
-    
-    document.getElementById("inbound-qty").value = "";
-    document.getElementById("inbound-notes").value = "";
-    document.getElementById("inbound-modal").classList.remove("hidden");
+    document.getElementById("inbound-qty").value = ""; document.getElementById("inbound-notes").value = ""; document.getElementById("inbound-modal").classList.remove("hidden");
 }
 window.submitInbound = function() {
-    const qty = Number(document.getElementById("inbound-qty").value);
-    const targetTank = document.getElementById("inbound-tank-target").value;
-    const notes = document.getElementById("inbound-notes").value.trim() || "-";
-    
+    const qty = Number(document.getElementById("inbound-qty").value); const targetTank = document.getElementById("inbound-tank-target").value; const notes = document.getElementById("inbound-notes").value.trim() || "-";
     if (qty <= 0) return alert("Masukkan jumlah liter air yang benar.");
-
-    const payload = {
-        logId: "INB-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId,
-        itemName: targetTank, qty: qty, notes: notes, outlet: currentOutlet, syncStatus: "Pending"
-    };
-
+    const payload = { logId: "INB-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, itemName: targetTank, qty: qty, notes: notes, outlet: currentOutlet, syncStatus: "Pending" };
     db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").add(payload);
-    document.getElementById("inbound-modal").classList.add("hidden");
-    alert(`Berhasil mencatat kedatangan ${qty} Liter ke ${targetTank}.`);
-    runBackgroundSync();
+    document.getElementById("inbound-modal").classList.add("hidden"); alert(`Berhasil mencatat kedatangan ${qty} Liter ke ${targetTank}.`); runBackgroundSync();
 }
 
 window.openCuciModal = function() {
-    let select = document.getElementById("cuci-tank");
-    select.innerHTML = "";
-    let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
+    let select = document.getElementById("cuci-tank"); select.innerHTML = ""; let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
     tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">💧 ${t.name}</option>`; });
     if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
-    
-    document.getElementById("cuci-qty").value = "";
-    document.getElementById("cuci-notes").value = "";
-    document.getElementById("cuci-modal").classList.remove("hidden");
+    document.getElementById("cuci-qty").value = ""; document.getElementById("cuci-notes").value = ""; document.getElementById("cuci-modal").classList.remove("hidden");
 }
 window.submitCuciTandon = function() {
-    let tank = document.getElementById("cuci-tank").value;
-    let qty = Number(document.getElementById("cuci-qty").value);
-    let notes = document.getElementById("cuci-notes").value.trim() || "-";
+    let tank = document.getElementById("cuci-tank").value; let qty = Number(document.getElementById("cuci-qty").value); let notes = document.getElementById("cuci-notes").value.trim() || "-";
     if (qty <= 0) return alert("Masukkan estimasi air terbuang dengan benar.");
-    
     let payload = { logId: "CUC-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, outlet: currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
-    db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").add(payload);
-    document.getElementById("cuci-modal").classList.add("hidden");
-    alert("Laporan Cuci Tandon berhasil disimpan. Menunggu validasi Admin.");
-    runBackgroundSync();
+    db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").add(payload); document.getElementById("cuci-modal").classList.add("hidden"); alert("Laporan Cuci Tandon berhasil disimpan. Menunggu validasi Admin."); runBackgroundSync();
 }
 
 window.openLaporModal = function() {
-    let select = document.getElementById("lapor-tank");
-    select.innerHTML = "";
-    let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
+    let select = document.getElementById("lapor-tank"); select.innerHTML = ""; let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
     tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">⚠️ ${t.name}</option>`; });
     if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">⚠️ Tangki Air RO</option><option value="Tangki Air Standar">⚠️ Tangki Air Standar</option>`; }
-    
-    document.getElementById("lapor-qty").value = "";
-    document.getElementById("lapor-notes").value = "";
-    document.getElementById("lapor-modal").classList.remove("hidden");
+    document.getElementById("lapor-qty").value = ""; document.getElementById("lapor-notes").value = ""; document.getElementById("lapor-modal").classList.remove("hidden");
 }
 window.submitLaporMasalah = function() {
-    let tank = document.getElementById("lapor-tank").value;
-    let qty = Number(document.getElementById("lapor-qty").value);
-    let notes = document.getElementById("lapor-notes").value.trim();
+    let tank = document.getElementById("lapor-tank").value; let qty = Number(document.getElementById("lapor-qty").value); let notes = document.getElementById("lapor-notes").value.trim();
     if (qty <= 0 || notes === "") return alert("Harap masukkan estimasi air hilang dan kronologi kejadian dengan lengkap.");
-    
     let payload = { logId: "LPR-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, outlet: currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
-    db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").add(payload);
-    document.getElementById("lapor-modal").classList.add("hidden");
-    alert("Laporan Masalah berhasil dikirim. Menunggu validasi Admin.");
-    runBackgroundSync();
+    db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").add(payload); document.getElementById("lapor-modal").classList.add("hidden"); alert("Laporan Masalah berhasil dikirim. Menunggu validasi Admin."); runBackgroundSync();
 }
 
-// Expenses
 function openExpenseModal() {
-    document.getElementById("expense-modal").classList.remove("hidden");
-    const list = document.getElementById("expense-category-list"); list.innerHTML = "";
+    document.getElementById("expense-modal").classList.remove("hidden"); const list = document.getElementById("expense-category-list"); list.innerHTML = "";
     db.transaction(["expense_categories"], "readonly").objectStore("expense_categories").getAll().onsuccess = (e) => { e.target.result.forEach(cat => { const opt = document.createElement("option"); opt.value = cat.name; list.appendChild(opt); }); };
 }
 function saveExpense() {
     const amount = Number(document.getElementById("exp-amount").value); const category = document.getElementById("exp-category").value.trim();
     if (amount <= 0 || !category) return alert("Harap masukkan jumlah dan kategori yang benar.");
     db.transaction(["expense_categories"], "readwrite").objectStore("expense_categories").put({ name: category });
-
     const payload = { expenseId: "EXP-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, category: category, description: document.getElementById("exp-desc").value || "-", amount: amount, status: "Active", outlet: currentOutlet, syncStatus: "Pending" };
     db.transaction(["expenses"], "readwrite").objectStore("expenses").add(payload);
     document.getElementById("expense-modal").classList.add("hidden"); document.getElementById("exp-amount").value = ""; document.getElementById("exp-category").value = ""; document.getElementById("exp-desc").value = ""; alert("Pengeluaran Berhasil Dicatat!"); runBackgroundSync();
 }
 
-// History & Voids
 function openHistoryModal() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
 function renderHistoryList(type) {
     const container = document.getElementById("history-container"); container.innerHTML = "";
@@ -878,21 +724,15 @@ function applyVoidAftermath(order) {
             if (mem) { 
                 mem.spent = Math.max(0, (mem.spent || 0) - order.grandTotal); 
                 mem.bottlesBorrowed = Math.max(0, (mem.bottlesBorrowed || 0) - (order.rentBottleQty || 0));
+                mem.piutang = Math.max(0, (mem.piutang || 0) - (order.debtAmount || 0));
                 
                 if (order.loyaltyChanges && mem.wallet) {
                     for(let itemName in order.loyaltyChanges) {
                         let c = order.loyaltyChanges[itemName];
                         if(!mem.wallet[itemName]) mem.wallet[itemName] = {points:0, free:0};
-                        
-                        mem.wallet[itemName].points -= c.earned;
-                        mem.wallet[itemName].free += c.redeemed;
-                        
-                        while (mem.wallet[itemName].points < 0 && mem.wallet[itemName].free > 0) {
-                            mem.wallet[itemName].points += c.threshold;
-                            mem.wallet[itemName].free -= 1;
-                        }
-                        if(mem.wallet[itemName].free < 0) mem.wallet[itemName].free = 0;
-                        if(mem.wallet[itemName].points < 0) mem.wallet[itemName].points = 0;
+                        mem.wallet[itemName].points -= c.earned; mem.wallet[itemName].free += c.redeemed;
+                        while (mem.wallet[itemName].points < 0 && mem.wallet[itemName].free > 0) { mem.wallet[itemName].points += c.threshold; mem.wallet[itemName].free -= 1; }
+                        if(mem.wallet[itemName].free < 0) mem.wallet[itemName].free = 0; if(mem.wallet[itemName].points < 0) mem.wallet[itemName].points = 0;
                     }
                 }
                 memberStore.put(mem); 
@@ -901,21 +741,27 @@ function applyVoidAftermath(order) {
     }
     tx.oncomplete = () => { renderProductGrid(); };
     let payloadItems = []; if (order.items) order.items.forEach(i => payloadItems.push({name: i.name, qty: i.qty}));
-    if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: payloadItems, rentBottleQty: order.rentBottleQty, loyaltyChanges: order.loyaltyChanges, outlet: order.outlet } }) });
+    if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: payloadItems, rentBottleQty: order.rentBottleQty, debtAmount: order.debtAmount, loyaltyChanges: order.loyaltyChanges, cashAmount: order.cashAmount, outlet: order.outlet } }) });
 }
 
-// Cash Management
+// LIVE DRAWER TRACKING
 function calculateLiveDrawer(callback) {
-    let liveDrawer = window.masterDrawerBalance || 0; 
-    let tx = db.transaction(["orders", "cash_drops", "expenses"], "readonly");
-    let ordersReq = tx.objectStore("orders").getAll(); let dropReq = tx.objectStore("cash_drops").getAll(); let expReq = tx.objectStore("expenses").getAll();
+    let liveDrawer = (window.outletStocks && window.outletStocks[currentOutlet] && window.outletStocks[currentOutlet]["Saldo_Laci"]) ? window.outletStocks[currentOutlet]["Saldo_Laci"] : 0; 
+    
+    let tx = db.transaction(["orders", "cash_drops", "expenses", "bayar_piutang"], "readonly");
+    let ordersReq = tx.objectStore("orders").getAll(); let dropReq = tx.objectStore("cash_drops").getAll(); 
+    let expReq = tx.objectStore("expenses").getAll(); let bpReq = tx.objectStore("bayar_piutang").getAll();
+    
     tx.oncomplete = () => {
+        // Add unsynced local cash activity
         ordersReq.result.forEach(o => { if (o.syncStatus === "Pending" && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending") liveDrawer += (o.cashAmount || 0); });
         dropReq.result.forEach(d => { if (d.syncStatus === "Pending") liveDrawer -= (d.toAdmin + d.toBank); });
         expReq.result.forEach(e => { if (e.syncStatus === "Pending" && e.status === "Active") liveDrawer -= (e.amount || 0); });
+        bpReq.result.forEach(bp => { if (bp.syncStatus === "Pending") liveDrawer += (bp.cashAmount || 0); });
         callback(liveDrawer);
     };
 }
+
 function openCashDrop(forLogout = false) {
     isLoggingOut = forLogout; document.getElementById("cash-drop-title").innerText = isLoggingOut ? "🔒 Tutup Shift & Setor Laci" : "🏦 Simpan / Tarik Uang Laci";
     document.getElementById("btn-drop-cancel").innerText = isLoggingOut ? "Batal Logout" : "Batal"; document.getElementById("btn-drop-confirm").innerText = isLoggingOut ? "Konfirmasi & Logout" : "Simpan Data";
@@ -923,6 +769,7 @@ function openCashDrop(forLogout = false) {
     
     calculateLiveDrawer((liveAmount) => { document.getElementById("live-drawer-display").innerText = `Rp ${liveAmount.toLocaleString('id-ID')}`; document.getElementById("cash-drop-modal").classList.remove("hidden"); });
 }
+
 function submitCashDrop() {
     const pullAmount = Number(document.getElementById("drop-amount").value) || 0;
     if (pullAmount < 0) return alert("⚠️ ERROR: Nominal uang tidak valid.");
@@ -950,8 +797,7 @@ function openShiftReport() {
         const validOrders = e.target.result.filter(o => o.shiftId === currentShiftId && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending");
         validOrders.forEach(o => {
             tOrders++; if(o.customerPhone && o.customerPhone !== "-") tCust++; tOmset += o.grandTotal;
-            tCash += (o.cashAmount || 0); tQris += (o.qrisAmount || 0); tTransfer += (o.transferAmount || 0); 
-            tFree += (o.freeAmount || 0); 
+            tCash += (o.cashAmount || 0); tQris += (o.qrisAmount || 0); tTransfer += (o.transferAmount || 0); tFree += (o.freeAmount || 0); 
             if (o.items) o.items.forEach(i => { if(!foodSummary[i.name]) foodSummary[i.name] = 0; foodSummary[i.name] += i.qty; });
         });
         
@@ -1004,7 +850,7 @@ async function runBackgroundSync() {
     if (!navigator.onLine || isSyncing) return;
     isSyncing = true; 
     try {
-        let tx = db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah"], "readonly");
+        let tx = db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah", "bayar_piutang"], "readonly");
         
         let orders = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
         for (const order of orders) {
@@ -1012,6 +858,11 @@ async function runBackgroundSync() {
                 order.syncStatus = "Syncing"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order);
                 try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncOrder", data: order }) }); if ((await r.json()).status === "Success") { order.syncStatus = "Synced"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order); } else { order.syncStatus = "Pending"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order); } } catch(e) { order.syncStatus = "Pending"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order); }
             }
+        }
+
+        let piutangs = await new Promise(res => tx.objectStore("bayar_piutang").getAll().onsuccess = e => res(e.target.result));
+        for (const bp of piutangs) {
+            if (bp.syncStatus === "Pending") { try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncBayarPiutang", data: bp }) }); if ((await r.json()).status === "Success") { db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").delete(bp.payId); } } catch(e) {} }
         }
         
         let drops = await new Promise(res => tx.objectStore("cash_drops").getAll().onsuccess = e => res(e.target.result));
@@ -1044,23 +895,17 @@ async function runBackgroundSync() {
 
         let inbounds = await new Promise(res => tx.objectStore("stock_inbound").getAll().onsuccess = e => res(e.target.result));
         for (const inb of inbounds) {
-            if (inb.syncStatus === "Pending") {
-                try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncInbound", data: inb }) }); if ((await r.json()).status === "Success") { db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").delete(inb.logId); } } catch(e) {}
-            }
+            if (inb.syncStatus === "Pending") { try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncInbound", data: inb }) }); if ((await r.json()).status === "Success") { db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").delete(inb.logId); } } catch(e) {} }
         }
 
         let cuciLogs = await new Promise(res => tx.objectStore("cuci_tandon").getAll().onsuccess = e => res(e.target.result));
         for (const log of cuciLogs) {
-            if (log.syncStatus === "Pending") {
-                try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncCuciTandon", data: log }) }); if ((await r.json()).status === "Success") { db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").delete(log.logId); } } catch(e) {}
-            }
+            if (log.syncStatus === "Pending") { try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncCuciTandon", data: log }) }); if ((await r.json()).status === "Success") { db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").delete(log.logId); } } catch(e) {} }
         }
 
         let laporLogs = await new Promise(res => tx.objectStore("lapor_masalah").getAll().onsuccess = e => res(e.target.result));
         for (const log of laporLogs) {
-            if (log.syncStatus === "Pending") {
-                try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncLaporMasalah", data: log }) }); if ((await r.json()).status === "Success") { db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").delete(log.logId); } } catch(e) {}
-            }
+            if (log.syncStatus === "Pending") { try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncLaporMasalah", data: log }) }); if ((await r.json()).status === "Success") { db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").delete(log.logId); } } catch(e) {} }
         }
 
     } finally { isSyncing = false; }
