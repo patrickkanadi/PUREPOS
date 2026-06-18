@@ -1,5 +1,5 @@
 // PUT YOUR NEW SCRIPT.GOOGLE.COM MACROS URL HERE
-const API_URL = "https://script.google.com/macros/s/AKfycbzYpjsvL1H80ucMc5VtXRNeg9JpqoeM8fB1hebSEcqUpM9bzUOW7udKGxISs3zg9pml/exec"; 
+const API_URL = "https://script.google.com/macros/s/AKfycbz797WvLnGIpjpVwdhgoy5YbSJtklutmIXlqjhvZx6LU0fVDTImgJ341NIqB7Y58kp2/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 7; 
 let db;
