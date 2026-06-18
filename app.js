@@ -1,7 +1,7 @@
-// PUT YOUR NEW SCRIPT.GOOGLE.COM MACROS URL HERE
+// PUT YOUR SCRIPT.GOOGLE.COM MACROS URL HERE
 const API_URL = "https://script.google.com/macros/s/AKfycbz797WvLnGIpjpVwdhgoy5YbSJtklutmIXlqjhvZx6LU0fVDTImgJ341NIqB7Y58kp2/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 8; // Bumped to 8 to clear the corrupted connection state
+const DB_VERSION = 8; 
 let db;
 
 let posSessions = [{ cart: [], customer: null }, { cart: [], customer: null }, { cart: [], customer: null }];
@@ -43,7 +43,6 @@ function initDB() {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
         request.onupgradeneeded = (event) => {
             db = event.target.result;
-            // Create stores if they don't exist
             if (!db.objectStoreNames.contains("staff")) db.createObjectStore("staff", { keyPath: "pin" });
             if (!db.objectStoreNames.contains("menu")) db.createObjectStore("menu", { keyPath: "itemId" });
             if (!db.objectStoreNames.contains("settings")) db.createObjectStore("settings", { keyPath: "key" });
@@ -62,10 +61,7 @@ function initDB() {
             if (!db.objectStoreNames.contains("lapor_masalah")) db.createObjectStore("lapor_masalah", { keyPath: "logId" });
             if (!db.objectStoreNames.contains("bayar_piutang")) db.createObjectStore("bayar_piutang", { keyPath: "payId" });
         };
-        request.onsuccess = (e) => { 
-            db = e.target.result; 
-            resolve(db); 
-        };
+        request.onsuccess = (e) => { db = e.target.result; resolve(db); };
         request.onerror = (e) => reject(e);
     });
 }
@@ -73,15 +69,13 @@ function initDB() {
 function attemptLogin() {
     const pinInput = document.getElementById("cashier-pin").value.trim();
     if (!pinInput) return alert("Masukkan PIN!");
-
-    // Guard: Ensure DB is active before querying
     if (!db) return alert("Database sedang memuat, harap tunggu...");
 
     db.transaction(["staff"], "readonly").objectStore("staff").getAll().onsuccess = (e) => {
         const staffList = e.target.result;
         
         if (!staffList || staffList.length === 0) {
-            return alert("Data sistem masih kosong! Tunggu beberapa detik untuk sinkronisasi awal, atau klik 'Sinkronisasi Paksa'. Jika tetap kosong, pastikan URL Web App di app.js sudah menggunakan Deployment Baru.");
+            return alert("Data PIN masih kosong! Klik tombol 'Sinkronisasi Paksa' dan tunggu beberapa detik.");
         }
 
         const staff = staffList.find(s => String(s.pin).trim() === pinInput);
@@ -103,10 +97,80 @@ function attemptLogin() {
                 }
                 document.getElementById("login-screen").classList.add("hidden"); document.getElementById("pos-screen").classList.remove("hidden");
                 document.getElementById("display-cashier").innerText = currentCashier; document.getElementById("display-outlet").innerText = currentOutlet;
-                syncMasterData(); lockMenu(); 
+                
+                // Continue full sync in the background now that user is in
+                if (navigator.onLine) { syncMasterData(); }
+                lockMenu(); 
             };
         } else { alert("PIN Salah! Cek kembali PIN Anda."); }
     };
+}
+
+// ⚡ THE SPLIT-SYNC SYSTEM
+async function syncMasterData() {
+    if (!navigator.onLine) {
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Mode Offline";
+        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c"; return;
+    }
+    
+    try {
+        if (!db) { await initDB(); }
+
+        // PHASE 1: FAST-TRACK AUTH (Downloads only PINs and Settings in ~0.5s)
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron PIN (Cepat)...";
+        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
+
+        const authResponse = await fetch(API_URL + "?type=auth_only", { mode: 'cors', redirect: 'follow' });
+        const authContentType = authResponse.headers.get("content-type");
+        if (authContentType && authContentType.includes("text/html")) throw new Error("Akses Ditolak Google.");
+        
+        const authResult = await authResponse.json();
+        if (authResult.status === "Success") {
+            const tx = db.transaction(["staff", "settings"], "readwrite");
+            const staffStore = tx.objectStore("staff"); staffStore.clear(); authResult.data.staff.forEach(s => staffStore.put(s));
+            const settingsStore = tx.objectStore("settings"); settingsStore.clear(); for (const [k, v] of Object.entries(authResult.data.settings)) { settingsStore.put({ key: k, value: v }); }
+            
+            const rawOutlets = authResult.data.settings["Outlet_List"] || "Pusat"; const outletArray = rawOutlets.split(",").map(s => s.trim()); const selectBox = document.getElementById("login-outlet");
+            if(selectBox) { selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); }
+            console.log(`⚡ FAST SYNC COMPLETE: PINs ready in < 1 second!`);
+        }
+
+        // PHASE 2: HEAVY SYNC (Downloads Menu, Members, Transactions, Stocks in background)
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Download Data Member...";
+        
+        const fullResponse = await fetch(API_URL, { mode: 'cors', redirect: 'follow' });
+        const fullResult = await fullResponse.json();
+        
+        if (fullResult.status === "Success") {
+            window.outletStocks = fullResult.data.outletStocks; 
+            const tx2 = db.transaction(["menu", "members", "expense_categories"], "readwrite");
+            
+            const menuStore = tx2.objectStore("menu"); menuStore.clear(); fullResult.data.menu.forEach(m => menuStore.put(m));
+            const memStore = tx2.objectStore("members"); memStore.clear(); fullResult.data.members.forEach(m => memStore.put(m));
+            const expCatStore = tx2.objectStore("expense_categories"); expCatStore.clear(); 
+            if(fullResult.data.expenseCategories) fullResult.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
+            
+            if (fullResult.data.authStatuses) processVoidApprovals(fullResult.data.authStatuses);
+            globalMenuData = fullResult.data.menu; window.loyaltyEnabled = String(fullResult.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
+
+            if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
+            if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
+            if (!document.getElementById("pos-screen").classList.contains("hidden")) { loadMenuUI(); }
+            console.log("✅ HEAVY SYNC COMPLETE: Database updated.");
+        }
+
+    } catch (e) { 
+        console.error("Sync Error:", e);
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Gagal Sinkron"; 
+        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c";
+        if (e.name === 'InvalidStateError' || e.message.includes("closing")) { await initDB(); }
+    }
+}
+
+async function manualPushSync() {
+    if (!navigator.onLine) return alert("Anda sedang offline!");
+    document.getElementById("network-text").innerText = "Mengirim Data..."; document.getElementById("network-dot").style.backgroundColor = "#f39c12";
+    await runBackgroundSync(); document.getElementById("network-text").innerText = "Menarik Data..."; await syncMasterData(); alert("Sinkronisasi Database Berhasil!");
 }
 
 window.switchCart = function(index) {
@@ -213,64 +277,6 @@ function unlockMenu(isGuest) {
     }
 }
 
-async function manualPushSync() {
-    if (!navigator.onLine) return alert("Anda sedang offline!");
-    document.getElementById("network-text").innerText = "Mengirim Data..."; document.getElementById("network-dot").style.backgroundColor = "#f39c12";
-    await runBackgroundSync(); document.getElementById("network-text").innerText = "Menarik Data..."; await syncMasterData(); alert("Sinkronisasi Database Berhasil!");
-}
-
-async function syncMasterData() {
-    if (!navigator.onLine) {
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Mode Offline";
-        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c"; return;
-    }
-    if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkronisasi...";
-    if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
-
-    try {
-        // Guard: Re-init DB if connection crashed previously
-        if (!db) { await initDB(); }
-
-        const response = await fetch(API_URL, { mode: 'cors', redirect: 'follow' }); 
-        const result = await response.json();
-        
-        if (result.status === "Success") {
-            window.outletStocks = result.data.outletStocks; 
-            
-            // THE CRITICAL FIX: Changed from .add() to .put() to prevent Duplicate ID Constraint Crashes
-            const tx = db.transaction(["staff", "menu", "settings", "members", "expense_categories"], "readwrite");
-            
-            const staffStore = tx.objectStore("staff"); staffStore.clear(); result.data.staff.forEach(s => staffStore.put(s));
-            const menuStore = tx.objectStore("menu"); menuStore.clear(); result.data.menu.forEach(m => menuStore.put(m));
-            const memStore = tx.objectStore("members"); memStore.clear(); result.data.members.forEach(m => memStore.put(m));
-            const expCatStore = tx.objectStore("expense_categories"); expCatStore.clear(); 
-            if(result.data.expenseCategories) result.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
-            const settingsStore = tx.objectStore("settings"); settingsStore.clear(); 
-            for (const [key, value] of Object.entries(result.data.settings)) { settingsStore.put({ key: key, value: value }); }
-            
-            if (result.data.authStatuses) processVoidApprovals(result.data.authStatuses);
-
-            globalMenuData = result.data.menu; window.loyaltyEnabled = String(result.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
-            const rawOutlets = result.data.settings["Outlet_List"] || "Pusat"; const outletArray = rawOutlets.split(",").map(s => s.trim()); const selectBox = document.getElementById("login-outlet");
-            if(selectBox) { selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); }
-
-            if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
-            if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
-            if (!document.getElementById("pos-screen").classList.contains("hidden")) { loadMenuUI(); }
-            
-            console.log(`✅ SYNC SUCCESS: Downloaded ${result.data.staff.length} Staff, ${result.data.menu.length} Menu Items.`);
-            
-        } else { throw new Error(result.message); }
-    } catch (e) { 
-        console.error("Sync Error:", e);
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Gagal Sinkron"; 
-        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c";
-        
-        // Auto-heal the database connection if it died
-        if (e.name === 'InvalidStateError') { await initDB(); }
-    }
-}
-
 function handleAutocomplete(e) {
     const val = e.target.value.toLowerCase().trim(); const resBox = document.getElementById("autocomplete-results");
     
@@ -293,6 +299,7 @@ function handleAutocomplete(e) {
         } else { resBox.classList.add("hidden"); }
     };
 }
+
 document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);document.getElementById("cust-name").addEventListener("input", handleAutocomplete);document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);document.getElementById("cust-name").addEventListener("click", handleAutocomplete);document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);document.addEventListener('click', (e) => { if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { document.getElementById('autocomplete-results').classList.add('hidden'); } });
 
 window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, dbPiutang, firstOutlet, recentOutlets) {
@@ -656,9 +663,7 @@ function renderHistoryList(type) {
         };
     }
 }
-
 function requestVoid(type, id) { currentVoidTarget = { type, id }; document.getElementById("admin-void-pin").value = ""; document.getElementById("admin-void-modal").classList.remove("hidden"); }
-
 function submitRemoteVoid() {
     const type = currentVoidTarget.type; const id = currentVoidTarget.id; const storeName = type === 'orders' ? "orders" : "expenses";
     db.transaction([storeName], "readwrite").objectStore(storeName).get(id).onsuccess = (e) => {
@@ -668,7 +673,6 @@ function submitRemoteVoid() {
     db.transaction(["void_requests"], "readwrite").objectStore("void_requests").add({ id: id, type: type, status: "Void Pending", authName: "Menunggu" });
     document.getElementById("admin-void-modal").classList.add("hidden"); runBackgroundSync(); alert("Request Pembatalan dikirim ke Admin.");
 }
-
 async function confirmAdminVoid() {
     const pinInput = document.getElementById("admin-void-pin").value.trim(); 
     if (!pinInput) return alert("Harap masukkan PIN Admin.");
@@ -693,7 +697,6 @@ async function confirmAdminVoid() {
         } else { alert("PIN Salah atau Anda tidak memiliki akses Admin."); }
     };
 }
-
 function processVoidApprovals(authStatuses) {
     const tx = db.transaction(["orders", "expenses"], "readwrite"); const ordStore = tx.objectStore("orders"); const expStore = tx.objectStore("expenses"); let uiNeedsRefresh = false;
     ordStore.getAll().onsuccess = (e) => {
@@ -717,7 +720,6 @@ function processVoidApprovals(authStatuses) {
         if (uiNeedsRefresh && !document.getElementById("history-modal").classList.contains("hidden")) renderHistoryList('expenses');
     };
 }
-
 function applyVoidAftermath(order) {
     const tx = db.transaction(["menu", "members"], "readwrite"); const menuStore = tx.objectStore("menu"); const memberStore = tx.objectStore("members");
 
@@ -929,4 +931,11 @@ async function runBackgroundSync() {
     } finally { isSyncing = false; }
 }
 
-window.onload = async () => { await initDB(); await syncMasterData(); window.setInterval(runBackgroundSync, 15000); };
+window.onload = async () => { 
+    await initDB(); 
+    
+    // Automatically triggers Fast Sync so PINs unlock instantly on load
+    await syncMasterData(); 
+    
+    window.setInterval(runBackgroundSync, 15000); 
+};
