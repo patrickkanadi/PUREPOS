@@ -227,7 +227,16 @@ async function syncMasterData() {
     if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
 
     try {
-        const response = await fetch(API_URL, { mode: 'cors', redirect: 'follow' }); 
+        // Simple fetch bypasses CORS strictness better on Apps Script
+        const response = await fetch(API_URL); 
+        
+        // NEW GUARD: Check if Google sent an HTML Login/Error page instead of Data
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.indexOf("text/html") !== -1) {
+            console.error("Blocked by Google. HTML received:", await response.text());
+            throw new Error("Akses Ditolak oleh Google. Pastikan Deployment disetting 'Who has access: Anyone' (Bukan Anyone with Google account).");
+        }
+
         const result = await response.json();
         
         if (result.status === "Success") {
@@ -250,8 +259,13 @@ async function syncMasterData() {
             if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
             if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
             if (!document.getElementById("pos-screen").classList.contains("hidden")) { loadMenuUI(); }
-        } else { throw new Error(result.message); }
+        } else { 
+            throw new Error(result.message); 
+        }
     } catch (e) { 
+        console.error("Sync Error:", e);
+        alert("⚠️ GAGAL SINKRONISASI:\n" + e.message); // This will pop up the exact reason!
+        
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Gagal Sinkron"; 
         if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c";
     }
