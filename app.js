@@ -1,6 +1,7 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbxeaTG6ZbW_9v9u9PE5kRPbOLpwWeVh7HGITFAugSwqdVsgjgTZZC8GbvXPyvlZSDL1/exec"; 
+// PUT YOUR NEW SCRIPT.GOOGLE.COM MACROS URL HERE
+const API_URL = "https://script.google.com/macros/s/AKfycbzYpjsvL1H80ucMc5VtXRNeg9JpqoeM8fB1hebSEcqUpM9bzUOW7udKGxISs3zg9pml/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 6; 
+const DB_VERSION = 7; 
 let db;
 
 let posSessions = [{ cart: [], customer: null }, { cart: [], customer: null }, { cart: [], customer: null }];
@@ -76,6 +77,12 @@ function attemptLogin() {
 
     db.transaction(["staff"], "readonly").objectStore("staff").getAll().onsuccess = (e) => {
         const staffList = e.target.result;
+        
+        // NEW: Database Empty Guard
+        if (!staffList || staffList.length === 0) {
+            return alert("Data sistem masih kosong! Tunggu beberapa detik untuk sinkronisasi awal, atau klik 'Sinkronisasi Paksa'. Pastikan URL Web App sudah diganti dengan yang terbaru.");
+        }
+
         const staff = staffList.find(s => String(s.pin).trim() === pinInput);
         
         if (staff) {
@@ -97,7 +104,7 @@ function attemptLogin() {
                 document.getElementById("display-cashier").innerText = currentCashier; document.getElementById("display-outlet").innerText = currentOutlet;
                 syncMasterData(); lockMenu(); 
             };
-        } else { alert("PIN Salah! Pastikan data sudah tersinkronisasi dari Google Sheets."); }
+        } else { alert("PIN Salah! Cek kembali PIN Anda."); }
     };
 }
 
@@ -220,12 +227,7 @@ async function syncMasterData() {
     if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
 
     try {
-       // Change your old fetch(API_URL) to this:
-const response = await fetch(API_URL, { 
-    method: 'GET', // Or POST depending on how your backend handles it
-    mode: 'cors',  
-    redirect: 'follow' // CRITICAL: Tells the browser to follow Google's redirect
-});
+        const response = await fetch(API_URL, { mode: 'cors', redirect: 'follow' }); 
         const result = await response.json();
         
         if (result.status === "Success") {
@@ -277,7 +279,6 @@ function handleAutocomplete(e) {
         } else { resBox.classList.add("hidden"); }
     };
 }
-
 document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);document.getElementById("cust-name").addEventListener("input", handleAutocomplete);document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);document.getElementById("cust-name").addEventListener("click", handleAutocomplete);document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);document.addEventListener('click', (e) => { if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { document.getElementById('autocomplete-results').classList.add('hidden'); } });
 
 window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, dbPiutang, firstOutlet, recentOutlets) {
