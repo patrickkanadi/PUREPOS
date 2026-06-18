@@ -1,4 +1,3 @@
-// PUT YOUR SCRIPT.GOOGLE.COM MACROS URL HERE
 const API_URL = "https://script.google.com/macros/s/AKfycbxeaTG6ZbW_9v9u9PE5kRPbOLpwWeVh7HGITFAugSwqdVsgjgTZZC8GbvXPyvlZSDL1/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 6; 
@@ -24,6 +23,7 @@ window.addEventListener('beforeinstallprompt', (e) => {
     const installBtn = document.getElementById('btn-install'); const installBtnLogin = document.getElementById('btn-install-login');
     if(installBtn) installBtn.classList.remove('hidden'); if(installBtnLogin) installBtnLogin.classList.remove('hidden');
 });
+
 function installPWA() {
     if (deferredPrompt) {
         deferredPrompt.prompt();
@@ -60,7 +60,13 @@ function initDB() {
             if (!db.objectStoreNames.contains("lapor_masalah")) db.createObjectStore("lapor_masalah", { keyPath: "logId" });
             if (!db.objectStoreNames.contains("bayar_piutang")) db.createObjectStore("bayar_piutang", { keyPath: "payId" });
         };
-        request.onsuccess = (e) => { db = e.target.result; resolve(db); };
+        request.onsuccess = (e) => { 
+            db = e.target.result; 
+            db.onversionchange = () => { db.close(); window.location.reload(); };
+            resolve(db); 
+        };
+        request.onerror = (e) => reject(e);
+        request.onblocked = () => alert("Tutup tab POS lain untuk update database!");
     });
 }
 
@@ -91,7 +97,7 @@ function attemptLogin() {
                 document.getElementById("display-cashier").innerText = currentCashier; document.getElementById("display-outlet").innerText = currentOutlet;
                 syncMasterData(); lockMenu(); 
             };
-        } else { alert("PIN Salah! Pastikan data sudah sinkron."); }
+        } else { alert("PIN Salah! Pastikan data sudah tersinkronisasi dari Google Sheets."); }
     };
 }
 
@@ -214,7 +220,7 @@ async function syncMasterData() {
     if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
 
     try {
-        const response = await fetch(API_URL, { redirect: 'follow' }); 
+        const response = await fetch(API_URL, { mode: 'cors', redirect: 'follow' }); 
         const result = await response.json();
         
         if (result.status === "Success") {
@@ -266,6 +272,7 @@ function handleAutocomplete(e) {
         } else { resBox.classList.add("hidden"); }
     };
 }
+
 document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);document.getElementById("cust-name").addEventListener("input", handleAutocomplete);document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);document.getElementById("cust-name").addEventListener("click", handleAutocomplete);document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);document.addEventListener('click', (e) => { if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { document.getElementById('autocomplete-results').classList.add('hidden'); } });
 
 window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, dbPiutang, firstOutlet, recentOutlets) {
@@ -300,6 +307,7 @@ function loadMenuUI() {
         catContainer.appendChild(btn);
     }); renderProductGrid();
 }
+
 function renderProductGrid() {
     const grid = document.getElementById("product-grid"); grid.innerHTML = "";
     const filteredMenu = globalMenuData.filter(i => {
