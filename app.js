@@ -1,7 +1,7 @@
 // PUT YOUR NEW SCRIPT.GOOGLE.COM MACROS URL HERE
 const API_URL = "https://script.google.com/macros/s/AKfycbz797WvLnGIpjpVwdhgoy5YbSJtklutmIXlqjhvZx6LU0fVDTImgJ341NIqB7Y58kp2/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 7; 
+const DB_VERSION = 8; // Bumped to 8 to clear the corrupted connection state
 let db;
 
 let posSessions = [{ cart: [], customer: null }, { cart: [], customer: null }, { cart: [], customer: null }];
@@ -43,6 +43,7 @@ function initDB() {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
         request.onupgradeneeded = (event) => {
             db = event.target.result;
+            // Create stores if they don't exist
             if (!db.objectStoreNames.contains("staff")) db.createObjectStore("staff", { keyPath: "pin" });
             if (!db.objectStoreNames.contains("menu")) db.createObjectStore("menu", { keyPath: "itemId" });
             if (!db.objectStoreNames.contains("settings")) db.createObjectStore("settings", { keyPath: "key" });
@@ -63,11 +64,9 @@ function initDB() {
         };
         request.onsuccess = (e) => { 
             db = e.target.result; 
-            db.onversionchange = () => { db.close(); window.location.reload(); };
             resolve(db); 
         };
         request.onerror = (e) => reject(e);
-        request.onblocked = () => alert("Tutup tab POS lain untuk update database!");
     });
 }
 
@@ -75,12 +74,14 @@ function attemptLogin() {
     const pinInput = document.getElementById("cashier-pin").value.trim();
     if (!pinInput) return alert("Masukkan PIN!");
 
+    // Guard: Ensure DB is active before querying
+    if (!db) return alert("Database sedang memuat, harap tunggu...");
+
     db.transaction(["staff"], "readonly").objectStore("staff").getAll().onsuccess = (e) => {
         const staffList = e.target.result;
         
-        // NEW: Database Empty Guard
         if (!staffList || staffList.length === 0) {
-            return alert("Data sistem masih kosong! Tunggu beberapa detik untuk sinkronisasi awal, atau klik 'Sinkronisasi Paksa'. Pastikan URL Web App sudah diganti dengan yang terbaru.");
+            return alert("Data sistem masih kosong! Tunggu beberapa detik untuk sinkronisasi awal, atau klik 'Sinkronisasi Paksa'. Jika tetap kosong, pastikan URL Web App di app.js sudah menggunakan Deployment Baru.");
         }
 
         const staff = staffList.find(s => String(s.pin).trim() === pinInput);
@@ -227,29 +228,26 @@ async function syncMasterData() {
     if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
 
     try {
-        // Simple fetch bypasses CORS strictness better on Apps Script
-        const response = await fetch(API_URL); 
-        
-        // NEW GUARD: Check if Google sent an HTML Login/Error page instead of Data
-        const contentType = response.headers.get("content-type");
-        if (contentType && contentType.indexOf("text/html") !== -1) {
-            console.error("Blocked by Google. HTML received:", await response.text());
-            throw new Error("Akses Ditolak oleh Google. Pastikan Deployment disetting 'Who has access: Anyone' (Bukan Anyone with Google account).");
-        }
+        // Guard: Re-init DB if connection crashed previously
+        if (!db) { await initDB(); }
 
+        const response = await fetch(API_URL, { mode: 'cors', redirect: 'follow' }); 
         const result = await response.json();
         
         if (result.status === "Success") {
             window.outletStocks = result.data.outletStocks; 
+            
+            // THE CRITICAL FIX: Changed from .add() to .put() to prevent Duplicate ID Constraint Crashes
             const tx = db.transaction(["staff", "menu", "settings", "members", "expense_categories"], "readwrite");
             
-            const staffStore = tx.objectStore("staff"); staffStore.clear(); result.data.staff.forEach(s => staffStore.add(s));
-            const menuStore = tx.objectStore("menu"); menuStore.clear(); result.data.menu.forEach(m => menuStore.add(m));
-            const memStore = tx.objectStore("members"); memStore.clear(); result.data.members.forEach(m => memStore.add(m));
+            const staffStore = tx.objectStore("staff"); staffStore.clear(); result.data.staff.forEach(s => staffStore.put(s));
+            const menuStore = tx.objectStore("menu"); menuStore.clear(); result.data.menu.forEach(m => menuStore.put(m));
+            const memStore = tx.objectStore("members"); memStore.clear(); result.data.members.forEach(m => memStore.put(m));
             const expCatStore = tx.objectStore("expense_categories"); expCatStore.clear(); 
-            if(result.data.expenseCategories) result.data.expenseCategories.forEach(c => expCatStore.add({name: c}));
+            if(result.data.expenseCategories) result.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
             const settingsStore = tx.objectStore("settings"); settingsStore.clear(); 
-            for (const [key, value] of Object.entries(result.data.settings)) { settingsStore.add({ key: key, value: value }); }
+            for (const [key, value] of Object.entries(result.data.settings)) { settingsStore.put({ key: key, value: value }); }
+            
             if (result.data.authStatuses) processVoidApprovals(result.data.authStatuses);
 
             globalMenuData = result.data.menu; window.loyaltyEnabled = String(result.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
@@ -259,15 +257,17 @@ async function syncMasterData() {
             if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
             if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
             if (!document.getElementById("pos-screen").classList.contains("hidden")) { loadMenuUI(); }
-        } else { 
-            throw new Error(result.message); 
-        }
+            
+            console.log(`✅ SYNC SUCCESS: Downloaded ${result.data.staff.length} Staff, ${result.data.menu.length} Menu Items.`);
+            
+        } else { throw new Error(result.message); }
     } catch (e) { 
         console.error("Sync Error:", e);
-        alert("⚠️ GAGAL SINKRONISASI:\n" + e.message); // This will pop up the exact reason!
-        
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Gagal Sinkron"; 
         if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c";
+        
+        // Auto-heal the database connection if it died
+        if (e.name === 'InvalidStateError') { await initDB(); }
     }
 }
 
@@ -656,7 +656,9 @@ function renderHistoryList(type) {
         };
     }
 }
+
 function requestVoid(type, id) { currentVoidTarget = { type, id }; document.getElementById("admin-void-pin").value = ""; document.getElementById("admin-void-modal").classList.remove("hidden"); }
+
 function submitRemoteVoid() {
     const type = currentVoidTarget.type; const id = currentVoidTarget.id; const storeName = type === 'orders' ? "orders" : "expenses";
     db.transaction([storeName], "readwrite").objectStore(storeName).get(id).onsuccess = (e) => {
@@ -666,6 +668,7 @@ function submitRemoteVoid() {
     db.transaction(["void_requests"], "readwrite").objectStore("void_requests").add({ id: id, type: type, status: "Void Pending", authName: "Menunggu" });
     document.getElementById("admin-void-modal").classList.add("hidden"); runBackgroundSync(); alert("Request Pembatalan dikirim ke Admin.");
 }
+
 async function confirmAdminVoid() {
     const pinInput = document.getElementById("admin-void-pin").value.trim(); 
     if (!pinInput) return alert("Harap masukkan PIN Admin.");
@@ -690,6 +693,7 @@ async function confirmAdminVoid() {
         } else { alert("PIN Salah atau Anda tidak memiliki akses Admin."); }
     };
 }
+
 function processVoidApprovals(authStatuses) {
     const tx = db.transaction(["orders", "expenses"], "readwrite"); const ordStore = tx.objectStore("orders"); const expStore = tx.objectStore("expenses"); let uiNeedsRefresh = false;
     ordStore.getAll().onsuccess = (e) => {
@@ -713,6 +717,7 @@ function processVoidApprovals(authStatuses) {
         if (uiNeedsRefresh && !document.getElementById("history-modal").classList.contains("hidden")) renderHistoryList('expenses');
     };
 }
+
 function applyVoidAftermath(order) {
     const tx = db.transaction(["menu", "members"], "readwrite"); const menuStore = tx.objectStore("menu"); const memberStore = tx.objectStore("members");
 
@@ -859,6 +864,8 @@ async function runBackgroundSync() {
     if (!navigator.onLine || isSyncing) return;
     isSyncing = true; 
     try {
+        if (!db) { await initDB(); }
+        
         let tx = db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah", "bayar_piutang"], "readonly");
         
         let orders = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
@@ -917,6 +924,8 @@ async function runBackgroundSync() {
             if (log.syncStatus === "Pending") { try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncLaporMasalah", data: log }) }); if ((await r.json()).status === "Success") { db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").delete(log.logId); } } catch(e) {} }
         }
 
+    } catch (e) {
+        if (e.name === 'InvalidStateError') { await initDB(); }
     } finally { isSyncing = false; }
 }
 
