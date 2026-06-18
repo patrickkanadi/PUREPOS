@@ -97,6 +97,47 @@
             #printable-area { display: block !important; width: 48mm; font-family: 'Courier New', Courier, monospace; font-size: 11px; color: black; padding: 0; margin: 0 auto; }
             @page { margin: 2mm; } 
         }
+
+        @media screen and (max-width: 850px) {
+            #top-bar { flex-direction: column; align-items: stretch; gap: 10px; padding: 10px; }
+            .status-indicator { flex-wrap: wrap; justify-content: center; gap: 6px; }
+            .btn-top { flex: 1 1 calc(33% - 10px); margin: 0; font-size: 12px; padding: 8px 4px; text-align: center; }
+            
+            #main-workspace { flex-direction: column; }
+            #menu-section { flex: 1.2; border-right: none; border-bottom: 3px solid #bdc3c7; }
+            #cart-section { flex: 1; }
+
+            #command-bar { padding: 10px; }
+            #customer-input-section { flex-direction: column; align-items: stretch; }
+            .input-group { flex-direction: column; width: 100%; gap: 10px; }
+            .btn-action-group { width: 100%; }
+            
+            .category-tabs { padding: 10px; }
+            .cat-btn { padding: 10px 15px; font-size: 14px; }
+
+            #product-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); padding: 10px; gap: 10px; }
+            .product-card { padding: 10px; }
+            .product-card h4 { font-size: 14px; margin-bottom: 5px; }
+            .price-badge { font-size: 12px; padding: 4px 8px; margin-top: 5px; }
+
+            .cart-tab { padding: 10px; font-size: 12px; }
+            #cart-items { padding: 10px; }
+            #checkout-panel { padding: 15px; }
+            .grand-total { font-size: 20px; }
+            .btn-pay { padding: 12px; font-size: 16px; margin-top: 10px; }
+
+            .modal-content { width: 100%; padding: 15px; }
+            
+            .split-pay-grid { grid-template-columns: 1fr; gap: 8px; padding: 10px; }
+            .form-box label { font-size: 12px; }
+            .form-box input, .form-box select, .form-box textarea { padding: 10px; font-size: 14px; }
+            
+            .stats-grid { grid-template-columns: 1fr; }
+            
+            #glass-overlay h1 { font-size: 32px; }
+            #glass-overlay h2 { font-size: 20px; }
+            #glass-overlay p { font-size: 14px; }
+        }
     </style></head><body>
 
     <div id="login-screen">
