@@ -220,7 +220,12 @@ async function syncMasterData() {
     if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
 
     try {
-        const response = await fetch(API_URL, { mode: 'cors', redirect: 'follow' }); 
+       // Change your old fetch(API_URL) to this:
+const response = await fetch(API_URL, { 
+    method: 'GET', // Or POST depending on how your backend handles it
+    mode: 'cors',  
+    redirect: 'follow' // CRITICAL: Tells the browser to follow Google's redirect
+});
         const result = await response.json();
         
         if (result.status === "Success") {
