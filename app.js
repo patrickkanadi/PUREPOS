@@ -1,7 +1,6 @@
-// PUT YOUR SCRIPT.GOOGLE.COM MACROS URL HERE
 const API_URL = "https://script.google.com/macros/s/AKfycbz797WvLnGIpjpVwdhgoy5YbSJtklutmIXlqjhvZx6LU0fVDTImgJ341NIqB7Y58kp2/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 8; 
+const DB_VERSION = 9; // Version bump for structural changes
 let db;
 
 let posSessions = [{ cart: [], customer: null }, { cart: [], customer: null }, { cart: [], customer: null }];
@@ -12,6 +11,18 @@ let globalMenuData = []; let currentCategory = "";
 window.outletStocks = {}; let isLoggingOut = false; let currentVoidTarget = { type: null, id: null };
 let isMenuLocked = true; let isSyncing = false; window.loyaltyEnabled = false; 
 let deferredPrompt;
+
+// MODULE 3: Web Bluetooth Printer Variables
+let bluetoothDevice = null;
+let printerCharacteristic = null;
+
+// MODULE 2: Cryptographic Hashing Engine (SHA-256)
+async function hashPIN(pin) {
+    const msgUint8 = new TextEncoder().encode(pin);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 function getWibDate() {
     const d = new Date(); const utc = d.getTime() + (d.getTimezoneOffset() * 60000); const nd = new Date(utc + (3600000 * 7)); 
@@ -66,24 +77,40 @@ function initDB() {
     });
 }
 
-function attemptLogin() {
+// Helper to pull Staff list synchronously
+async function getStaffFromDB() {
+    return new Promise(resolve => {
+        db.transaction(["staff"], "readonly").objectStore("staff").getAll().onsuccess = e => resolve(e.target.result);
+    });
+}
+
+// MODULE 1: Smart Login with Auto-Sync
+async function attemptLogin() {
     const pinInput = document.getElementById("cashier-pin").value.trim();
     if (!pinInput) return alert("Masukkan PIN!");
     if (!db) return alert("Database sedang memuat, harap tunggu...");
 
-    db.transaction(["staff"], "readonly").objectStore("staff").getAll().onsuccess = (e) => {
-        const staffList = e.target.result;
-        
-        if (!staffList || staffList.length === 0) {
-            return alert("Data PIN masih kosong! Klik tombol 'Sinkronisasi Paksa' dan tunggu beberapa detik.");
+    const loginBtn = document.getElementById("login-btn");
+    loginBtn.disabled = true;
+    loginBtn.innerText = "Memverifikasi...";
+
+    try {
+        const hashedPinInput = await hashPIN(pinInput);
+        let staffList = await getStaffFromDB();
+        let staff = staffList.find(s => s.pin === hashedPinInput);
+
+        // If local DB doesn't have it, force a sync and try again
+        if (!staff) {
+            loginBtn.innerText = "Sinkronisasi...";
+            await syncMasterData();
+            staffList = await getStaffFromDB();
+            staff = staffList.find(s => s.pin === hashedPinInput);
         }
 
-        const staff = staffList.find(s => String(s.pin).trim() === pinInput);
-        
         if (staff) {
             db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staff.pin).onsuccess = (shiftReq) => {
                 const activeShift = shiftReq.target.result;
-                currentCashier = staff.name; currentPin = staff.pin;
+                currentCashier = staff.name; currentPin = staff.pin; // Storing the Hash, not raw
                 
                 const dropdownSelection = document.getElementById("login-outlet").value;
                 if (dropdownSelection === "AUTO") { currentOutlet = staff.defaultOutlet || document.getElementById("login-outlet").options[1].value; } 
@@ -98,79 +125,69 @@ function attemptLogin() {
                 document.getElementById("login-screen").classList.add("hidden"); document.getElementById("pos-screen").classList.remove("hidden");
                 document.getElementById("display-cashier").innerText = currentCashier; document.getElementById("display-outlet").innerText = currentOutlet;
                 
-                // Continue full sync in the background now that user is in
                 if (navigator.onLine) { syncMasterData(); }
                 lockMenu(); 
             };
-        } else { alert("PIN Salah! Cek kembali PIN Anda."); }
-    };
+        } else {
+            alert("PIN Salah atau Data Kasir Tidak Ditemukan.");
+        }
+    } catch (err) {
+        console.error("Login Error:", err);
+        alert("Terjadi kesalahan sistem saat login.");
+    } finally {
+        loginBtn.disabled = false;
+        loginBtn.innerText = "Masuk / Buka Shift";
+    }
 }
 
-// ⚡ THE SPLIT-SYNC SYSTEM
-async function syncMasterData() {
-    if (!navigator.onLine) {
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Mode Offline";
-        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c"; return;
-    }
-    
+// MODULE 3: Web Bluetooth Connection
+async function connectBluetoothPrinter() {
     try {
-        if (!db) { await initDB(); }
-
-        // PHASE 1: FAST-TRACK AUTH (Downloads only PINs and Settings in ~0.5s)
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron PIN (Cepat)...";
-        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
-
-        const authResponse = await fetch(API_URL + "?type=auth_only", { mode: 'cors', redirect: 'follow' });
-        const authContentType = authResponse.headers.get("content-type");
-        if (authContentType && authContentType.includes("text/html")) throw new Error("Akses Ditolak Google.");
+        bluetoothDevice = await navigator.bluetooth.requestDevice({
+            filters: [{ services: [0x18F0] }],
+            optionalServices: [0x18F0]
+        });
+        const server = await bluetoothDevice.gatt.connect();
+        const service = await server.getPrimaryService(0x18F0);
+        printerCharacteristic = await service.getCharacteristic(0x2AF1);
         
-        const authResult = await authResponse.json();
-        if (authResult.status === "Success") {
-            const tx = db.transaction(["staff", "settings"], "readwrite");
-            const staffStore = tx.objectStore("staff"); staffStore.clear(); authResult.data.staff.forEach(s => staffStore.put(s));
-            const settingsStore = tx.objectStore("settings"); settingsStore.clear(); for (const [k, v] of Object.entries(authResult.data.settings)) { settingsStore.put({ key: k, value: v }); }
-            
-            const rawOutlets = authResult.data.settings["Outlet_List"] || "Pusat"; const outletArray = rawOutlets.split(",").map(s => s.trim()); const selectBox = document.getElementById("login-outlet");
-            if(selectBox) { selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); }
-            console.log(`⚡ FAST SYNC COMPLETE: PINs ready in < 1 second!`);
-        }
-
-        // PHASE 2: HEAVY SYNC (Downloads Menu, Members, Transactions, Stocks in background)
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Download Data Member...";
+        alert("Printer Thermal Berhasil Terhubung!");
+        document.getElementById("btn-connect-printer").innerText = "🖨️ Printer Aktif";
+        document.getElementById("btn-connect-printer").style.background = "#27ae60";
+        document.getElementById("btn-connect-printer").style.borderColor = "#27ae60";
         
-        const fullResponse = await fetch(API_URL, { mode: 'cors', redirect: 'follow' });
-        const fullResult = await fullResponse.json();
-        
-        if (fullResult.status === "Success") {
-            window.outletStocks = fullResult.data.outletStocks; 
-            const tx2 = db.transaction(["menu", "members", "expense_categories"], "readwrite");
-            
-            const menuStore = tx2.objectStore("menu"); menuStore.clear(); fullResult.data.menu.forEach(m => menuStore.put(m));
-            const memStore = tx2.objectStore("members"); memStore.clear(); fullResult.data.members.forEach(m => memStore.put(m));
-            const expCatStore = tx2.objectStore("expense_categories"); expCatStore.clear(); 
-            if(fullResult.data.expenseCategories) fullResult.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
-            
-            if (fullResult.data.authStatuses) processVoidApprovals(fullResult.data.authStatuses);
-            globalMenuData = fullResult.data.menu; window.loyaltyEnabled = String(fullResult.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
+        bluetoothDevice.addEventListener('gattserverdisconnected', () => {
+            alert("Koneksi Printer Terputus!");
+            document.getElementById("btn-connect-printer").innerText = "🖨️ Konek Printer";
+            document.getElementById("btn-connect-printer").style.background = "#f39c12";
+            document.getElementById("btn-connect-printer").style.borderColor = "#f39c12";
+            printerCharacteristic = null;
+        });
 
-            if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
-            if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
-            if (!document.getElementById("pos-screen").classList.contains("hidden")) { loadMenuUI(); }
-            console.log("✅ HEAVY SYNC COMPLETE: Database updated.");
-        }
-
-    } catch (e) { 
-        console.error("Sync Error:", e);
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Gagal Sinkron"; 
-        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c";
-        if (e.name === 'InvalidStateError' || e.message.includes("closing")) { await initDB(); }
+    } catch (error) {
+        console.error(error);
+        alert("Gagal koneksi printer: " + error.message);
     }
 }
 
-async function manualPushSync() {
-    if (!navigator.onLine) return alert("Anda sedang offline!");
-    document.getElementById("network-text").innerText = "Mengirim Data..."; document.getElementById("network-dot").style.backgroundColor = "#f39c12";
-    await runBackgroundSync(); document.getElementById("network-text").innerText = "Menarik Data..."; await syncMasterData(); alert("Sinkronisasi Database Berhasil!");
+async function printViaBluetooth(payloadUint8Array) {
+    if (!printerCharacteristic) {
+        alert("Printer belum terhubung! Silakan hubungkan dulu dengan tombol 'Konek Printer'.");
+        return false;
+    }
+    try {
+        const CHUNK_SIZE = 20; // BLE Packet Size Limit
+        for (let i = 0; i < payloadUint8Array.length; i += CHUNK_SIZE) {
+            const chunk = payloadUint8Array.slice(i, i + CHUNK_SIZE);
+            await printerCharacteristic.writeValue(chunk);
+            await new Promise(r => setTimeout(r, 10)); // Buffer overflow prevention delay
+        }
+        return true;
+    } catch (error) {
+        console.error("Print Error:", error);
+        alert("Print Gagal: " + error.message);
+        return false;
+    }
 }
 
 window.switchCart = function(index) {
@@ -181,7 +198,6 @@ window.switchCart = function(index) {
         if (i === index) { btn.classList.add("active"); btn.style.background = "#2c3e50"; btn.style.color = "white"; btn.style.borderTop = "3px solid #3498db"; } 
         else { btn.classList.remove("active"); btn.style.background = "#34495e"; btn.style.color = "#bdc3c7"; btn.style.borderTop = "none"; }
     });
-    
     renderCart();
     
     if (activeCustomerProfile) {
@@ -213,9 +229,7 @@ function updatePromoBanner(member) {
     if (member && member.piutang > 0) {
         piutangBanner.innerHTML = `<span>⚠️ <strong>Total Piutang:</strong> Rp ${member.piutang.toLocaleString('id-ID')}</span> <button onclick="openPiutangModal()" style="padding:5px 10px; background:#c0392b; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Lunasi Piutang</button>`;
         piutangBanner.classList.remove("hidden");
-    } else {
-        if(piutangBanner) piutangBanner.classList.add("hidden");
-    }
+    } else { if(piutangBanner) piutangBanner.classList.add("hidden"); }
 
     if (!window.loyaltyEnabled || !promoBanner) { if(promoBanner) promoBanner.classList.add("hidden"); return; }
 
@@ -277,9 +291,72 @@ function unlockMenu(isGuest) {
     }
 }
 
+async function manualPushSync() {
+    if (!navigator.onLine) return alert("Anda sedang offline!");
+    document.getElementById("network-text").innerText = "Mengirim Data..."; document.getElementById("network-dot").style.backgroundColor = "#f39c12";
+    await runBackgroundSync(); document.getElementById("network-text").innerText = "Menarik Data..."; await syncMasterData(); alert("Sinkronisasi Database Berhasil!");
+}
+
+async function syncMasterData() {
+    if (!navigator.onLine) {
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Mode Offline";
+        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c"; return;
+    }
+    
+    try {
+        if (!db) { await initDB(); }
+
+        // PHASE 1: FAST-TRACK AUTH
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron PIN (Cepat)...";
+        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
+
+        const authResponse = await fetch(API_URL + "?type=auth_only", { mode: 'cors', redirect: 'follow' });
+        const authContentType = authResponse.headers.get("content-type");
+        if (authContentType && authContentType.includes("text/html")) throw new Error("Akses Ditolak Google.");
+        
+        const authResult = await authResponse.json();
+        if (authResult.status === "Success") {
+            const tx = db.transaction(["staff", "settings"], "readwrite");
+            const staffStore = tx.objectStore("staff"); staffStore.clear(); authResult.data.staff.forEach(s => staffStore.put(s));
+            const settingsStore = tx.objectStore("settings"); settingsStore.clear(); for (const [k, v] of Object.entries(authResult.data.settings)) { settingsStore.put({ key: k, value: v }); }
+            
+            const rawOutlets = authResult.data.settings["Outlet_List"] || "Pusat"; const outletArray = rawOutlets.split(",").map(s => s.trim()); const selectBox = document.getElementById("login-outlet");
+            if(selectBox) { selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); }
+        }
+
+        // PHASE 2: HEAVY SYNC
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Download Data Member...";
+        
+        const fullResponse = await fetch(API_URL, { mode: 'cors', redirect: 'follow' });
+        const fullResult = await fullResponse.json();
+        
+        if (fullResult.status === "Success") {
+            window.outletStocks = fullResult.data.outletStocks; 
+            const tx2 = db.transaction(["menu", "members", "expense_categories"], "readwrite");
+            
+            const menuStore = tx2.objectStore("menu"); menuStore.clear(); fullResult.data.menu.forEach(m => menuStore.put(m));
+            const memStore = tx2.objectStore("members"); memStore.clear(); fullResult.data.members.forEach(m => memStore.put(m));
+            const expCatStore = tx2.objectStore("expense_categories"); expCatStore.clear(); 
+            if(fullResult.data.expenseCategories) fullResult.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
+            
+            if (fullResult.data.authStatuses) processVoidApprovals(fullResult.data.authStatuses);
+            globalMenuData = fullResult.data.menu; window.loyaltyEnabled = String(fullResult.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
+
+            if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
+            if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
+            if (!document.getElementById("pos-screen").classList.contains("hidden")) { loadMenuUI(); }
+        }
+
+    } catch (e) { 
+        console.error("Sync Error:", e);
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Gagal Sinkron"; 
+        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c";
+        if (e.name === 'InvalidStateError' || e.message.includes("closing")) { await initDB(); }
+    }
+}
+
 function handleAutocomplete(e) {
     const val = e.target.value.toLowerCase().trim(); const resBox = document.getElementById("autocomplete-results");
-    
     db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (ev) => {
         const members = ev.target.result; let matches = members;
         if (val.length > 0) matches = members.filter(m => String(m.phone).toLowerCase().includes(val) || String(m.name).toLowerCase().includes(val));
@@ -299,19 +376,7 @@ function handleAutocomplete(e) {
         } else { resBox.classList.add("hidden"); }
     };
 }
-
 document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);document.getElementById("cust-name").addEventListener("input", handleAutocomplete);document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);document.getElementById("cust-name").addEventListener("click", handleAutocomplete);document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);document.addEventListener('click', (e) => { if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { document.getElementById('autocomplete-results').classList.add('hidden'); } });
-
-window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, dbPiutang, firstOutlet, recentOutlets) {
-    document.getElementById("autocomplete-results").classList.add("hidden");
-    let lockedQueue = isCustomerLocked(phone);
-    if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan atau batalkan pesanan di sana terlebih dahulu untuk mencegah konflik poin.`); }
-
-    document.getElementById("cust-phone").value = phone; document.getElementById("cust-name").value = name; 
-    let wallet = {}; try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
-    activeCustomerProfile = { phone: phone, name: name, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed, piutang: dbPiutang, firstOutlet: firstOutlet, recentOutlets: recentOutlets };
-    updatePromoBanner(activeCustomerProfile);
-};
 
 function saveMemberToDB(phone, name, wallet, bottles, piutang, fOut, rOut) {
     if(!phone || phone === "-") return; 
@@ -537,45 +602,98 @@ async function finalizeOrder(shouldPrint, isDebt) {
     currentCart.forEach(cartItem => { storeMenu.get(cartItem.itemId).onsuccess = (ev) => { const menuItem = ev.target.result; if (menuItem && menuItem.trackStock) { menuItem.currentStock = Math.max(0, menuItem.currentStock - cartItem.qty); storeMenu.put(menuItem); } }; });
 
     db.transaction(["orders"], "readwrite").objectStore("orders").add(orderPayload);
-    if (shouldPrint) { await buildPrintableReceipt(orderPayload.orderId, orderPayload, totalAccounted, debtAmount, payString, updatedWallet); window.print(); }
+    
+    // MODULE 3 & 4: Trigger BLE ESC/POS Print Sequence
+    if (shouldPrint) {
+        const payloadBytes = await buildEscPosReceipt(orderPayload.orderId, orderPayload, totalAccounted, debtAmount, payString, updatedWallet);
+        await printViaBluetooth(payloadBytes);
+    }
+    
     closeReview(); lockMenu(); renderProductGrid(); runBackgroundSync();
 }
 
 async function getDynamicSettings() { return new Promise(res => { let req = db.transaction(["settings"], "readonly").objectStore("settings").getAll(); req.onsuccess = e => { let s = {}; e.target.result.forEach(row => s[row.key] = row.value); res(s); }; }); }
 
-async function buildPrintableReceipt(orderId, order, deposit, debt, payMethod, updatedWallet) {
-    const settings = await getDynamicSettings();
-    const h1 = settings["Header_1"] || "PURE WATER"; const h2 = settings["Header_2"] || ""; let h3 = settings["Header_3"] || ""; if (settings["Header_3_" + order.outlet]) h3 = settings["Header_3_" + order.outlet]; 
-    const f1 = settings["Footer_1"] || "TERIMA KASIH"; const f2 = settings["Footer_2"] || ""; let f3 = settings["Footer_3"] || ""; if (settings["Footer_3_" + order.outlet]) f3 = settings["Footer_3_" + order.outlet]; 
+// MODULE 4: ESC/POS Receipt Layout Engine (Math-Based Alignment)
+function formatLine(leftText, rightText, isBig) {
+    const maxChars = isBig ? 16 : 32;
+    const totalLen = leftText.length + rightText.length;
+    if (totalLen <= maxChars) {
+        const spaces = maxChars - totalLen;
+        return leftText + " ".repeat(spaces) + rightText + "\n";
+    } else {
+        const rightSpaces = maxChars - rightText.length;
+        return leftText + "\n" + " ".repeat(Math.max(0, rightSpaces)) + rightText + "\n";
+    }
+}
 
-    const printArea = document.getElementById("printable-area"); const dateStr = new Date(order.timestamp).toLocaleString('id-ID');
+async function buildEscPosReceipt(orderId, order, deposit, debt, payMethod, updatedWallet) {
+    const settings = await getDynamicSettings();
+    const h1 = settings["Header_1"] || "PURE WATER"; 
+    const h2 = settings["Header_2"] || ""; 
+    let h3 = settings["Header_3"] || ""; if (settings["Header_3_" + order.outlet]) h3 = settings["Header_3_" + order.outlet]; 
+    const f1 = settings["Footer_1"] || "TERIMA KASIH"; 
+    const f2 = settings["Footer_2"] || ""; 
+    let f3 = settings["Footer_3"] || ""; if (settings["Footer_3_" + order.outlet]) f3 = settings["Footer_3_" + order.outlet]; 
+
+    const dateStr = new Date(order.timestamp).toLocaleString('id-ID');
     
-    let itemsHtml = "";
-    order.items.forEach(item => { const lineTotal = item.qty * item.originalPrice; itemsHtml += `<div style="display:flex; justify-content:space-between; margin-bottom: 2px;"><span>${item.qty}x ${item.name}</span><span>${lineTotal.toLocaleString('id-ID')}</span></div>`; });
+    let receipt = "";
     
-    let poinHtml = "";
+    // ESC/POS Hex Commands
+    const initCmd = "\x1B\x40"; 
+    const centerAlign = "\x1B\x61\x01";
+    const leftAlign = "\x1B\x61\x00";
+    const boldOn = "\x1B\x45\x01";
+    const boldOff = "\x1B\x45\x00";
+    const bigText = "\x1B\x21\x11";
+    const normalText = "\x1B\x21\x00";
+
+    receipt += initCmd;
+    
+    // Header
+    receipt += centerAlign + boldOn + bigText + h1 + "\n" + normalText + boldOff;
+    if(h2) receipt += h2 + "\n";
+    if(h3) receipt += h3 + "\n";
+    receipt += dateStr + "\n";
+    
+    // Details
+    receipt += leftAlign + "-".repeat(32) + "\n";
+    receipt += `Nota: ${orderId}\nNama: ${order.customerName}\nKasir: ${currentCashier}\n`;
+    receipt += "-".repeat(32) + "\n";
+
+    // Items Loop
+    order.items.forEach(item => { 
+        const lineTotal = (item.qty * item.originalPrice).toLocaleString('id-ID'); 
+        receipt += formatLine(`${item.qty}x ${item.name}`, lineTotal, false); 
+    });
+
+    receipt += "-".repeat(32) + "\n";
+    
+    // Totals
+    receipt += formatLine("Subtotal:", "Rp " + order.subtotal.toLocaleString('id-ID'), false);
+    receipt += boldOn + formatLine("TOTAL:", "Rp " + order.grandTotal.toLocaleString('id-ID'), false) + boldOff;
+    receipt += formatLine(`Tercatat (${payMethod}):`, "Rp " + deposit.toLocaleString('id-ID'), false);
+    if (debt > 0) { receipt += boldOn + formatLine("PIUTANG:", "Rp " + debt.toLocaleString('id-ID'), false) + boldOff; }
+    
+    // Loyalty
     if (window.loyaltyEnabled && order.customerPhone && order.customerPhone !== "-") {
-        let lines = []; let loyaltyItems = globalMenuData.filter(m => m.loyaltyThreshold > 0);
-        loyaltyItems.forEach(item => { let data = updatedWallet[item.name] || {points: 0, free: 0}; lines.push(`<strong>${item.name}</strong><br>Poin: ${data.points}/${item.loyaltyThreshold} | Gratis: ${data.free}`); });
-        if (lines.length > 0) { poinHtml = `<div style="margin-top:10px; padding-top:5px; border-top:1px dashed #000; font-size:11px; text-align:center;"><strong>-- INFO POIN PURE --</strong><br>${lines.join('<br>')}</div>`; }
+        receipt += "\n" + centerAlign + "-- INFO POIN --\n" + leftAlign;
+        let loyaltyItems = globalMenuData.filter(m => m.loyaltyThreshold > 0);
+        loyaltyItems.forEach(item => { 
+            let data = updatedWallet[item.name] || {points: 0, free: 0}; 
+            receipt += formatLine(item.name, `Poin:${data.points} | Free:${data.free}`, false); 
+        });
     }
 
-    printArea.innerHTML = `
-        <div style="text-align:center; margin-bottom:10px;"><h2 style="margin:0;">${h1}</h2>${h2 ? `<div style="font-size:10px;">${h2}</div>` : ''}${h3 ? `<div style="font-size:10px;">${h3}</div>` : ''}<div style="font-size:10px; margin-top:5px;">${dateStr}</div></div>
-        <div style="border-top:1px dashed #000; border-bottom:1px dashed #000; padding:5px 0; margin-bottom:5px; font-size: 11px;"><div>Nota: ${orderId}</div><div>Pelanggan: ${order.customerName}</div><div>Kasir: ${currentCashier}</div></div>
-        ${itemsHtml}
-        <div style="border-top:1px dashed #000; margin-top:10px; padding-top:5px;">
-            <div style="display:flex; justify-content:space-between; font-size:11px;"><span>Subtotal:</span><span>Rp ${order.subtotal.toLocaleString('id-ID')}</span></div>
-            <div style="display:flex; justify-content:space-between; font-weight:bold; font-size:14px; margin-top:5px; border-bottom: 1px solid #000; padding-bottom: 5px;"><span>TOTAL:</span><span>Rp ${order.grandTotal.toLocaleString('id-ID')}</span></div>
-        </div>
-        <div style="margin-top:5px; font-size:11px;">
-            <div style="display:flex; justify-content:space-between;"><span>Tercatat (${payMethod}):</span><span>Rp ${deposit.toLocaleString('id-ID')}</span></div>
-            ${debt > 0 ? `<div style="display:flex; justify-content:space-between; color:#c0392b; margin-top:2px;"><span>PIUTANG:</span><span>Rp ${debt.toLocaleString('id-ID')}</span></div>` : ''}
-            <div style="display:flex; justify-content:space-between; font-weight:bold; margin-top: 5px;"><span>STATUS:</span><span>${debt > 0 ? 'HUTANG' : 'LUNAS'}</span></div>
-        </div>
-        ${poinHtml}
-        <div style="text-align:center; margin-top:15px; font-weight:bold; font-size: 12px;">${f1}</div>${f2 ? `<div style="text-align:center; margin-top:2px; font-size: 10px;">${f2}</div>` : ''}${f3 ? `<div style="text-align:center; margin-top:2px; font-size: 10px;">${f3}</div>` : ''}
-    `;
+    // Footer
+    receipt += "\n" + centerAlign + boldOn + f1 + "\n" + normalText + boldOff;
+    if(f2) receipt += f2 + "\n";
+    if(f3) receipt += f3 + "\n";
+    
+    receipt += "\n\n\n\n\n"; // Paper feed buffer
+
+    return new TextEncoder().encode(receipt);
 }
 
 window.openInboundModal = function() {
@@ -676,12 +794,16 @@ function submitRemoteVoid() {
 async function confirmAdminVoid() {
     const pinInput = document.getElementById("admin-void-pin").value.trim(); 
     if (!pinInput) return alert("Harap masukkan PIN Admin.");
-    const settings = await getDynamicSettings(); const masterPin = String(settings["Master_PIN"]).trim(); 
-    const isMaster = (pinInput === masterPin);
+    
+    // Hash input before comparing with hashed Master_PIN from backend
+    const hashedPinInput = await hashPIN(pinInput);
+    const settings = await getDynamicSettings(); 
+    const masterPinHashed = String(settings["Master_PIN"]).trim(); 
+    const isMaster = (hashedPinInput === masterPinHashed);
     
     db.transaction(["staff"], "readonly").objectStore("staff").getAll().onsuccess = (e) => {
         const staffList = e.target.result;
-        const staff = staffList.find(s => String(s.pin).trim() === pinInput);
+        const staff = staffList.find(s => String(s.pin).trim() === hashedPinInput);
         const isAdmin = (staff && staff.role.toLowerCase() === 'admin');
         
         if (isMaster || isAdmin) {
@@ -933,9 +1055,6 @@ async function runBackgroundSync() {
 
 window.onload = async () => { 
     await initDB(); 
-    
-    // Automatically triggers Fast Sync so PINs unlock instantly on load
     await syncMasterData(); 
-    
     window.setInterval(runBackgroundSync, 15000); 
 };
