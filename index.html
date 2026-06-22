@@ -25,9 +25,19 @@
         #menu-section { flex: 6; display: flex; flex-direction: column; border-right: 2px solid #ddd; background: #fff; overflow: hidden; position: relative;}
         
         #command-bar { background: #fff; padding: 15px; border-bottom: 2px solid #ecf0f1; position: relative; z-index: 30;}
-        #customer-input-section { display: flex; width: 100%; gap: 10px; align-items: center; }
-        .input-group { flex: 1; display: flex; gap: 10px; }
+        #customer-input-section { display: flex; width: 100%; gap: 10px; align-items: flex-start; }
+        
+        /* ⚡ NEW AUTOCOMPLETE WRAPPER STYLES ⚡ */
+        .autocomplete-wrapper { position: relative; flex: 1.5; }
+        .input-group { display: flex; gap: 10px; width: 100%; }
         .input-group input { flex: 1; padding: 12px; font-size: 16px; border: 2px solid #bdc3c7; border-radius: 8px; min-width: 0; }
+        
+        #autocomplete-results { position: absolute; top: calc(100% + 5px); left: 0; width: 100%; background: white; border: 2px solid #bdc3c7; border-radius: 8px; max-height: 250px; overflow-y: auto; z-index: 1000; box-shadow: 0 8px 16px rgba(0,0,0,0.15); }
+        .autocomplete-item { padding: 15px; border-bottom: 1px solid #eee; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
+        .autocomplete-item:hover { background: #e8f4f8; }
+        .autocomplete-phone { font-size: 16px; font-weight: bold; color: #2c3e50; }
+        .autocomplete-name { font-size: 16px; font-weight: bold; color: #2c3e50; }
+
         .btn-action-group { display: flex; gap: 10px; flex: 1; }
         .btn-action-group button { flex: 1; padding: 12px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 14px; }
         
@@ -36,13 +46,6 @@
         
         #promo-indicator-banner { background: #fdf2e9; color: #d35400; font-size: 14px; padding: 8px 12px; border-radius: 6px; font-weight: bold; width: 100%; border: 1px dashed #e67e22; }
         #piutang-indicator-banner { background: #f8d7da; color: #721c24; font-size: 14px; padding: 8px 12px; border-radius: 6px; font-weight: bold; width: 100%; border: 1px solid #f5c6cb; display:flex; justify-content:space-between; align-items:center; }
-
-        .autocomplete-wrapper { position: relative; flex: 1; }
-        #autocomplete-results { position: absolute; top: 100%; left: 0; width: 100%; max-width: 500px; background: white; border: 2px solid #bdc3c7; border-top: none; border-radius: 0 0 8px 8px; max-height: 250px; overflow-y: auto; z-index: 100; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
-        .autocomplete-item { padding: 15px; border-bottom: 1px solid #eee; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
-        .autocomplete-item:hover { background: #e8f4f8; }
-        .autocomplete-phone { font-size: 16px; font-weight: bold; color: #2c3e50; }
-        .autocomplete-name { font-size: 16px; font-weight: bold; color: #2c3e50; }
 
         #glass-overlay { position: absolute; top: 75px; left: 0; width: 100%; height: calc(100% - 75px); background: rgba(255,255,255,0.8); backdrop-filter: blur(5px); z-index: 20; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; transition: opacity 0.3s; padding: 20px; }
         
@@ -169,13 +172,14 @@
         <div id="main-workspace">
             <div id="menu-section">
                 <div id="command-bar">
+                    <!-- ⚡ NEW AUTOCOMPLETE STRUCTURE ⚡ -->
                     <div id="customer-input-section">
-                        <div class="input-group">
-                            <div class="autocomplete-wrapper" style="flex:1;">
-                                <input type="text" id="cust-phone" placeholder="Ketik WA atau Nama..." autocomplete="off" style="width:100%;">
-                                <div id="autocomplete-results" class="hidden"></div>
+                        <div class="autocomplete-wrapper">
+                            <div class="input-group">
+                                <input type="text" id="cust-phone" placeholder="Ketik WA atau Nama..." autocomplete="off">
+                                <input type="text" id="cust-name" placeholder="Nama Pelanggan" autocomplete="off">
                             </div>
-                            <input type="text" id="cust-name" placeholder="Nama Pelanggan" autocomplete="off" style="flex:1;">
+                            <div id="autocomplete-results" class="hidden"></div>
                         </div>
                         <div class="btn-action-group">
                             <button onclick="unlockMenu(false)" style="background:#27ae60; color:white;">Buka Menu Kasir</button>
