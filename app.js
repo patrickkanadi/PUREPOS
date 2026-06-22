@@ -365,13 +365,17 @@ function handleAutocomplete(e) {
     const val = e.target.value.toLowerCase().trim(); 
     const resBox = document.getElementById("autocomplete-results");
     
+    if (val.length === 0) {
+        resBox.classList.add("hidden");
+        return;
+    }
+
     db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (ev) => {
         const members = ev.target.result || []; 
-        let matches = members;
+        let matches = members.filter(m => String(m.phone).toLowerCase().includes(val) || String(m.name).toLowerCase().includes(val));
         
-        if (val.length > 0) { matches = members.filter(m => String(m.phone).toLowerCase().includes(val) || String(m.name).toLowerCase().includes(val)); }
         matches.sort((a, b) => (b.spent || 0) - (a.spent || 0));
-        matches = matches.slice(0, 15);
+        matches = matches.slice(0, 15); 
 
         if (matches.length > 0) {
             resBox.innerHTML = matches.map(m => {
@@ -391,20 +395,6 @@ function handleAutocomplete(e) {
         }
     };
 }
-
-document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);
-document.getElementById("cust-name").addEventListener("input", handleAutocomplete);
-document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);
-document.getElementById("cust-name").addEventListener("click", handleAutocomplete);
-document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);
-document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);
-
-document.addEventListener('click', (e) => { 
-    if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { 
-        const resBox = document.getElementById('autocomplete-results');
-        if(resBox) resBox.classList.add('hidden'); 
-    } 
-});
 
 window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, dbPiutang, firstOutlet, recentOutlets) {
     document.getElementById("autocomplete-results").classList.add("hidden");
@@ -896,14 +886,6 @@ window.showOrderDetail = function(orderId) {
         if ((o.debtAmount || 0) > 0) { html += `<div style="display:flex; justify-content:space-between; color:#c0392b; margin-top:5px;"><span><strong>Hutang:</strong></span><span><strong>Rp ${o.debtAmount.toLocaleString('id-ID')}</strong></span></div>`; }
         document.getElementById("order-detail-container").innerHTML = html; document.getElementById("order-detail-modal").classList.remove("hidden");
     };
-}
-
-window.reprintOrder = async function(orderId) {
-    const order = await new Promise(res => db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = e => res(e.target.result));
-    if (!order) return alert("Order tidak ditemukan di memori tablet lokal.");
-    const deposit = (order.cashAmount || 0) + (order.qrisAmount || 0) + (order.transferAmount || 0) + (order.freeAmount || 0);
-    const payloadBytes = await buildEscPosReceipt(order.orderId, order, deposit, (order.debtAmount || 0), order.paymentMethod, {});
-    await printViaBluetooth(payloadBytes);
 }
 
 function requestVoid(type, id) { currentVoidTarget = { type, id }; document.getElementById("admin-void-pin").value = ""; document.getElementById("admin-void-modal").classList.remove("hidden"); }
