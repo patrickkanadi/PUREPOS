@@ -201,111 +201,6 @@ async function printViaBluetooth(payloadUint8Array) {
     } catch (error) { console.error("Print Error:", error); alert("Print Gagal: " + error.message); return false; }
 }
 
-window.switchCart = function(index) {
-    posSessions[activeSessionIndex].customer = activeCustomerProfile; activeSessionIndex = index; currentCart = posSessions[activeSessionIndex].cart; activeCustomerProfile = posSessions[activeSessionIndex].customer;
-    document.querySelectorAll(".cart-tab").forEach((btn, i) => {
-        if (i === index) { btn.classList.add("active"); btn.style.background = "#2c3e50"; btn.style.color = "white"; btn.style.borderTop = "3px solid #3498db"; } 
-        else { btn.classList.remove("active"); btn.style.background = "#34495e"; btn.style.color = "#bdc3c7"; btn.style.borderTop = "none"; }
-    });
-    renderCart();
-    
-    if (activeCustomerProfile) {
-        document.getElementById("cust-name").value = activeCustomerProfile.name; document.getElementById("cust-phone").value = activeCustomerProfile.phone || "";
-        document.getElementById("active-cust-name").innerText = activeCustomerProfile.name; document.getElementById("active-cust-phone").innerText = activeCustomerProfile.phone !== "-" ? `(${activeCustomerProfile.phone})` : "";
-        document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
-        isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; document.getElementById("glass-overlay").style.pointerEvents = "none";
-        updatePromoBanner(activeCustomerProfile);
-    } else {
-        document.getElementById("customer-input-section").classList.remove("hidden"); document.getElementById("active-customer-banner").classList.add("hidden");
-        document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
-        document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = ""; 
-        const promoBanner = document.getElementById("promo-indicator-banner"); if(promoBanner) promoBanner.classList.add("hidden");
-        const piutangBanner = document.getElementById("piutang-indicator-banner"); if(piutangBanner) piutangBanner.classList.add("hidden");
-        isMenuLocked = true;
-    }
-}
-
-function isCustomerLocked(phone) {
-    if (!phone || phone === "-") return false;
-    for (let i = 0; i < posSessions.length; i++) { if (i !== activeSessionIndex && posSessions[i].customer && posSessions[i].customer.phone === phone) { return i + 1; } }
-    return false;
-}
-
-function updatePromoBanner(member) {
-    const promoBanner = document.getElementById("promo-indicator-banner");
-    const piutangBanner = document.getElementById("piutang-indicator-banner");
-
-    if (member && member.piutang > 0) {
-        piutangBanner.innerHTML = `<span>⚠️ <strong>Total Piutang:</strong> Rp ${member.piutang.toLocaleString('id-ID')}</span> <button onclick="openPiutangModal()" style="padding:5px 10px; background:#c0392b; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Lunasi Piutang</button>`;
-        piutangBanner.classList.remove("hidden");
-    } else { if(piutangBanner) piutangBanner.classList.add("hidden"); }
-
-    if (!window.loyaltyEnabled || !promoBanner) { if(promoBanner) promoBanner.classList.add("hidden"); return; }
-
-    let pointSummary = []; let wallet = member ? (member.wallet || {}) : {};
-    let loyaltyItems = globalMenuData.filter(m => m.loyaltyThreshold > 0);
-    loyaltyItems.forEach(item => {
-        let w = wallet[item.name] || { points: 0, free: 0 };
-        pointSummary.push(`💧 <strong>${item.name}</strong>: ${w.points}/${item.loyaltyThreshold} Poin${w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : ''}`);
-    });
-    for (let itemName in wallet) {
-        if (!loyaltyItems.find(i => i.name === itemName)) {
-             let w = wallet[itemName]; pointSummary.push(`💧 <strong>${itemName}</strong>: ${w.points} Poin${w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : ''}`);
-        }
-    }
-    if (pointSummary.length > 0) { promoBanner.innerHTML = `🌟 <strong>Info Saldo Poin:</strong><br>` + pointSummary.join('<br>'); promoBanner.classList.remove("hidden"); } 
-    else { promoBanner.innerHTML = `🌟 Promo Loyalty tidak ada barang aktif.`; promoBanner.classList.remove("hidden"); }
-}
-
-function lockMenu() {
-    isMenuLocked = true; activeCustomerProfile = null; posSessions[activeSessionIndex].customer = null; posSessions[activeSessionIndex].cart = []; currentCart = posSessions[activeSessionIndex].cart;
-    document.getElementById("customer-input-section").classList.remove("hidden"); document.getElementById("active-customer-banner").classList.add("hidden");
-    document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
-    document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = ""; 
-    renderCart();
-    const promoBanner = document.getElementById("promo-indicator-banner"); if(promoBanner) promoBanner.classList.add("hidden");
-    const piutangBanner = document.getElementById("piutang-indicator-banner"); if(piutangBanner) piutangBanner.classList.add("hidden");
-}
-
-function unlockMenu(isGuest) {
-    let phone = "-"; let name = "Walk-in";
-    const promoBanner = document.getElementById("promo-indicator-banner"); const piutangBanner = document.getElementById("piutang-indicator-banner");
-
-    if (isGuest) { 
-        document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = "Walk-in"; activeCustomerProfile = null; 
-        document.getElementById("active-cust-name").innerText = name; document.getElementById("active-cust-phone").innerText = "";
-        document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
-        if(promoBanner) promoBanner.classList.add("hidden"); if(piutangBanner) piutangBanner.classList.add("hidden");
-        isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
-    } else {
-        phone = document.getElementById("cust-phone").value.trim(); name = document.getElementById("cust-name").value.trim() || "Pelanggan";
-        if (phone.length < 5) return alert("Harap masukkan Nomor WhatsApp yang valid terlebih dahulu.");
-
-        let searchPhone = phone.replace(/\D/g, ''); if (searchPhone.startsWith('62')) searchPhone = '0' + searchPhone.substring(2);
-        if (searchPhone.length > 0 && !searchPhone.startsWith('0')) searchPhone = '0' + searchPhone;
-
-        let lockedQueue = isCustomerLocked(searchPhone);
-        if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan atau batalkan pesanan di sana terlebih dahulu untuk mencegah konflik poin.`); }
-
-        const tx = db.transaction(["members"], "readonly");
-        tx.objectStore("members").get(searchPhone).onsuccess = (ev) => {
-            const member = ev.target.result;
-            if (member) { activeCustomerProfile = member; name = member.name; document.getElementById("cust-name").value = name; updatePromoBanner(member); } 
-            else { activeCustomerProfile = { phone: searchPhone, name: name, wallet: {}, bottlesBorrowed: 0, piutang: 0, firstOutlet: currentOutlet, recentOutlets: currentOutlet }; updatePromoBanner(activeCustomerProfile); }
-
-            document.getElementById("active-cust-name").innerText = name; document.getElementById("active-cust-phone").innerText = `(${searchPhone})`;
-            document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
-            isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
-        };
-    }
-}
-
-async function manualPushSync() {
-    if (!navigator.onLine) return alert("Anda sedang offline!");
-    document.getElementById("network-text").innerText = "Mengirim Data..."; document.getElementById("network-dot").style.backgroundColor = "#f39c12";
-    await runBackgroundSync(); document.getElementById("network-text").innerText = "Menarik Data..."; await syncMasterData(); alert("Sinkronisasi Database Berhasil!");
-}
-
 async function syncMasterData() {
     if (!navigator.onLine) {
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Mode Offline";
@@ -315,12 +210,13 @@ async function syncMasterData() {
     try {
         if (!db) { await initDB(); }
 
+        // PHASE 1: PINs and Settings
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron PIN (Cepat)...";
         if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
 
         const authResponse = await fetch(API_URL + "?type=auth_only", { mode: 'cors', redirect: 'follow' });
         const authContentType = authResponse.headers.get("content-type");
-        if (authContentType && authContentType.includes("text/html")) throw new Error("Akses Ditolak Google.");
+        if (authContentType && authContentType.includes("text/html")) throw new Error("Akses Ditolak Google pada Phase 1.");
         
         const authResult = await authResponse.json();
         if (authResult.status === "Success") {
@@ -331,8 +227,13 @@ async function syncMasterData() {
             if(selectBox) { selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); }
         }
 
+        // PHASE 2: Heavy Member Data (Now protected with HTML Guard)
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Download Data Member...";
         const fullResponse = await fetch(API_URL, { mode: 'cors', redirect: 'follow' });
+        
+        const fullContentType = fullResponse.headers.get("content-type");
+        if (fullContentType && fullContentType.includes("text/html")) throw new Error("Akses Ditolak Google pada Phase 2 (Members).");
+
         const fullResult = await fullResponse.json();
         
         if (fullResult.status === "Success") {
@@ -360,29 +261,37 @@ async function syncMasterData() {
     }
 }
 
+// ⚡ COMPLETELY REBUILT AUTOCOMPLETE ENGINE ⚡
 function handleAutocomplete(e) {
     if (!db) return; 
     const val = e.target.value.toLowerCase().trim(); 
     const resBox = document.getElementById("autocomplete-results");
     
-    if (val.length === 0) {
-        resBox.classList.add("hidden");
-        return;
-    }
+    // We REMOVED the "val.length === 0" block so it shows instantly on click!
 
     db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (ev) => {
         const members = ev.target.result || []; 
-        let matches = members.filter(m => String(m.phone).toLowerCase().includes(val) || String(m.name).toLowerCase().includes(val));
+        let matches = members;
         
+        // Filter only if they type something. Otherwise, show everyone.
+        if (val.length > 0) { 
+            matches = members.filter(m => String(m.phone).toLowerCase().includes(val) || String(m.name).toLowerCase().includes(val)); 
+        }
+        
+        // Sort by highest spender and slice to prevent browser freeze
         matches.sort((a, b) => (b.spent || 0) - (a.spent || 0));
-        matches = matches.slice(0, 15); 
+        matches = matches.slice(0, 15);
 
         if (matches.length > 0) {
             resBox.innerHTML = matches.map(m => {
-                let wStr = JSON.stringify(m.wallet || {}).replace(/"/g, '&quot;'); 
-                let nameStr = String(m.name || "").replace(/'/g, "\\'");
-                let fOut = m.firstOutlet || ""; let rOut = m.recentOutlets || "";
-                return `<div class="autocomplete-item" onclick="selectMember('${m.phone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0}, '${fOut}', '${rOut}')">
+                // RIGOROUS SANITIZATION: Escape quotes to prevent HTML injection crashes
+                let wStr = JSON.stringify(m.wallet || {}).replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
+                let nameStr = String(m.name || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                let fOut = String(m.firstOutlet || "").replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
+                let rOut = String(m.recentOutlets || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                let safePhone = String(m.phone || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
+
+                return `<div class="autocomplete-item" onclick="selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0}, '${fOut}', '${rOut}')">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div class="autocomplete-name">${m.name}</div><div class="autocomplete-phone" style="font-size:14px; color:#7f8c8d;">${m.phone}</div>
                     </div>
@@ -399,7 +308,7 @@ function handleAutocomplete(e) {
 window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, dbPiutang, firstOutlet, recentOutlets) {
     document.getElementById("autocomplete-results").classList.add("hidden");
     let lockedQueue = isCustomerLocked(phone);
-    if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan atau batalkan pesanan di sana terlebih dahulu untuk mencegah konflik poin.`); }
+    if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan pesanan di sana terlebih dahulu.`); }
 
     document.getElementById("cust-phone").value = phone; document.getElementById("cust-name").value = name; 
     let wallet = {}; try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
@@ -541,6 +450,111 @@ window.calculateRemaining = function() {
 
 function closeReview() { document.getElementById("review-modal").classList.add("hidden"); }
 
+window.switchCart = function(index) {
+    posSessions[activeSessionIndex].customer = activeCustomerProfile; activeSessionIndex = index; currentCart = posSessions[activeSessionIndex].cart; activeCustomerProfile = posSessions[activeSessionIndex].customer;
+    document.querySelectorAll(".cart-tab").forEach((btn, i) => {
+        if (i === index) { btn.classList.add("active"); btn.style.background = "#2c3e50"; btn.style.color = "white"; btn.style.borderTop = "3px solid #3498db"; } 
+        else { btn.classList.remove("active"); btn.style.background = "#34495e"; btn.style.color = "#bdc3c7"; btn.style.borderTop = "none"; }
+    });
+    renderCart();
+    
+    if (activeCustomerProfile) {
+        document.getElementById("cust-name").value = activeCustomerProfile.name; document.getElementById("cust-phone").value = activeCustomerProfile.phone || "";
+        document.getElementById("active-cust-name").innerText = activeCustomerProfile.name; document.getElementById("active-cust-phone").innerText = activeCustomerProfile.phone !== "-" ? `(${activeCustomerProfile.phone})` : "";
+        document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
+        isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; document.getElementById("glass-overlay").style.pointerEvents = "none";
+        updatePromoBanner(activeCustomerProfile);
+    } else {
+        document.getElementById("customer-input-section").classList.remove("hidden"); document.getElementById("active-customer-banner").classList.add("hidden");
+        document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
+        document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = ""; 
+        const promoBanner = document.getElementById("promo-indicator-banner"); if(promoBanner) promoBanner.classList.add("hidden");
+        const piutangBanner = document.getElementById("piutang-indicator-banner"); if(piutangBanner) piutangBanner.classList.add("hidden");
+        isMenuLocked = true;
+    }
+}
+
+function isCustomerLocked(phone) {
+    if (!phone || phone === "-") return false;
+    for (let i = 0; i < posSessions.length; i++) { if (i !== activeSessionIndex && posSessions[i].customer && posSessions[i].customer.phone === phone) { return i + 1; } }
+    return false;
+}
+
+function updatePromoBanner(member) {
+    const promoBanner = document.getElementById("promo-indicator-banner");
+    const piutangBanner = document.getElementById("piutang-indicator-banner");
+
+    if (member && member.piutang > 0) {
+        piutangBanner.innerHTML = `<span>⚠️ <strong>Total Piutang:</strong> Rp ${member.piutang.toLocaleString('id-ID')}</span> <button onclick="openPiutangModal()" style="padding:5px 10px; background:#c0392b; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Lunasi Piutang</button>`;
+        piutangBanner.classList.remove("hidden");
+    } else { if(piutangBanner) piutangBanner.classList.add("hidden"); }
+
+    if (!window.loyaltyEnabled || !promoBanner) { if(promoBanner) promoBanner.classList.add("hidden"); return; }
+
+    let pointSummary = []; let wallet = member ? (member.wallet || {}) : {};
+    let loyaltyItems = globalMenuData.filter(m => m.loyaltyThreshold > 0);
+    loyaltyItems.forEach(item => {
+        let w = wallet[item.name] || { points: 0, free: 0 };
+        pointSummary.push(`💧 <strong>${item.name}</strong>: ${w.points}/${item.loyaltyThreshold} Poin${w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : ''}`);
+    });
+    for (let itemName in wallet) {
+        if (!loyaltyItems.find(i => i.name === itemName)) {
+             let w = wallet[itemName]; pointSummary.push(`💧 <strong>${itemName}</strong>: ${w.points} Poin${w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : ''}`);
+        }
+    }
+    if (pointSummary.length > 0) { promoBanner.innerHTML = `🌟 <strong>Info Saldo Poin:</strong><br>` + pointSummary.join('<br>'); promoBanner.classList.remove("hidden"); } 
+    else { promoBanner.innerHTML = `🌟 Promo Loyalty tidak ada barang aktif.`; promoBanner.classList.remove("hidden"); }
+}
+
+function lockMenu() {
+    isMenuLocked = true; activeCustomerProfile = null; posSessions[activeSessionIndex].customer = null; posSessions[activeSessionIndex].cart = []; currentCart = posSessions[activeSessionIndex].cart;
+    document.getElementById("customer-input-section").classList.remove("hidden"); document.getElementById("active-customer-banner").classList.add("hidden");
+    document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
+    document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = ""; 
+    renderCart();
+    const promoBanner = document.getElementById("promo-indicator-banner"); if(promoBanner) promoBanner.classList.add("hidden");
+    const piutangBanner = document.getElementById("piutang-indicator-banner"); if(piutangBanner) piutangBanner.classList.add("hidden");
+}
+
+function unlockMenu(isGuest) {
+    let phone = "-"; let name = "Walk-in";
+    const promoBanner = document.getElementById("promo-indicator-banner"); const piutangBanner = document.getElementById("piutang-indicator-banner");
+
+    if (isGuest) { 
+        document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = "Walk-in"; activeCustomerProfile = null; 
+        document.getElementById("active-cust-name").innerText = name; document.getElementById("active-cust-phone").innerText = "";
+        document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
+        if(promoBanner) promoBanner.classList.add("hidden"); if(piutangBanner) piutangBanner.classList.add("hidden");
+        isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
+    } else {
+        phone = document.getElementById("cust-phone").value.trim(); name = document.getElementById("cust-name").value.trim() || "Pelanggan";
+        if (phone.length < 5) return alert("Harap masukkan Nomor WhatsApp yang valid terlebih dahulu.");
+
+        let searchPhone = phone.replace(/\D/g, ''); if (searchPhone.startsWith('62')) searchPhone = '0' + searchPhone.substring(2);
+        if (searchPhone.length > 0 && !searchPhone.startsWith('0')) searchPhone = '0' + searchPhone;
+
+        let lockedQueue = isCustomerLocked(searchPhone);
+        if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan atau batalkan pesanan di sana terlebih dahulu untuk mencegah konflik poin.`); }
+
+        const tx = db.transaction(["members"], "readonly");
+        tx.objectStore("members").get(searchPhone).onsuccess = (ev) => {
+            const member = ev.target.result;
+            if (member) { activeCustomerProfile = member; name = member.name; document.getElementById("cust-name").value = name; updatePromoBanner(member); } 
+            else { activeCustomerProfile = { phone: searchPhone, name: name, wallet: {}, bottlesBorrowed: 0, piutang: 0, firstOutlet: currentOutlet, recentOutlets: currentOutlet }; updatePromoBanner(activeCustomerProfile); }
+
+            document.getElementById("active-cust-name").innerText = name; document.getElementById("active-cust-phone").innerText = `(${searchPhone})`;
+            document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
+            isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
+        };
+    }
+}
+
+async function manualPushSync() {
+    if (!navigator.onLine) return alert("Anda sedang offline!");
+    document.getElementById("network-text").innerText = "Mengirim Data..."; document.getElementById("network-dot").style.backgroundColor = "#f39c12";
+    await runBackgroundSync(); document.getElementById("network-text").innerText = "Menarik Data..."; await syncMasterData(); alert("Sinkronisasi Database Berhasil!");
+}
+
 window.openBukuPiutang = function() {
     document.getElementById('buku-piutang-modal').classList.remove('hidden');
     document.getElementById('search-piutang').value = "";
@@ -553,7 +567,7 @@ window.renderPiutangList = function() {
     
     db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
         let members = e.target.result.filter(m => m.piutang > 0);
-        if (filter) members = members.filter(m => m.name.toLowerCase().includes(filter) || m.phone.includes(filter));
+        if (filter) members = members.filter(m => String(m.name).toLowerCase().includes(filter) || String(m.phone).includes(filter));
         
         if (members.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Tidak ada data piutang ditemukan.</div>`; return; }
         
@@ -619,7 +633,7 @@ window.submitPiutang = function() {
                 o.debtAmount = Math.max(0, (o.debtAmount || 0) - payAmount);
                 if (o.debtAmount === 0 && String(o.paymentMethod).includes("Piutang")) {
                     o.paymentMethod = String(o.paymentMethod).replace("Piutang", "Lunas ("+method+")");
-                } else if (o.debtAmount > 0 && o.paymentMethod === "Piutang") {
+                } else if (o.debtAmount > 0 && String(o.paymentMethod) === "Piutang") {
                     o.paymentMethod = "Piutang (Sebagian)";
                 }
                 o.syncStatus = "Pending"; db.transaction(["orders"], "readwrite").objectStore("orders").put(o);
@@ -1171,6 +1185,8 @@ async function runBackgroundSync() {
 window.onload = async () => { 
     document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);
     document.getElementById("cust-name").addEventListener("input", handleAutocomplete);
+    
+    // We bind to 'click' and 'focus' so clicking an empty box triggers it instantly
     document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);
     document.getElementById("cust-name").addEventListener("click", handleAutocomplete);
     document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);
