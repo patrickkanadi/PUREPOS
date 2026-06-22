@@ -91,7 +91,7 @@ async function checkAutoCloseShifts() {
 }
 
 async function forceCloseShift(shift) {
-    let tCust = 0, tOrders = 0, tOmset = 0, tCash = 0, tQris = 0, tTransfer = 0, tFree = 0, tExpense = 0, tPiutangGiven = 0, tPiutangPaid = 0;
+    let tCust = 0, tOrders = 0, tOmset = 0, tCash = 0, tQris = 0, tTransfer = 0, tFree = 0, tExpense = 0, tPiutangGiven = 0, tPiutangPaidCash = 0;
     let foodSummary = {};
     
     const tx = db.transaction(["orders", "expenses", "bayar_piutang"], "readonly");
@@ -107,15 +107,15 @@ async function forceCloseShift(shift) {
     });
     
     expenses.filter(ex => ex.shiftId === shift.shiftId && ex.status === "Active").forEach(ex => { tExpense += (ex.amount || 0); });
-    piutangs.filter(bp => bp.shiftId === shift.shiftId).forEach(bp => { tPiutangPaid += (bp.amountPaid || 0); });
+    piutangs.filter(bp => bp.shiftId === shift.shiftId).forEach(bp => { tPiutangPaidCash += (bp.cashAmount || 0); });
     
-    let liveDrawer = window.outletStocks && window.outletStocks[shift.outlet] && window.outletStocks[shift.outlet]["Saldo_Laci"] ? window.outletStocks[shift.outlet]["Saldo_Laci"] : (tCash + tPiutangPaid - tExpense);
+    let liveDrawer = window.outletStocks && window.outletStocks[shift.outlet] && window.outletStocks[shift.outlet]["Saldo_Laci"] ? window.outletStocks[shift.outlet]["Saldo_Laci"] : (tCash + tPiutangPaidCash - tExpense);
     
     const shiftPayload = {
         shiftId: shift.shiftId, timestamp: getWibDate(), cashier: "SYSTEM (Auto-Close)", loginTime: shift.loginTime, logoutTime: getWibDate(), 
         totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree,
         totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, meterWater: 0, outlet: shift.outlet, syncStatus: "Pending",
-        piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaid, autoClosed: true
+        piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, autoClosed: true
     };
 
     const txWrite = db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
@@ -392,6 +392,20 @@ function handleAutocomplete(e) {
     };
 }
 
+document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);
+document.getElementById("cust-name").addEventListener("input", handleAutocomplete);
+document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);
+document.getElementById("cust-name").addEventListener("click", handleAutocomplete);
+document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);
+document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);
+
+document.addEventListener('click', (e) => { 
+    if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { 
+        const resBox = document.getElementById('autocomplete-results');
+        if(resBox) resBox.classList.add('hidden'); 
+    } 
+});
+
 window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, dbPiutang, firstOutlet, recentOutlets) {
     document.getElementById("autocomplete-results").classList.add("hidden");
     let lockedQueue = isCustomerLocked(phone);
@@ -517,7 +531,6 @@ window.recalcRedemptions = function() {
     document.getElementById("pay-free").value = totalDiscount; autoBalanceCash();
 }
 
-// ⚡ NEW AUTO-BALANCER FOR PIUTANG FIELD ⚡
 window.autoBalancePiutang = function() {
     const c = Number(document.getElementById("pay-cash").value) || 0; const q = Number(document.getElementById("pay-qris").value) || 0; const t = Number(document.getElementById("pay-transfer").value) || 0; const f = Number(document.getElementById("pay-free").value) || 0;
     const totalAccounted = c + q + t + f; const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
@@ -582,123 +595,3 @@ window.openPiutangModal = function(memberOverride) {
     document.getElementById("piutang-target-name").innerText = window.piutangTargetMember.name;
     document.getElementById("piutang-target-amount").innerText = "Rp " + window.piutangTargetMember.piutang.toLocaleString('id-ID');
     document.getElementById("piutang-pay-amount").value = window.piutangTargetMember.piutang;
-    
-    // Check if there are active "Piutang" orders for this member to overwrite
-    const orderSelect = document.getElementById("piutang-target-order"); orderSelect.innerHTML = `<option value="">-- Lunasi Saldo Global --</option>`;
-    db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        const memberOrders = e.target.result.filter(o => o.customerPhone === window.piutangTargetMember.phone && o.debtAmount > 0 && String(o.paymentMethod).includes("Piutang"));
-        memberOrders.forEach(o => { orderSelect.innerHTML += `<option value="${o.orderId}">Nota: ${o.orderId} (Rp ${o.debtAmount.toLocaleString('id-ID')})</option>`; });
-        document.getElementById('buku-piutang-modal').classList.add('hidden');
-        document.getElementById("piutang-modal").classList.remove("hidden");
-    };
-}
-
-window.submitPiutang = function() {
-    let payAmount = Number(document.getElementById("piutang-pay-amount").value); let method = document.getElementById("piutang-method").value;
-    let targetOrderId = document.getElementById("piutang-target-order").value;
-    
-    if(payAmount <= 0) return alert("Jumlah tidak valid"); 
-    if(payAmount > window.piutangTargetMember.piutang) return alert("Jumlah yang dimasukkan melebihi total piutang pelanggan!");
-    
-    let cashAmt = method === "Tunai" ? payAmount : 0;
-    
-    let payload = { payId: "BYR-" + Date.now(), timestamp: getWibDate(), customerName: window.piutangTargetMember.name, customerPhone: window.piutangTargetMember.phone, amountPaid: payAmount, paymentMethod: method, cashAmount: cashAmt, cashier: currentCashier, outlet: currentOutlet, syncStatus: "Pending", shiftId: currentShiftId, originalOrderId: targetOrderId };
-    db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").add(payload);
-    
-    window.piutangTargetMember.piutang -= payAmount;
-    saveMemberToDB(window.piutangTargetMember.phone, window.piutangTargetMember.name, window.piutangTargetMember.wallet, window.piutangTargetMember.bottlesBorrowed, window.piutangTargetMember.piutang, window.piutangTargetMember.firstOutlet, window.piutangTargetMember.recentOutlets);
-    
-    if (activeCustomerProfile && activeCustomerProfile.phone === window.piutangTargetMember.phone) { activeCustomerProfile = window.piutangTargetMember; updatePromoBanner(activeCustomerProfile); }
-    
-    // Overwrite local transaction if it was selected
-    if (targetOrderId !== "") {
-        db.transaction(["orders"], "readwrite").objectStore("orders").get(targetOrderId).onsuccess = (e) => {
-            let o = e.target.result;
-            if(o) {
-                o.paymentMethod = String(o.paymentMethod).replace("Piutang", "Lunas ("+method+")");
-                o.debtAmount = Math.max(0, o.debtAmount - payAmount);
-                o.syncStatus = "Pending";
-                db.transaction(["orders"], "readwrite").objectStore("orders").put(o);
-            }
-        };
-    }
-
-    document.getElementById("piutang-modal").classList.add("hidden"); alert("Pembayaran Piutang Berhasil Dicatat!"); runBackgroundSync();
-}
-
-async function finalizeOrder(shouldPrint) {
-    const cash = Number(document.getElementById("pay-cash").value) || 0; const qris = Number(document.getElementById("pay-qris").value) || 0;
-    const transfer = Number(document.getElementById("pay-transfer").value) || 0; const free = Number(document.getElementById("pay-free").value) || 0;
-    const debtAmount = Number(document.getElementById("pay-piutang").value) || 0;
-    const rentBottleQty = Number(document.getElementById("rent-bottle-qty").value) || 0;
-    
-    const totalAccounted = cash + qris + transfer + free + debtAmount; const remaining = window.cartGrandTotal - totalAccounted; 
-
-    let custPhoneRaw = document.getElementById("cust-phone").value.trim(); let custPhone = custPhoneRaw || "-";
-    const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
-
-    if (remaining !== 0) return alert("⚠️ PEMBAYARAN DITOLAK:\nTotal pembayaran harus persis sama dengan Total Akhir.");
-    if (debtAmount > 0 && (!custPhone || custPhone === "-")) return alert("⚠️ TRANSAKSI DITOLAK:\nAnda WAJIB memasukkan nomor WhatsApp pelanggan untuk mencatat Piutang.");
-    if (rentBottleQty > 0 && (!custPhone || custPhone === "-")) return alert("⚠️ TRANSAKSI DITOLAK:\nAnda WAJIB memasukkan nomor WhatsApp pelanggan untuk mencatat Peminjaman Galon.");
-
-    let payMethods = []; if(cash > 0) payMethods.push("Tunai"); if(qris > 0) payMethods.push("QRIS"); if(transfer > 0) payMethods.push("Trf.Bank"); if(free > 0) payMethods.push("Gratis"); if(debtAmount > 0) payMethods.push("Piutang");
-    const payString = payMethods.length > 0 ? payMethods.join("+") : "Belum Bayar";
-
-    let status = "Completed"; 
-    currentCart.forEach(i => i.redeemed = 0);
-    document.querySelectorAll(".redeem-input").forEach(input => {
-        let itemId = input.getAttribute("data-item"); let qty = Number(input.value) || 0;
-        let cartItem = currentCart.find(i => i.itemId === itemId); if (cartItem) cartItem.redeemed = qty;
-    });
-
-    let loyaltyChanges = {}; let freeItemsRedeemed = [];
-    currentCart.forEach(item => {
-        if (item.redeemed > 0) { freeItemsRedeemed.push({ name: item.name, qty: item.redeemed }); }
-        if (item.loyaltyThreshold > 0) {
-            let earned = item.qty - (item.redeemed || 0); 
-            if (earned > 0 || (item.redeemed || 0) > 0) {
-                if(!loyaltyChanges[item.name]) loyaltyChanges[item.name] = { earned: 0, redeemed: 0, threshold: item.loyaltyThreshold };
-                loyaltyChanges[item.name].earned += earned; loyaltyChanges[item.name].redeemed += (item.redeemed || 0);
-            }
-        }
-    });
-
-    let updatedWallet = {}; let newPiutang = (activeCustomerProfile ? activeCustomerProfile.piutang || 0 : 0) + debtAmount;
-    if (window.loyaltyEnabled && activeCustomerProfile) {
-        updatedWallet = JSON.parse(JSON.stringify(activeCustomerProfile.wallet || {})); 
-        for(let itemName in loyaltyChanges) {
-            if(!updatedWallet[itemName]) updatedWallet[itemName] = {points:0, free:0};
-            let c = loyaltyChanges[itemName]; updatedWallet[itemName].points += c.earned; updatedWallet[itemName].free -= c.redeemed;
-            if(c.threshold > 0) {
-                let newFree = Math.floor(updatedWallet[itemName].points / c.threshold);
-                updatedWallet[itemName].points = updatedWallet[itemName].points % c.threshold; updatedWallet[itemName].free += newFree;
-            }
-        }
-        activeCustomerProfile.piutang = newPiutang;
-        saveMemberToDB(activeCustomerProfile.phone, activeCustomerProfile.name, updatedWallet, activeCustomerProfile.bottlesBorrowed + rentBottleQty, newPiutang, activeCustomerProfile.firstOutlet, activeCustomerProfile.recentOutlets);
-    } else if (custPhone !== "-") {
-        let fOut = activeCustomerProfile ? activeCustomerProfile.firstOutlet : currentOutlet; let rOut = activeCustomerProfile ? activeCustomerProfile.recentOutlets : currentOutlet;
-        saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount, fOut, rOut);
-    }
-
-    const orderPayload = {
-        orderId: "ORD-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId,
-        customerName: custName, customerPhone: custPhone, orderStatus: status, items: currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
-        paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, debtAmount: debtAmount,
-        loyaltyChanges: loyaltyChanges, freeItemsRedeemed: freeItemsRedeemed, outlet: currentOutlet, syncStatus: "Pending" 
-    };
-
-    const txMenu = db.transaction(["menu"], "readwrite"); const storeMenu = txMenu.objectStore("menu");
-    currentCart.forEach(cartItem => { storeMenu.get(cartItem.itemId).onsuccess = (ev) => { const menuItem = ev.target.result; if (menuItem && menuItem.trackStock) { menuItem.currentStock = Math.max(0, menuItem.currentStock - cartItem.qty); storeMenu.put(menuItem); } }; });
-
-    db.transaction(["orders"], "readwrite").objectStore("orders").add(orderPayload);
-    
-    if (shouldPrint) {
-        const payloadBytes = await buildEscPosReceipt(orderPayload.orderId, orderPayload, (cash+qris+transfer+free), debtAmount, payString, updatedWallet);
-        await printViaBluetooth(payloadBytes);
-    }
-    
-    closeReview(); lockMenu(); renderProductGrid(); runBackgroundSync();
-}
-
-async function getDynamic
