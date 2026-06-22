@@ -1,6 +1,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbz797WvLnGIpjpVwdhgoy5YbSJtklutmIXlqjhvZx6LU0fVDTImgJ341NIqB7Y58kp2/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 10; // Version bump for Piutang & Auto-close schema changes
+const DB_VERSION = 10; 
 let db;
 
 let posSessions = [{ cart: [], customer: null }, { cart: [], customer: null }, { cart: [], customer: null }];
@@ -362,16 +362,29 @@ async function syncMasterData() {
     }
 }
 
+// ⚡ NEW AUTOCOMPLETE ENGINE (Freezing Prevented) ⚡
 function handleAutocomplete(e) {
-    const val = e.target.value.toLowerCase().trim(); const resBox = document.getElementById("autocomplete-results");
+    if (!db) return; 
+    const val = e.target.value.toLowerCase().trim(); 
+    const resBox = document.getElementById("autocomplete-results");
+    
+    // Instantly hide and abort if the input is totally empty to prevent rendering 5,000 blank HTML nodes
+    if (val.length === 0) {
+        resBox.classList.add("hidden");
+        return;
+    }
+
     db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (ev) => {
-        const members = ev.target.result; let matches = members;
-        if (val.length > 0) matches = members.filter(m => String(m.phone).toLowerCase().includes(val) || String(m.name).toLowerCase().includes(val));
+        const members = ev.target.result || []; 
+        let matches = members.filter(m => String(m.phone).toLowerCase().includes(val) || String(m.name).toLowerCase().includes(val));
+        
         matches.sort((a, b) => (b.spent || 0) - (a.spent || 0));
+        matches = matches.slice(0, 15); // Limit to top 15 to keep UI lightning fast
 
         if (matches.length > 0) {
             resBox.innerHTML = matches.map(m => {
-                let wStr = JSON.stringify(m.wallet || {}).replace(/"/g, '&quot;'); let nameStr = m.name.replace(/'/g, "\\'");
+                let wStr = JSON.stringify(m.wallet || {}).replace(/"/g, '&quot;'); 
+                let nameStr = (m.name || "").replace(/'/g, "\\'");
                 let fOut = m.firstOutlet || ""; let rOut = m.recentOutlets || "";
                 return `<div class="autocomplete-item" onclick="selectMember('${m.phone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0}, '${fOut}', '${rOut}')">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -383,7 +396,32 @@ function handleAutocomplete(e) {
         } else { resBox.classList.add("hidden"); }
     };
 }
-document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);document.getElementById("cust-name").addEventListener("input", handleAutocomplete);document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);document.getElementById("cust-name").addEventListener("click", handleAutocomplete);document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);document.addEventListener('click', (e) => { if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { document.getElementById('autocomplete-results').classList.add('hidden'); } });
+
+document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);
+document.getElementById("cust-name").addEventListener("input", handleAutocomplete);
+document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);
+document.getElementById("cust-name").addEventListener("click", handleAutocomplete);
+document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);
+document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);
+
+// Universal closer for clicking outside
+document.addEventListener('click', (e) => { 
+    if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { 
+        const resBox = document.getElementById('autocomplete-results');
+        if(resBox) resBox.classList.add('hidden'); 
+    } 
+});
+
+window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, dbPiutang, firstOutlet, recentOutlets) {
+    document.getElementById("autocomplete-results").classList.add("hidden");
+    let lockedQueue = isCustomerLocked(phone);
+    if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan atau batalkan pesanan di sana terlebih dahulu untuk mencegah konflik poin.`); }
+
+    document.getElementById("cust-phone").value = phone; document.getElementById("cust-name").value = name; 
+    let wallet = {}; try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
+    activeCustomerProfile = { phone: phone, name: name, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed, piutang: dbPiutang, firstOutlet: firstOutlet, recentOutlets: recentOutlets };
+    updatePromoBanner(activeCustomerProfile);
+};
 
 function saveMemberToDB(phone, name, wallet, bottles, piutang, fOut, rOut) {
     if(!phone || phone === "-") return; 
@@ -519,7 +557,6 @@ window.calculateRemaining = function() {
 
 function closeReview() { document.getElementById("review-modal").classList.add("hidden"); }
 
-// MODULE 1: BUKU PIUTANG HUB
 window.openBukuPiutang = function() {
     document.getElementById('buku-piutang-modal').classList.remove('hidden');
     document.getElementById('search-piutang').value = "";
@@ -714,7 +751,6 @@ async function buildEscPosReceipt(orderId, order, deposit, debt, payMethod, upda
     receipt += "-".repeat(32) + "\n";
     receipt += formatLine("Subtotal:", "Rp " + order.subtotal.toLocaleString('id-ID'), false);
     
-    // MODULE 2: PROMO HIGHLIGHT
     if ((order.discounts || 0) > 0 || (order.freeAmount || 0) > 0) {
         let hemat = (order.discounts || 0) + (order.freeAmount || 0);
         receipt += "\n" + centerAlign + boldOn + "*".repeat(32) + "\n";
@@ -806,7 +842,6 @@ function renderHistoryList(type) {
                 let badge = o.orderStatus === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : o.orderStatus === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">${o.orderStatus}</span>`; 
                 let piutangBadge = (o.debtAmount || 0) > 0 ? `<br><span style="font-size:12px; color:#c0392b; font-weight:bold;">⚠️ Piutang: Rp ${(o.debtAmount).toLocaleString('id-ID')}</span>` : '';
                 let btnVoid = (o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending") ? `<button onclick="requestVoid('orders', '${o.orderId}')" style="background:#e74c3c; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">Batal</button>` : '';
-                // MODULE 3: PRINT REPRINT BUTTON
                 let btnPrint = `<button onclick="reprintOrder('${o.orderId}')" style="background:#2980b9; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">🖨️ Cetak</button>`;
                 
                 container.innerHTML += `<div class="history-row"><div><strong>${o.customerName}</strong><br><small style="color:#7f8c8d;">${new Date(o.timestamp).toLocaleTimeString('id-ID')} | Rp ${o.grandTotal.toLocaleString('id-ID')}</small>${piutangBadge}</div><div style="display:flex; align-items:center; gap:8px;">${badge} ${btnPrint} ${btnVoid}</div></div>`;
@@ -835,7 +870,6 @@ function renderHistoryList(type) {
     }
 }
 
-// Reprinter Function
 window.reprintOrder = async function(orderId) {
     const order = await new Promise(res => db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = e => res(e.target.result));
     if (!order) return alert("Order tidak ditemukan di memori tablet lokal.");
@@ -882,9 +916,7 @@ async function confirmAdminVoid() {
                 document.getElementById("admin-void-modal").classList.add("hidden"); runBackgroundSync(); alert("Transaksi langsung Dibatalkan oleh: " + authName);
             } else { alert("PIN Salah atau Anda tidak memiliki akses Admin."); }
         };
-    } finally {
-        document.getElementById("btn-insta-void").disabled = false;
-    }
+    } finally { document.getElementById("btn-insta-void").disabled = false; }
 }
 function processVoidApprovals(authStatuses) {
     const tx = db.transaction(["orders", "expenses"], "readwrite"); const ordStore = tx.objectStore("orders"); const expStore = tx.objectStore("expenses"); let uiNeedsRefresh = false;
@@ -1015,10 +1047,7 @@ function openShiftReport() {
                     document.getElementById("sr-orders").innerText = tOrders; document.getElementById("sr-customers").innerText = tCust; document.getElementById("sr-omset").innerText = `Rp ${tOmset.toLocaleString('id-ID')}`;
                     document.getElementById("sr-cash").innerText = `Rp ${tCash.toLocaleString('id-ID')}`; document.getElementById("sr-qris").innerText = `Rp ${tQris.toLocaleString('id-ID')}`; document.getElementById("sr-transfer").innerText = `Rp ${tTransfer.toLocaleString('id-ID')}`;
                     document.getElementById("sr-free").innerText = `Rp ${tFree.toLocaleString('id-ID')}`; document.getElementById("sr-expense").innerText = `Rp ${tExpense.toLocaleString('id-ID')}`;
-                    
-                    document.getElementById("sr-piutang-given").innerText = `Rp ${tPiutangGiven.toLocaleString('id-ID')}`;
-                    document.getElementById("sr-piutang-paid").innerText = `Rp ${tPiutangPaid.toLocaleString('id-ID')}`;
-                    
+                    document.getElementById("sr-piutang-given").innerText = `Rp ${tPiutangGiven.toLocaleString('id-ID')}`; document.getElementById("sr-piutang-paid").innerText = `Rp ${tPiutangPaid.toLocaleString('id-ID')}`;
                     document.getElementById("sr-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`; document.getElementById("shift-report-modal").classList.remove("hidden");
                     
                     window.currentShiftData = { totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree, totalExpenses: tExpense, net: liveDrawer, foodSummary, piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaid };
@@ -1131,8 +1160,8 @@ async function runBackgroundSync() {
 
 window.onload = async () => { 
     await initDB(); 
-    await checkAutoCloseShifts(); // Immediate check on load
+    await checkAutoCloseShifts(); 
     await syncMasterData(); 
     window.setInterval(runBackgroundSync, 15000); 
-    window.setInterval(checkAutoCloseShifts, 3600000); // Check every hour
+    window.setInterval(checkAutoCloseShifts, 3600000); 
 };
