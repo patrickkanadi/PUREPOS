@@ -225,7 +225,6 @@
         </div>
     </div>
 
-    <!-- Modals -->
     <div id="review-modal" class="modal-overlay hidden">
         <div class="modal-content modal-large">
             <h2 style="margin-top:0; border-bottom:2px solid #eee; padding-bottom:10px;">🧾 Rincian Pembayaran</h2>
@@ -253,7 +252,8 @@
                 <div class="form-box" style="margin-bottom:0;"><label>Tunai / Cash (Rp)</label><input type="number" id="pay-cash" value="0" onclick="this.select()" oninput="calculateRemaining()"></div>
                 <div class="form-box" style="margin-bottom:0;"><label>QRIS (Rp)</label><input type="number" id="pay-qris" value="0" onclick="this.select()" oninput="autoBalanceCash()"></div>
                 <div class="form-box" style="margin-bottom:0;"><label>Transfer Bank (Rp)</label><input type="number" id="pay-transfer" value="0" onclick="this.select()" oninput="autoBalanceCash()"></div>
-                <div class="form-box" style="margin-bottom:0;"><label style="color:#e67e22;">Galon Dipinjam (Jml Botol)</label><input type="number" id="rent-bottle-qty" value="0" onclick="this.select()" oninput="calculateRemaining()"></div>
+                <div class="form-box" style="margin-bottom:0;"><label style="color:#c0392b;">Piutang / Kasbon (Rp)</label><input type="number" id="pay-piutang" value="0" onclick="this.select(); autoBalancePiutang();" oninput="calculateRemaining()" style="border-color:#c0392b;"></div>
+                <div class="form-box" style="margin-bottom:0; grid-column: span 2;"><label style="color:#e67e22;">Galon Dipinjam (Jml Botol)</label><input type="number" id="rent-bottle-qty" value="0" onclick="this.select()" oninput="calculateRemaining()"></div>
             </div>
             
             <div style="display:flex; justify-content:space-between; font-size:18px; color:#c0392b; font-weight:bold; margin-bottom: 20px; padding:10px; background:#fdf2e9; border-radius:8px;">
@@ -262,14 +262,20 @@
 
             <div style="display: flex; gap: 10px; flex-wrap:wrap;">
                 <button onclick="closeReview()" style="flex:1; padding:15px; background:#bdc3c7; border:none; border-radius:8px; font-weight:bold;">Kembali</button>
-                <button onclick="finalizeOrder(false, false)" style="flex:1; padding:15px; background:#f39c12; color:white; border:none; border-radius:8px; font-weight:bold;">Simpan Data</button>
-                <button onclick="finalizeOrder(true, false)" style="flex:2; padding:15px; background:#27ae60; color:white; border:none; border-radius:8px; font-weight:bold;">🖨️ Cetak Struk</button>
-                <button id="btn-piutang" onclick="finalizeOrder(false, true)" class="hidden" style="flex:1; width:100%; padding:15px; background:#8e44ad; color:white; border:none; border-radius:8px; font-weight:bold; margin-top:5px;">📝 Catat Sisa sbg Piutang</button>
+                <button onclick="finalizeOrder(false)" style="flex:1; padding:15px; background:#f39c12; color:white; border:none; border-radius:8px; font-weight:bold;">Simpan Data</button>
+                <button onclick="finalizeOrder(true)" style="flex:2; padding:15px; background:#27ae60; color:white; border:none; border-radius:8px; font-weight:bold;">🖨️ Cetak Struk</button>
             </div>
         </div>
     </div>
 
-    <!-- Buku Piutang Modal -->
+    <div id="order-detail-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h2 style="margin-top:0; color:#2980b9;">🔍 Detail Pesanan</h2>
+            <div id="order-detail-container" style="background:#f9f9f9; padding:15px; border-radius:8px; font-size:14px; line-height:1.6;"></div>
+            <button onclick="document.getElementById('order-detail-modal').classList.add('hidden')" style="width:100%; padding:12px; margin-top:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Tutup Detail</button>
+        </div>
+    </div>
+
     <div id="buku-piutang-modal" class="modal-overlay hidden">
         <div class="modal-content modal-large">
             <h2 style="margin-top:0; color:#8e44ad;">📒 Buku Piutang</h2>
@@ -280,7 +286,6 @@
         </div>
     </div>
 
-    <!-- Bayar Piutang Modal -->
     <div id="piutang-modal" class="modal-overlay hidden">
         <div class="modal-content" style="max-width: 400px;">
             <h2 style="margin-top:0; color: #8e44ad;">💰 Lunasi Piutang</h2>
@@ -289,6 +294,12 @@
             <div class="form-box">
                 <label>Jumlah Dibayar (Rp)</label>
                 <input type="number" id="piutang-pay-amount" placeholder="Nominal" style="font-size: 20px; font-weight: bold; border-color: #8e44ad;" onclick="this.select()">
+            </div>
+            <div class="form-box">
+                <label>Pilih Transaksi yang Dilunasi (Opsional)</label>
+                <select id="piutang-target-order" style="font-size: 14px;">
+                    <option value="">-- Lunasi Saldo Global --</option>
+                </select>
             </div>
             <div class="form-box">
                 <label>Metode Pembayaran</label>
