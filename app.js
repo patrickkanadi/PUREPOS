@@ -80,7 +80,6 @@ async function getStaffFromDB() {
     return new Promise(resolve => { db.transaction(["staff"], "readonly").objectStore("staff").getAll().onsuccess = e => resolve(e.target.result); });
 }
 
-// AUTO-CLOSE SHIFTS (12 Hours)
 async function checkAutoCloseShifts() {
     if (!db) return;
     const shifts = await new Promise(res => db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").getAll().onsuccess = e => res(e.target.result));
@@ -123,7 +122,6 @@ async function forceCloseShift(shift) {
     txWrite.objectStore("local_shift_history").add(shiftPayload);
     txWrite.objectStore("shift_reports").add(shiftPayload);
     txWrite.objectStore("active_shifts").delete(shift.pin);
-    console.log("System Auto-Closed Shift:", shift.shiftId);
 }
 
 async function attemptLogin() {
@@ -362,29 +360,29 @@ async function syncMasterData() {
     }
 }
 
-// ⚡ NEW AUTOCOMPLETE ENGINE (Freezing Prevented) ⚡
+// ⚡ NEW AUTOCOMPLETE ENGINE (Click-to-Show Enabled) ⚡
 function handleAutocomplete(e) {
     if (!db) return; 
     const val = e.target.value.toLowerCase().trim(); 
     const resBox = document.getElementById("autocomplete-results");
     
-    // Instantly hide and abort if the input is totally empty to prevent rendering 5,000 blank HTML nodes
-    if (val.length === 0) {
-        resBox.classList.add("hidden");
-        return;
-    }
-
     db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (ev) => {
         const members = ev.target.result || []; 
-        let matches = members.filter(m => String(m.phone).toLowerCase().includes(val) || String(m.name).toLowerCase().includes(val));
+        let matches = members;
         
+        // Filter only if user typed something, otherwise show default list
+        if (val.length > 0) {
+            matches = members.filter(m => String(m.phone).toLowerCase().includes(val) || String(m.name).toLowerCase().includes(val));
+        }
+        
+        // Sort by highest spender and slice to prevent browser freeze
         matches.sort((a, b) => (b.spent || 0) - (a.spent || 0));
-        matches = matches.slice(0, 15); // Limit to top 15 to keep UI lightning fast
+        matches = matches.slice(0, 15);
 
         if (matches.length > 0) {
             resBox.innerHTML = matches.map(m => {
                 let wStr = JSON.stringify(m.wallet || {}).replace(/"/g, '&quot;'); 
-                let nameStr = (m.name || "").replace(/'/g, "\\'");
+                let nameStr = String(m.name || "").replace(/'/g, "\\'");
                 let fOut = m.firstOutlet || ""; let rOut = m.recentOutlets || "";
                 return `<div class="autocomplete-item" onclick="selectMember('${m.phone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0}, '${fOut}', '${rOut}')">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -393,24 +391,12 @@ function handleAutocomplete(e) {
                 </div>`;
             }).join("");
             resBox.classList.remove("hidden");
-        } else { resBox.classList.add("hidden"); }
+        } else { 
+            resBox.innerHTML = `<div style="padding:15px; color:#7f8c8d; text-align:center; font-style:italic;">Tidak ada member ditemukan</div>`;
+            resBox.classList.remove("hidden"); 
+        }
     };
 }
-
-document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);
-document.getElementById("cust-name").addEventListener("input", handleAutocomplete);
-document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);
-document.getElementById("cust-name").addEventListener("click", handleAutocomplete);
-document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);
-document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);
-
-// Universal closer for clicking outside
-document.addEventListener('click', (e) => { 
-    if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { 
-        const resBox = document.getElementById('autocomplete-results');
-        if(resBox) resBox.classList.add('hidden'); 
-    } 
-});
 
 window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, dbPiutang, firstOutlet, recentOutlets) {
     document.getElementById("autocomplete-results").classList.add("hidden");
@@ -1158,7 +1144,23 @@ async function runBackgroundSync() {
     } finally { isSyncing = false; }
 }
 
+// ⚡ EVENT LISTENERS ARE NOW BOUND HERE SO THEY NEVER FAIL TO LOAD ⚡
 window.onload = async () => { 
+    
+    document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);
+    document.getElementById("cust-name").addEventListener("input", handleAutocomplete);
+    document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);
+    document.getElementById("cust-name").addEventListener("click", handleAutocomplete);
+    document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);
+    document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);
+
+    document.addEventListener('click', (e) => { 
+        if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { 
+            const resBox = document.getElementById('autocomplete-results');
+            if(resBox) resBox.classList.add('hidden'); 
+        } 
+    });
+
     await initDB(); 
     await checkAutoCloseShifts(); 
     await syncMasterData(); 
