@@ -1,6 +1,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbz797WvLnGIpjpVwdhgoy5YbSJtklutmIXlqjhvZx6LU0fVDTImgJ341NIqB7Y58kp2/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 13; // Version bump for Escrow & Galon schema
+const DB_VERSION = 13; 
 let db;
 
 let posSessions = [{ cart: [], customer: null }, { cart: [], customer: null }, { cart: [], customer: null }];
@@ -407,6 +407,7 @@ function renderCart() {
 
 function clearCart() { lockMenu(); }
 
+// ⚡ DYNAMIC LOYALTY ENGINE INJECTED ⚡
 function reviewOrder() {
     if (currentCart.length === 0) return alert("Keranjang masih kosong!");
     window.cartGrandTotal = window.cartSubtotal;
@@ -415,13 +416,32 @@ function reviewOrder() {
     if (window.loyaltyEnabled && activeCustomerProfile) {
         let wallet = activeCustomerProfile.wallet || {};
         currentCart.forEach(item => {
-            if (item.loyaltyThreshold > 0 && wallet[item.name] && wallet[item.name].free > 0) {
-                let maxRedeemable = Math.min(wallet[item.name].free, item.qty);
+            if (item.loyaltyThreshold > 0) {
+                let existingFree = wallet[item.name] ? wallet[item.name].free : 0;
+                let existingPoints = wallet[item.name] ? wallet[item.name].points : 0;
+                let t = item.loyaltyThreshold;
+                
+                let maxRedeemable = Math.min(existingFree, item.qty);
+                
+                for (let f = maxRedeemable; f <= item.qty; f++) {
+                    let paidQty = item.qty - f;
+                    let generatedFree = Math.floor((existingPoints + paidQty) / t);
+                    if (f <= existingFree + generatedFree) {
+                        maxRedeemable = f;
+                    } else {
+                        break;
+                    }
+                }
+                
                 if (maxRedeemable > 0) {
                     hasRedeemable = true;
+                    let availText = maxRedeemable > existingFree 
+                        ? `${existingFree} Saldo + ${maxRedeemable - existingFree} Dari Order Ini` 
+                        : `${existingFree} Saldo`;
+
                     redeemContainer.innerHTML += `
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding-bottom:8px; border-bottom:1px dashed #bce8f1;">
-                            <span style="font-size:14px; font-weight:bold; color:#2c3e50;">${item.name} <br><small style="font-weight:normal; color:#7f8c8d;">(Tersedia: ${wallet[item.name].free}, Dibeli: ${item.qty})</small></span>
+                            <span style="font-size:14px; font-weight:bold; color:#2c3e50;">${item.name} <br><small style="font-weight:normal; color:#7f8c8d;">(Maks Tukar: ${maxRedeemable} | Info: ${availText})</small></span>
                             <div style="display:flex; align-items:center; gap:8px;"><label style="font-size:12px;">Pakai:</label><input type="number" class="redeem-input" data-item="${item.itemId}" data-price="${item.price}" max="${maxRedeemable}" min="0" value="0" style="width:60px; padding:8px; text-align:center; font-size:16px; border:2px solid #bdc3c7; border-radius:6px;" onclick="this.select()" oninput="recalcRedemptions()"></div>
                         </div>`;
                 }
@@ -567,12 +587,6 @@ function unlockMenu(isGuest) {
     }
 }
 
-async function manualPushSync() {
-    if (!navigator.onLine) return alert("Anda sedang offline!");
-    document.getElementById("network-text").innerText = "Mengirim Data..."; document.getElementById("network-dot").style.backgroundColor = "#f39c12";
-    await runBackgroundSync(); document.getElementById("network-text").innerText = "Menarik Data..."; await syncMasterData(); alert("Sinkronisasi Database Berhasil!");
-}
-
 window.openBukuPiutang = function() {
     document.getElementById('buku-piutang-modal').classList.remove('hidden');
     document.getElementById('search-piutang').value = "";
@@ -698,7 +712,6 @@ async function finalizeOrder(shouldPrint) {
         let cartItem = currentCart.find(i => i.itemId === itemId); if (cartItem) cartItem.redeemed = qty;
     });
 
-    // ⚡ LOYALTY ESCROW: Only add points to wallet if NO DEBT ⚡
     let loyaltyChanges = {}; let freeItemsRedeemed = [];
     currentCart.forEach(item => {
         if (item.redeemed > 0) { freeItemsRedeemed.push({ name: item.name, qty: item.redeemed }); }
@@ -717,7 +730,6 @@ async function finalizeOrder(shouldPrint) {
         for(let itemName in loyaltyChanges) {
             if(!updatedWallet[itemName]) updatedWallet[itemName] = {points:0, free:0};
             
-            // Redemptions always deduct immediately. Earnings only add if debt is 0.
             updatedWallet[itemName].free -= loyaltyChanges[itemName].redeemed;
             if (debtAmount === 0) {
                 updatedWallet[itemName].points += loyaltyChanges[itemName].earned;
@@ -935,6 +947,14 @@ window.showOrderDetail = function(orderId) {
         if ((o.debtAmount || 0) > 0) { html += `<div style="display:flex; justify-content:space-between; color:#c0392b; margin-top:5px;"><span><strong>Hutang:</strong></span><span><strong>Rp ${o.debtAmount.toLocaleString('id-ID')}</strong></span></div>`; }
         document.getElementById("order-detail-container").innerHTML = html; document.getElementById("order-detail-modal").classList.remove("hidden");
     };
+}
+
+window.reprintOrder = async function(orderId) {
+    const order = await new Promise(res => db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = e => res(e.target.result));
+    if (!order) return alert("Order tidak ditemukan di memori tablet lokal.");
+    const deposit = (order.cashAmount || 0) + (order.qrisAmount || 0) + (order.transferAmount || 0) + (order.freeAmount || 0);
+    const payloadBytes = await buildEscPosReceipt(order.orderId, order, deposit, (order.debtAmount || 0), order.paymentMethod, {});
+    await printViaBluetooth(payloadBytes);
 }
 
 window.requestVoid = function(type, id) { currentVoidTarget = { type, id }; document.getElementById("admin-void-pin").value = ""; document.getElementById("admin-void-modal").classList.remove("hidden"); }
