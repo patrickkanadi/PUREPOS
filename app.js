@@ -1187,4 +1187,60 @@ async function runBackgroundSync() {
         }
 
         let voids = await new Promise(res => tx.objectStore("void_requests").getAll().onsuccess = e => res(e.target.result));
-        for (const
+        for (const req of voids) {
+            try {
+                const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid"; const payload = req.type === 'orders' ? { orderId: req.id, status: req.status, authName: req.authName } : { expenseId: req.id, status: req.status, authName: req.authName };
+                let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: actionType, ...payload }) }); if ((await r.json()).status === "Success") { db.transaction(["void_requests"], "readwrite").objectStore("void_requests").delete(req.id); }
+            } catch(e) {}
+        }
+
+        let members = await new Promise(res => tx.objectStore("unsynced_members").getAll().onsuccess = e => res(e.target.result));
+        for (const mem of members) {
+            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncMember", data: mem }) }); if ((await r.json()).status === "Success") { db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); } } catch(e) {}
+        }
+
+        let inbounds = await new Promise(res => tx.objectStore("stock_inbound").getAll().onsuccess = e => res(e.target.result));
+        for (const inb of inbounds) {
+            if (inb.syncStatus === "Pending") { try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncInbound", data: inb }) }); if ((await r.json()).status === "Success") { db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").delete(inb.logId); } } catch(e) {} }
+        }
+
+        let cuciLogs = await new Promise(res => tx.objectStore("cuci_tandon").getAll().onsuccess = e => res(e.target.result));
+        for (const log of cuciLogs) {
+            if (log.syncStatus === "Pending") { try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncCuciTandon", data: log }) }); if ((await r.json()).status === "Success") { db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").delete(log.logId); } } catch(e) {} }
+        }
+
+        let laporLogs = await new Promise(res => tx.objectStore("lapor_masalah").getAll().onsuccess = e => res(e.target.result));
+        for (const log of laporLogs) {
+            if (log.syncStatus === "Pending") { try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncLaporMasalah", data: log }) }); if ((await r.json()).status === "Success") { db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").delete(log.logId); } } catch(e) {} }
+        }
+
+    } catch (e) {
+        if (e.name === 'InvalidStateError') { await initDB(); }
+    } finally { isSyncing = false; }
+}
+
+window.onload = async () => { 
+    document.getElementById("cust-phone").addEventListener("input", handleAutocomplete);
+    document.getElementById("cust-name").addEventListener("input", handleAutocomplete);
+    document.getElementById("cust-phone").addEventListener("click", handleAutocomplete);
+    document.getElementById("cust-name").addEventListener("click", handleAutocomplete);
+    document.getElementById("cust-phone").addEventListener("focus", handleAutocomplete);
+    document.getElementById("cust-name").addEventListener("focus", handleAutocomplete);
+
+    document.addEventListener('click', (e) => { 
+        if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { 
+            const resBox = document.getElementById('autocomplete-results');
+            if(resBox) resBox.classList.add('hidden'); 
+        } 
+        if(e.target.id !== 'exp-category') {
+            const catBox = document.getElementById('cat-autocomplete-results');
+            if(catBox) catBox.classList.add('hidden');
+        }
+    });
+
+    await initDB(); 
+    await checkAutoCloseShifts(); 
+    await syncMasterData(); 
+    window.setInterval(runBackgroundSync, 15000); 
+    window.setInterval(checkAutoCloseShifts, 3600000); 
+};
