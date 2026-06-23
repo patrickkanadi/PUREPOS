@@ -1278,7 +1278,15 @@ window.openCurrentShiftReport = function() {
     
     let meterContainer = document.getElementById("meter-water-container"); if(meterContainer) meterContainer.classList.remove("hidden");
     let btnEndShift = document.getElementById("btn-end-shift"); if(btnEndShift) btnEndShift.classList.remove("hidden");
-    let btnPrintHist = document.getElementById("btn-print-history"); if (btnPrintHist) btnPrintHist.classList.add("hidden");
+    
+    // ⚡ FIX: UNHIDE PRINT BUTTON FOR CURRENT SHIFT AND ASSIGN FUNCTION ⚡
+    let btnPrintHist = document.getElementById("btn-print-history"); 
+    if (btnPrintHist) { 
+        btnPrintHist.classList.remove("hidden"); 
+        btnPrintHist.onclick = window.printShiftReport; 
+    }
+    
+    let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = "";
     
     window.db.transaction(["orders", "expenses", "bayar_piutang"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
         const validOrders = e.target.result.filter(o => o.shiftId === window.currentShiftId && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending");
