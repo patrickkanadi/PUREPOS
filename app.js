@@ -622,7 +622,6 @@ window.openPiutangModal = function(memberOverride) {
     };
 }
 
-// ⚡ CASCADING LOCAL PAYMENT DISTRIBUTOR ⚡
 window.submitPiutang = function() {
     let payAmount = Number(document.getElementById("piutang-pay-amount").value); let method = document.getElementById("piutang-method").value;
     let targetOrderId = document.getElementById("piutang-target-order").value;
@@ -823,49 +822,10 @@ async function buildEscPosReceipt(orderId, order, deposit, debt, payMethod, upda
     return new TextEncoder().encode(receipt);
 }
 
-window.openInboundModal = function() {
-    let select = document.getElementById("inbound-tank-target"); select.innerHTML = ""; let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
-    tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">💧 ${t.name}</option>`; });
-    if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
-    document.getElementById("inbound-qty").value = ""; document.getElementById("inbound-notes").value = ""; document.getElementById("inbound-modal").classList.remove("hidden");
-}
-window.submitInbound = function() {
-    const qty = Number(document.getElementById("inbound-qty").value); const targetTank = document.getElementById("inbound-tank-target").value; const notes = document.getElementById("inbound-notes").value.trim() || "-";
-    if (qty <= 0) return alert("Masukkan jumlah liter air yang benar.");
-    const payload = { logId: "INB-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, itemName: targetTank, qty: qty, notes: notes, outlet: currentOutlet, syncStatus: "Pending" };
-    db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").add(payload); document.getElementById("inbound-modal").classList.add("hidden"); alert(`Berhasil mencatat kedatangan ${qty} Liter ke ${targetTank}.`); runBackgroundSync();
-}
-
-window.openCuciModal = function() {
-    let select = document.getElementById("cuci-tank"); select.innerHTML = ""; let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
-    tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">💧 ${t.name}</option>`; });
-    if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
-    document.getElementById("cuci-qty").value = ""; document.getElementById("cuci-notes").value = ""; document.getElementById("cuci-modal").classList.remove("hidden");
-}
-window.submitCuciTandon = function() {
-    let tank = document.getElementById("cuci-tank").value; let qty = Number(document.getElementById("cuci-qty").value); let notes = document.getElementById("cuci-notes").value.trim() || "-";
-    if (qty <= 0) return alert("Masukkan estimasi air terbuang dengan benar.");
-    let payload = { logId: "CUC-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, outlet: currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
-    db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").add(payload); document.getElementById("cuci-modal").classList.add("hidden"); alert("Laporan Cuci Tandon berhasil disimpan. Menunggu validasi Admin."); runBackgroundSync();
-}
-
-window.openLaporModal = function() {
-    let select = document.getElementById("lapor-tank"); select.innerHTML = ""; let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
-    tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">⚠️ ${t.name}</option>`; });
-    if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">⚠️ Tangki Air RO</option><option value="Tangki Air Standar">⚠️ Tangki Air Standar</option>`; }
-    document.getElementById("lapor-qty").value = ""; document.getElementById("lapor-notes").value = ""; document.getElementById("lapor-modal").classList.remove("hidden");
-}
-window.submitLaporMasalah = function() {
-    let tank = document.getElementById("lapor-tank").value; let qty = Number(document.getElementById("lapor-qty").value); let notes = document.getElementById("lapor-notes").value.trim();
-    if (qty <= 0 || notes === "") return alert("Harap masukkan estimasi air hilang dan kronologi kejadian dengan lengkap.");
-    let payload = { logId: "LPR-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, outlet: currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
-    db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").add(payload); document.getElementById("lapor-modal").classList.add("hidden"); alert("Laporan Masalah berhasil dikirim. Menunggu validasi Admin."); runBackgroundSync();
-}
-
 function openExpenseModal() {
-    document.getElementById("expense-modal").classList.remove("hidden"); const list = document.getElementById("expense-category-list"); list.innerHTML = "";
-    db.transaction(["expense_categories"], "readonly").objectStore("expense_categories").getAll().onsuccess = (e) => { e.target.result.forEach(cat => { const opt = document.createElement("option"); opt.value = cat.name; list.appendChild(opt); }); };
+    document.getElementById("expense-modal").classList.remove("hidden");
 }
+
 function saveExpense() {
     const amount = Number(document.getElementById("exp-amount").value); const category = document.getElementById("exp-category").value.trim();
     if (amount <= 0 || !category) return alert("Harap masukkan jumlah dan kategori yang benar.");
@@ -927,6 +887,14 @@ window.showOrderDetail = function(orderId) {
     };
 }
 
+window.reprintOrder = async function(orderId) {
+    const order = await new Promise(res => db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = e => res(e.target.result));
+    if (!order) return alert("Order tidak ditemukan di memori tablet lokal.");
+    const deposit = (order.cashAmount || 0) + (order.qrisAmount || 0) + (order.transferAmount || 0) + (order.freeAmount || 0);
+    const payloadBytes = await buildEscPosReceipt(order.orderId, order, deposit, (order.debtAmount || 0), order.paymentMethod, {});
+    await printViaBluetooth(payloadBytes);
+}
+
 function requestVoid(type, id) { currentVoidTarget = { type, id }; document.getElementById("admin-void-pin").value = ""; document.getElementById("admin-void-modal").classList.remove("hidden"); }
 function submitRemoteVoid() {
     const type = currentVoidTarget.type; const id = currentVoidTarget.id; const storeName = type === 'orders' ? "orders" : "expenses";
@@ -968,7 +936,6 @@ async function confirmAdminVoid() {
     } finally { document.getElementById("btn-insta-void").disabled = false; }
 }
 
-// ⚡ SERVER AUTO-HEAL ⚡
 function processServerUpdates(authStatuses) {
     const tx = db.transaction(["orders", "expenses"], "readwrite"); 
     const ordStore = tx.objectStore("orders"); const expStore = tx.objectStore("expenses"); 
