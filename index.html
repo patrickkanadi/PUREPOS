@@ -17,7 +17,6 @@
         #pos-screen { display: flex; flex-direction: column; height: 100%; }
         #top-bar { background: #2c3e50; color: white; padding: 10px 15px; display: flex; justify-content: space-between; align-items: center; }
         
-        /* ⚡ COMPACT TOP BAR CSS ⚡ */
         .status-indicator { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end;}
         .dot-online { height: 12px; width: 12px; background-color: #2ecc71; border-radius: 50%; flex-shrink: 0; }
         .btn-top { margin-left: 0; padding: 6px 8px; cursor: pointer; border: 1px solid white; color: white; border-radius: 4px; font-weight: bold; font-size: 12px; }
@@ -153,7 +152,6 @@
                 <strong>Kasir:</strong> <span id="display-cashier">---</span> 
                 <span style="color:#f1c40f; margin-left: 10px;">📍 <span id="display-outlet">---</span></span>
             </div>
-            <!-- ⚡ COMPACT, NO-DROPDOWN TOP BAR ⚡ -->
             <div class="status-indicator">
                 <div style="display:flex; align-items:center; gap:5px; margin-right:5px;">
                     <span class="dot-online" id="network-dot"></span><span id="network-text" style="font-size:12px;">Memuat...</span>
@@ -163,7 +161,7 @@
                 <button class="btn-top" style="background:#34495e; border-color:#34495e;" onclick="manualPushSync()">🔄 Sync</button>
                 <button class="btn-top" style="background:#8e44ad; border-color:#8e44ad;" onclick="openBukuPiutang()">📒 Piutang</button>
                 <button class="btn-top" style="background:#27ae60; border-color:#27ae60;" onclick="openCuciModal()">🧹 Cuci</button>
-                <button class="btn-top" style="background:#c0392b; border-color:#c0392b;" onclick="openLaporModal()">⚠️ Lapor</button>
+                <button class="btn-top" style="background:#c0392b; border-color:#c0392b;" onclick="openLaporModal()">⚠️ Bocor</button>
                 <button class="btn-top" style="background:#3498db; border-color:#3498db;" onclick="openInboundModal()">🚚 Truk</button>
                 <button class="btn-top" style="background:#16a085; border-color:#16a085;" onclick="openCashDrop(false)">🏦 Laci</button>
                 <button class="btn-top" style="background:#8e44ad; border-color:#8e44ad;" onclick="openHistoryModal()">📋 Riwayat</button>
@@ -230,7 +228,6 @@
         </div>
     </div>
 
-    <!-- Modals -->
     <div id="review-modal" class="modal-overlay hidden">
         <div class="modal-content modal-large">
             <h2 style="margin-top:0; border-bottom:2px solid #eee; padding-bottom:10px;">🧾 Rincian Pembayaran</h2>
@@ -274,7 +271,6 @@
         </div>
     </div>
 
-    <!-- Modal Detail Order -->
     <div id="order-detail-modal" class="modal-overlay hidden" style="z-index: 10005;">
         <div class="modal-content">
             <h2 style="margin-top:0; color:#2980b9;">🔍 Detail Pesanan</h2>
@@ -283,7 +279,6 @@
         </div>
     </div>
 
-    <!-- Buku Piutang Modal -->
     <div id="buku-piutang-modal" class="modal-overlay hidden">
         <div class="modal-content modal-large">
             <h2 style="margin-top:0; color:#8e44ad;">📒 Buku Piutang</h2>
@@ -294,7 +289,6 @@
         </div>
     </div>
 
-    <!-- Bayar Piutang Modal -->
     <div id="piutang-modal" class="modal-overlay hidden">
         <div class="modal-content" style="max-width: 400px;">
             <h2 style="margin-top:0; color: #8e44ad;">💰 Lunasi Piutang</h2>
@@ -325,9 +319,34 @@
         </div>
     </div>
 
-    <!-- Cuci Tandon & Lapor Masalah -->
-    <div id="cuci-modal" class="modal-overlay hidden"><div class="modal-content" style="max-width: 400px;"><h2 style="margin-top:0; color: #27ae60;">🧹 Lapor Cuci Tandon</h2><p style="color: #7f8c8d; font-size: 14px;">Catat air yang terbuang. Stok akan terpotong setelah disetujui Admin.</p><div class="form-box"><label>Pilih Tandon</label><select id="cuci-tank" style="font-size: 18px; font-weight: bold;"></select></div><div class="form-box"><label>Estimasi Air Terbuang (Liter)</label><input type="number" id="cuci-qty" placeholder="Misal: 50" style="font-size: 20px; font-weight: bold;"></div><div class="form-box"><label>Catatan</label><input type="text" id="cuci-notes" placeholder="Misal: Pengurasan rutin"></div><div style="display: flex; gap: 10px; margin-top: 20px;"><button onclick="document.getElementById('cuci-modal').classList.add('hidden')" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold;">Batal</button><button onclick="submitCuciTandon()" style="flex:2; padding:15px; background:#27ae60; color:white; border:none; border-radius:8px; font-weight:bold;">Kirim</button></div></div></div>
-    <div id="lapor-modal" class="modal-overlay hidden"><div class="modal-content" style="max-width: 450px;"><h2 style="margin-top:0; color: #c0392b;">⚠️ Lapor Masalah</h2><p style="color: #7f8c8d; font-size: 14px;">Laporkan kehilangan air. Stok terpotong setelah disetujui Admin.</p><div class="form-box"><label>Pilih Tandon</label><select id="lapor-tank" style="font-size: 18px; font-weight: bold;"></select></div><div class="form-box"><label>Estimasi Air Hilang (Liter)</label><input type="number" id="lapor-qty" placeholder="Misal: 100" style="font-size: 20px; font-weight: bold; border-color: #c0392b;"></div><div class="form-box"><label>Kronologi</label><textarea id="lapor-notes" rows="3" placeholder="Pipa filter pecah..."></textarea></div><div style="display: flex; gap: 10px; margin-top: 20px;"><button onclick="document.getElementById('lapor-modal').classList.add('hidden')" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold;">Batal</button><button onclick="submitLaporMasalah()" style="flex:2; padding:15px; background:#c0392b; color:white; border:none; border-radius:8px; font-weight:bold;">Kirim</button></div></div></div>
+    <div id="cuci-modal" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width: 400px;">
+            <h2 style="margin-top:0; color: #27ae60;">🧹 Lapor Cuci Tandon</h2>
+            <p style="color: #7f8c8d; font-size: 14px;">Catat air yang terbuang. Stok akan otomatis dikonversi ke Liter oleh sistem.</p>
+            <div class="form-box"><label>Pilih Tandon</label><select id="cuci-tank" style="font-size: 18px; font-weight: bold;"></select></div>
+            <div class="form-box">
+                <label>Estimasi Air Terbuang (Jumlah Galon)</label>
+                <input type="number" id="cuci-qty" placeholder="Misal: 1" style="font-size: 20px; font-weight: bold;">
+            </div>
+            <div class="form-box"><label>Catatan</label><input type="text" id="cuci-notes" placeholder="Misal: Pengurasan rutin"></div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;"><button onclick="document.getElementById('cuci-modal').classList.add('hidden')" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold;">Batal</button><button onclick="submitCuciTandon()" style="flex:2; padding:15px; background:#27ae60; color:white; border:none; border-radius:8px; font-weight:bold;">Kirim</button></div>
+        </div>
+    </div>
+    
+    <div id="lapor-modal" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width: 450px;">
+            <h2 style="margin-top:0; color: #c0392b;">⚠️ Lapor Bocor</h2>
+            <p style="color: #7f8c8d; font-size: 14px;">Laporkan kehilangan air. Stok akan otomatis dikonversi ke Liter oleh sistem.</p>
+            <div class="form-box"><label>Pilih Tandon</label><select id="lapor-tank" style="font-size: 18px; font-weight: bold;"></select></div>
+            <div class="form-box">
+                <label>Estimasi Air Hilang (Jumlah Galon)</label>
+                <input type="number" id="lapor-qty" placeholder="Misal: 2" style="font-size: 20px; font-weight: bold; border-color: #c0392b;">
+            </div>
+            <div class="form-box"><label>Kronologi</label><textarea id="lapor-notes" rows="3" placeholder="Pipa filter pecah..."></textarea></div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;"><button onclick="document.getElementById('lapor-modal').classList.add('hidden')" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold;">Batal</button><button onclick="submitLaporMasalah()" style="flex:2; padding:15px; background:#c0392b; color:white; border:none; border-radius:8px; font-weight:bold;">Kirim</button></div>
+        </div>
+    </div>
+
     <div id="inbound-modal" class="modal-overlay hidden"><div class="modal-content" style="max-width: 400px;"><h2 style="margin-top:0; color: #3498db;">🚚 Terima Truk Air</h2><div class="form-box"><label>Tandon Tujuan</label><select id="inbound-tank-target" style="font-size: 18px; font-weight: bold;"></select></div><div class="form-box"><label>Volume Air (Liter)</label><input type="number" id="inbound-qty" placeholder="Misal: 8000" style="font-size: 20px; font-weight: bold;"></div><div class="form-box"><label>Plat Truk</label><input type="text" id="inbound-notes"></div><div style="display: flex; gap: 10px; margin-top: 20px;"><button onclick="document.getElementById('inbound-modal').classList.add('hidden')" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold;">Batal</button><button onclick="submitInbound()" style="flex:2; padding:15px; background:#3498db; color:white; border:none; border-radius:8px; font-weight:bold;">Simpan</button></div></div></div>
     
     <div id="expense-modal" class="modal-overlay hidden">
@@ -355,7 +374,6 @@
         </div>
     </div>
 
-    <!-- History & Cash Drop Modals -->
     <div id="history-modal" class="modal-overlay hidden"><div class="modal-content modal-large"><h2 style="margin-top:0;">📋 Riwayat Sistem</h2><div style="display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap;"><button onclick="renderHistoryList('orders')" style="flex:1; padding:10px; cursor:pointer;">🛍️ Transaksi</button><button onclick="renderHistoryList('expenses')" style="flex:1; padding:10px; cursor:pointer;">💸 Pengeluaran</button><button onclick="renderHistoryList('shifts')" style="flex:1; padding:10px; cursor:pointer; background:#8e44ad; color:white; border:none; border-radius:4px; font-weight:bold;">📊 Riwayat Shift</button></div><div class="history-list" id="history-container" style="max-height:400px; overflow-y:auto; background:#f9f9f9;"></div><button onclick="document.getElementById('history-modal').classList.add('hidden')" style="width:100%; padding:15px; margin-top:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Tutup</button></div></div>
     <div id="admin-void-modal" class="modal-overlay hidden"><div class="modal-content" style="text-align:center;"><h2 style="margin-top:0; color:#e74c3c;">⚠️ Pembatalan Transaksi</h2><input type="password" id="admin-void-pin" placeholder="PIN Admin" inputmode="numeric" style="font-size:24px; text-align:center; margin-bottom:15px; width:100%; padding:10px; border:2px solid #bdc3c7; border-radius:8px;"><div style="display:flex; gap:10px; flex-wrap:wrap;"><button onclick="document.getElementById('admin-void-modal').classList.add('hidden')" style="flex:1; min-width:80px; padding:15px; background:#bdc3c7; border:none; border-radius:8px; font-weight:bold;">Batal</button><button onclick="submitRemoteVoid()" style="flex:1; min-width:100px; padding:15px; background:#f39c12; color:white; border:none; border-radius:8px; font-weight:bold;">Request</button><button id="btn-insta-void" onclick="confirmAdminVoid()" style="flex:1; min-width:100px; padding:15px; background:#e74c3c; color:white; border:none; border-radius:8px; font-weight:bold;">Insta-Void</button></div></div></div>
     <div id="cash-drop-modal" class="modal-overlay hidden"><div class="modal-content"><h2 id="cash-drop-title" style="margin-top:0;">🏦 Simpan / Tarik Uang Laci</h2><div style="background:#e8f4f8; padding:15px; border-radius:8px; margin-bottom:15px; text-align:center;"><div style="font-size:12px; font-weight:bold; color:#2980b9; text-transform:uppercase;">Estimasi Saldo Laci Saat Ini</div><div id="live-drawer-display" style="font-size:28px; font-weight:bold; color:#2c3e50;">Rp 0</div></div><div class="form-box"><label style="color:#e67e22;">Jumlah Uang Diambil (Rp)</label><input type="number" id="drop-amount" placeholder="Misal: 500000 atau 0" style="border-color:#e67e22; font-size:20px; font-weight:bold;"></div><div class="form-box"><label>Diserahkan Ke Mana?</label><select id="drop-destination"><option value="Admin">👤 Diserahkan ke Admin / Owner</option><option value="Bank">🏦 Disetor ke Bank</option></select></div><div class="form-box"><label>Catatan Tambahan</label><input type="text" id="drop-notes" placeholder="Misal: Diserahkan ke Ibu / Transfer BCA"></div><div style="display:flex; gap:10px; margin-top: 20px;"><button id="btn-drop-cancel" onclick="document.getElementById('cash-drop-modal').classList.add('hidden')" style="flex:1; padding:15px; border:none; border-radius:8px; font-weight:bold; background:#ecf0f1; cursor:pointer;">Batal</button><button id="btn-drop-confirm" onclick="submitCashDrop()" style="flex:2; padding:15px; background:#16a085; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Simpan Data</button></div></div></div>
