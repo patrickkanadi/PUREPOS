@@ -182,14 +182,14 @@ async function connectBluetoothPrinter() {
         
         bluetoothDevice.addEventListener('gattserverdisconnected', () => {
             alert("Koneksi Printer Terputus!");
-            document.getElementById("btn-connect-printer").innerText = "🖨️ Konek Printer"; document.getElementById("btn-connect-printer").style.background = "#f39c12"; document.getElementById("btn-connect-printer").style.borderColor = "#f39c12";
+            document.getElementById("btn-connect-printer").innerText = "🖨️ Printer"; document.getElementById("btn-connect-printer").style.background = "#f39c12"; document.getElementById("btn-connect-printer").style.borderColor = "#f39c12";
             printerCharacteristic = null;
         });
     } catch (error) { console.error(error); alert("Gagal koneksi printer: " + error.message); }
 }
 
 async function printViaBluetooth(payloadUint8Array) {
-    if (!printerCharacteristic) { alert("Printer belum terhubung! Silakan hubungkan dulu dengan tombol 'Konek Printer'."); return false; }
+    if (!printerCharacteristic) { alert("Printer belum terhubung! Silakan hubungkan dulu dengan tombol 'Printer'."); return false; }
     try {
         const CHUNK_SIZE = 20; 
         for (let i = 0; i < payloadUint8Array.length; i += CHUNK_SIZE) {
@@ -297,6 +297,7 @@ function handleAutocomplete(e) {
     };
 }
 
+// ⚡ TRUE-DATA EXPENSE CATEGORIES ONLY ⚡
 window.handleCategoryAutocomplete = function() {
     if (!db) return;
     const val = document.getElementById("exp-category").value.toLowerCase().trim(); 
@@ -304,8 +305,7 @@ window.handleCategoryAutocomplete = function() {
     
     db.transaction(["expense_categories"], "readonly").objectStore("expense_categories").getAll().onsuccess = (ev) => {
         let categories = ev.target.result.map(c => c.name);
-        if (categories.length === 0) { categories = ["Operasional", "Bahan Baku", "Gaji Kasir", "Listrik & Air", "Transportasi", "Lain-lain"]; }
-
+        
         let matches = categories;
         if (val.length > 0) { matches = categories.filter(c => c.toLowerCase().includes(val)); }
 
@@ -568,6 +568,12 @@ function unlockMenu(isGuest) {
     }
 }
 
+async function manualPushSync() {
+    if (!navigator.onLine) return alert("Anda sedang offline!");
+    document.getElementById("network-text").innerText = "Mengirim Data..."; document.getElementById("network-dot").style.backgroundColor = "#f39c12";
+    await runBackgroundSync(); document.getElementById("network-text").innerText = "Menarik Data..."; await syncMasterData(); alert("Sinkronisasi Database Berhasil!");
+}
+
 window.openBukuPiutang = function() {
     document.getElementById('buku-piutang-modal').classList.remove('hidden');
     document.getElementById('search-piutang').value = "";
@@ -822,8 +828,47 @@ async function buildEscPosReceipt(orderId, order, deposit, debt, payMethod, upda
     return new TextEncoder().encode(receipt);
 }
 
+function openInboundModal() {
+    let select = document.getElementById("inbound-tank-target"); select.innerHTML = ""; let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
+    tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">💧 ${t.name}</option>`; });
+    if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
+    document.getElementById("inbound-qty").value = ""; document.getElementById("inbound-notes").value = ""; document.getElementById("inbound-modal").classList.remove("hidden");
+}
+window.submitInbound = function() {
+    const qty = Number(document.getElementById("inbound-qty").value); const targetTank = document.getElementById("inbound-tank-target").value; const notes = document.getElementById("inbound-notes").value.trim() || "-";
+    if (qty <= 0) return alert("Masukkan jumlah liter air yang benar.");
+    const payload = { logId: "INB-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, itemName: targetTank, qty: qty, notes: notes, outlet: currentOutlet, syncStatus: "Pending" };
+    db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").add(payload); document.getElementById("inbound-modal").classList.add("hidden"); alert(`Berhasil mencatat kedatangan ${qty} Liter ke ${targetTank}.`); runBackgroundSync();
+}
+
+function openCuciModal() {
+    let select = document.getElementById("cuci-tank"); select.innerHTML = ""; let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
+    tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">💧 ${t.name}</option>`; });
+    if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
+    document.getElementById("cuci-qty").value = ""; document.getElementById("cuci-notes").value = ""; document.getElementById("cuci-modal").classList.remove("hidden");
+}
+window.submitCuciTandon = function() {
+    let tank = document.getElementById("cuci-tank").value; let qty = Number(document.getElementById("cuci-qty").value); let notes = document.getElementById("cuci-notes").value.trim() || "-";
+    if (qty <= 0) return alert("Masukkan estimasi air terbuang dengan benar.");
+    let payload = { logId: "CUC-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, outlet: currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
+    db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").add(payload); document.getElementById("cuci-modal").classList.add("hidden"); alert("Laporan Cuci Tandon berhasil disimpan. Menunggu validasi Admin."); runBackgroundSync();
+}
+
+function openLaporModal() {
+    let select = document.getElementById("lapor-tank"); select.innerHTML = ""; let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
+    tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">⚠️ ${t.name}</option>`; });
+    if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">⚠️ Tangki Air RO</option><option value="Tangki Air Standar">⚠️ Tangki Air Standar</option>`; }
+    document.getElementById("lapor-qty").value = ""; document.getElementById("lapor-notes").value = ""; document.getElementById("lapor-modal").classList.remove("hidden");
+}
+window.submitLaporMasalah = function() {
+    let tank = document.getElementById("lapor-tank").value; let qty = Number(document.getElementById("lapor-qty").value); let notes = document.getElementById("lapor-notes").value.trim();
+    if (qty <= 0 || notes === "") return alert("Harap masukkan estimasi air hilang dan kronologi kejadian dengan lengkap.");
+    let payload = { logId: "LPR-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, outlet: currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
+    db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").add(payload); document.getElementById("lapor-modal").classList.add("hidden"); alert("Laporan Masalah berhasil dikirim. Menunggu validasi Admin."); runBackgroundSync();
+}
+
 function openExpenseModal() {
-    document.getElementById("expense-modal").classList.remove("hidden");
+    document.getElementById("expense-modal").classList.remove("hidden"); 
 }
 
 function saveExpense() {
