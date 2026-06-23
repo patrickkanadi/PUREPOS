@@ -16,11 +16,12 @@ window.deferredPrompt = null;
 window.bluetoothDevice = null;
 window.printerCharacteristic = null;
 
-// ⚡ HUMAN-READABLE TIMESTAMP FORMATTER ⚡
 window.formatDateReadable = function(dateInput) {
     if (!dateInput) return "-";
     try {
-        const d = new Date(dateInput);
+        let safeDate = dateInput;
+        if (typeof safeDate === 'string' && safeDate.includes(' ') && !safeDate.includes('T')) { safeDate = safeDate.replace(' ', 'T'); }
+        const d = new Date(safeDate);
         if(isNaN(d)) return dateInput;
         const months = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Ags", "Sep", "Okt", "Nov", "Des"];
         const pad = n => n < 10 ? '0' + n : n;
@@ -38,7 +39,7 @@ window.hashPIN = async function(pin) {
 window.getWibDate = function() {
     const d = new Date(); const utc = d.getTime() + (d.getTimezoneOffset() * 60000); const nd = new Date(utc + (3600000 * 7)); 
     const pad = n => n < 10 ? '0' + n : n;
-    return `${nd.getFullYear()}-${pad(nd.getMonth()+1)}-${pad(nd.getDate())}T${pad(nd.getHours())}:${pad(nd.getMinutes())}:${pad(nd.getSeconds())}+07:00`;
+    return `${nd.getFullYear()}-${pad(nd.getMonth()+1)}-${pad(nd.getDate())} ${pad(nd.getHours())}:${pad(nd.getMinutes())}:${pad(nd.getSeconds())}`;
 }
 
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -308,6 +309,10 @@ window.handleAutocomplete = function(e) {
                 let localDebt = m.piutang || 0;
                 let remoteDebt = 0;
                 let remoteOutlets = [];
+                let rOutList = m.recentOutlets ? m.recentOutlets.split(",").map(s => s.trim()) : [];
+                let lOut = rOutList.length > 0 ? rOutList[rOutList.length - 1] : "-";
+                
+                let outletBadge = `<span style="font-size:11px; background:#ecf0f1; color:#2c3e50; padding:2px 6px; border-radius:4px; margin-left:6px; font-weight:normal;">📍 Akhir: ${lOut}</span>`;
                 
                 if (m.piutangBreakdown) {
                     localDebt = m.piutangBreakdown[window.currentOutlet] || 0;
@@ -325,7 +330,7 @@ window.handleAutocomplete = function(e) {
 
                 return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localDebt}, '${fOut}', '${rOut}', '${crossDebtWarning.replace(/'/g, "\\'").replace(/"/g, '&quot;')}')">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div class="autocomplete-name">${m.name} ${crossDebtWarning}</div>
+                        <div class="autocomplete-name">${m.name} ${outletBadge} ${crossDebtWarning}</div>
                         <div class="autocomplete-phone" style="font-size:14px; color:#7f8c8d;">${m.phone}</div>
                     </div>
                 </div>`;
@@ -379,7 +384,7 @@ window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rO
     if(!phone || phone === "-") return; 
     window.db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
         let mem = e.target.result || { phone: phone, name: name, wallet: {}, spent: 0, bottlesBorrowed: 0, piutang: 0, firstOutlet: fOut || window.currentOutlet, recentOutlets: rOut || window.currentOutlet }; 
-        mem.name = name; if(wallet !== undefined) mem.wallet = wallet; if(bottles !== undefined) mem.bottlesBorrowed = bottles; if(piutang !== undefined) mem.piutang = piutang; // Note: local cache syncs are eventually overwritten by server auth
+        mem.name = name; if(wallet !== undefined) mem.wallet = wallet; if(bottles !== undefined) mem.bottlesBorrowed = bottles; if(piutang !== undefined) mem.piutang = piutang; 
         if(fOut !== undefined) mem.firstOutlet = fOut; if(rOut !== undefined) mem.recentOutlets = rOut;
         window.db.transaction(["members"], "readwrite").objectStore("members").put(mem);
         window.db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").put(mem);
@@ -1043,14 +1048,13 @@ window.renderHistoryList = function(type) {
             });
         };
     } else if (type === 'shifts') {
-        window.db.transaction(["shift_reports"], "readonly").objectStore("shift_reports").getAll().onsuccess = (e) => {
+        window.db.transaction(["local_shift_history"], "readonly").objectStore("local_shift_history").getAll().onsuccess = (e) => {
             const shifts = e.target.result.filter(s => s.outlet === window.currentOutlet).reverse().slice(0, 50);
             if(shifts.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada histori shift di cabang ini.</div>`;
             shifts.forEach(s => {
                 let pGiven = (s.piutangGiven || 0) > 0 ? `<br><small style="color:#c0392b;">Piutang KLR: Rp ${(s.piutangGiven).toLocaleString('id-ID')}</small>` : '';
                 let pPaid = (s.piutangPaid || 0) > 0 ? `<br><small style="color:#8e44ad;">Piutang MSK: Rp ${(s.piutangPaid).toLocaleString('id-ID')}</small>` : '';
                 
-                // Historical Shift Report Viewer trigger
                 let viewBtn = `<button onclick="window.viewHistoricalShift('${s.shiftId}')" style="background:#2980b9; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold; margin-top:5px;">👁️ Detail Shift</button>`;
                 
                 container.innerHTML += `<div class="history-row" style="align-items:flex-start;"><div><strong>Shift: ${s.shiftId}</strong><br><small style="color:#7f8c8d;">Kasir: ${s.cashier} | Keluar: ${window.formatDateReadable(s.logoutTime)}</small>${pGiven}${pPaid}<br>${viewBtn}</div><div style="text-align:right;"><strong>Omset: Rp ${s.totalOmset.toLocaleString('id-ID')}</strong><br><small style="color:#27ae60;">Uang Laci: Rp ${s.netCash.toLocaleString('id-ID')}</small></div></div>`;
@@ -1060,9 +1064,9 @@ window.renderHistoryList = function(type) {
 }
 
 window.viewHistoricalShift = function(shiftId) {
-    window.db.transaction(["shift_reports"], "readonly").objectStore("shift_reports").get(shiftId).onsuccess = (e) => {
+    window.db.transaction(["local_shift_history"], "readonly").objectStore("local_shift_history").get(shiftId).onsuccess = (e) => {
         const data = e.target.result;
-        if(!data) return alert("Data shift tidak ditemukan.");
+        if(!data) return alert("Data shift tidak ditemukan di perangkat ini.");
         
         document.getElementById("sr-orders").innerText = data.totalOrders; document.getElementById("sr-customers").innerText = data.totalCustomers; document.getElementById("sr-omset").innerText = `Rp ${data.totalOmset.toLocaleString('id-ID')}`;
         document.getElementById("sr-cash").innerText = `Rp ${data.totalCash.toLocaleString('id-ID')}`; document.getElementById("sr-qris").innerText = `Rp ${data.totalQris.toLocaleString('id-ID')}`; document.getElementById("sr-transfer").innerText = `Rp ${data.totalTransfer.toLocaleString('id-ID')}`;
@@ -1271,7 +1275,6 @@ window.openShiftReport = function() {
     let tCust = 0; let tOrders = 0; let tOmset = 0; let tCash = 0; let tQris = 0; let tTransfer = 0; let tFree = 0; let tExpense = 0; let tPiutangGiven = 0; let tPiutangPaidCash = 0; let foodSummary = {};
     document.getElementById("meter-water").value = "";
     
-    // Reset view for active shift
     let meterContainer = document.getElementById("meter-water-container"); if(meterContainer) meterContainer.classList.remove("hidden");
     let btnEndShift = document.getElementById("btn-end-shift"); if(btnEndShift) btnEndShift.classList.remove("hidden");
     let btnPrintHist = document.getElementById("btn-print-history"); if (btnPrintHist) btnPrintHist.classList.add("hidden");
