@@ -407,7 +407,6 @@ function renderCart() {
 
 function clearCart() { lockMenu(); }
 
-// ⚡ DYNAMIC LOYALTY ENGINE INJECTED ⚡
 function reviewOrder() {
     if (currentCart.length === 0) return alert("Keranjang masih kosong!");
     window.cartGrandTotal = window.cartSubtotal;
@@ -416,32 +415,13 @@ function reviewOrder() {
     if (window.loyaltyEnabled && activeCustomerProfile) {
         let wallet = activeCustomerProfile.wallet || {};
         currentCart.forEach(item => {
-            if (item.loyaltyThreshold > 0) {
-                let existingFree = wallet[item.name] ? wallet[item.name].free : 0;
-                let existingPoints = wallet[item.name] ? wallet[item.name].points : 0;
-                let t = item.loyaltyThreshold;
-                
-                let maxRedeemable = Math.min(existingFree, item.qty);
-                
-                for (let f = maxRedeemable; f <= item.qty; f++) {
-                    let paidQty = item.qty - f;
-                    let generatedFree = Math.floor((existingPoints + paidQty) / t);
-                    if (f <= existingFree + generatedFree) {
-                        maxRedeemable = f;
-                    } else {
-                        break;
-                    }
-                }
-                
+            if (item.loyaltyThreshold > 0 && wallet[item.name] && wallet[item.name].free > 0) {
+                let maxRedeemable = Math.min(wallet[item.name].free, item.qty);
                 if (maxRedeemable > 0) {
                     hasRedeemable = true;
-                    let availText = maxRedeemable > existingFree 
-                        ? `${existingFree} Saldo + ${maxRedeemable - existingFree} Dari Order Ini` 
-                        : `${existingFree} Saldo`;
-
                     redeemContainer.innerHTML += `
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding-bottom:8px; border-bottom:1px dashed #bce8f1;">
-                            <span style="font-size:14px; font-weight:bold; color:#2c3e50;">${item.name} <br><small style="font-weight:normal; color:#7f8c8d;">(Maks Tukar: ${maxRedeemable} | Info: ${availText})</small></span>
+                            <span style="font-size:14px; font-weight:bold; color:#2c3e50;">${item.name} <br><small style="font-weight:normal; color:#7f8c8d;">(Tersedia: ${wallet[item.name].free}, Dibeli: ${item.qty})</small></span>
                             <div style="display:flex; align-items:center; gap:8px;"><label style="font-size:12px;">Pakai:</label><input type="number" class="redeem-input" data-item="${item.itemId}" data-price="${item.price}" max="${maxRedeemable}" min="0" value="0" style="width:60px; padding:8px; text-align:center; font-size:16px; border:2px solid #bdc3c7; border-radius:6px;" onclick="this.select()" oninput="recalcRedemptions()"></div>
                         </div>`;
                 }
@@ -585,6 +565,12 @@ function unlockMenu(isGuest) {
             isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
         };
     }
+}
+
+async function manualPushSync() {
+    if (!navigator.onLine) return alert("Anda sedang offline!");
+    document.getElementById("network-text").innerText = "Mengirim Data..."; document.getElementById("network-dot").style.backgroundColor = "#f39c12";
+    await runBackgroundSync(); document.getElementById("network-text").innerText = "Menarik Data..."; await syncMasterData(); alert("Sinkronisasi Database Berhasil!");
 }
 
 window.openBukuPiutang = function() {
@@ -846,7 +832,58 @@ async function buildEscPosReceipt(orderId, order, deposit, debt, payMethod, upda
     return new TextEncoder().encode(receipt);
 }
 
-window.openInboundModal = function() {
+// ⚡ ESC/POS SHIFT REPORT BUILDER ⚡
+async function buildEscPosShiftReport(data) {
+    const settings = await getDynamicSettings();
+    const h1 = settings["Header_1"] || "PURE WATER";
+    const dateStr = new Date().toLocaleString('id-ID');
+    
+    const initCmd = "\x1B\x40"; 
+    const centerAlign = "\x1B\x61\x01";
+    const leftAlign = "\x1B\x61\x00";
+    const boldOn = "\x1B\x45\x01";
+    const boldOff = "\x1B\x45\x00";
+    const bigText = "\x1B\x21\x11";
+    const normalText = "\x1B\x21\x00";
+
+    let receipt = initCmd;
+    receipt += centerAlign + boldOn + h1 + "\nLAPORAN SHIFT\n" + normalText + boldOff;
+    receipt += dateStr + "\n";
+    receipt += leftAlign + "-".repeat(32) + "\n";
+    receipt += `Shift: ${currentShiftId}\nKasir: ${currentCashier}\nMasuk: ${new Date(currentLoginTime).toLocaleTimeString('id-ID')}\nKeluar: ${new Date().toLocaleTimeString('id-ID')}\n`;
+    receipt += "-".repeat(32) + "\n";
+    
+    receipt += boldOn + "RINGKASAN PENJUALAN\n" + boldOff;
+    receipt += formatLine("Total Nota:", String(data.totalOrders), false);
+    receipt += formatLine("Total Omset:", "Rp " + data.totalOmset.toLocaleString('id-ID'), false);
+    receipt += "-".repeat(32) + "\n";
+    
+    receipt += boldOn + "PEMASUKAN\n" + boldOff;
+    receipt += formatLine("Tunai:", "Rp " + data.totalCash.toLocaleString('id-ID'), false);
+    receipt += formatLine("QRIS:", "Rp " + data.totalQris.toLocaleString('id-ID'), false);
+    receipt += formatLine("Transfer:", "Rp " + data.totalTransfer.toLocaleString('id-ID'), false);
+    receipt += formatLine("Piutang Dibayar:", "Rp " + data.piutangPaid.toLocaleString('id-ID'), false);
+    receipt += "-".repeat(32) + "\n";
+    
+    receipt += boldOn + "PENGELUARAN / HUTANG\n" + boldOff;
+    receipt += formatLine("Keluar Laci:", "Rp " + data.totalExpenses.toLocaleString('id-ID'), false);
+    receipt += formatLine("Piutang Baru:", "Rp " + data.piutangGiven.toLocaleString('id-ID'), false);
+    receipt += formatLine("Diskon/Gratis:", "Rp " + data.totalFree.toLocaleString('id-ID'), false);
+    receipt += "-".repeat(32) + "\n";
+    
+    receipt += boldOn + formatLine("UANG LACI (NET):", "Rp " + data.net.toLocaleString('id-ID'), false) + boldOff;
+    receipt += "-".repeat(32) + "\n";
+    
+    receipt += boldOn + "ITEM TERJUAL\n" + boldOff;
+    for (const [name, qty] of Object.entries(data.foodSummary)) {
+        receipt += formatLine(name, String(qty), false);
+    }
+    
+    receipt += "\n\n\n\n\n"; 
+    return new TextEncoder().encode(receipt);
+}
+
+function openInboundModal() {
     let select = document.getElementById("inbound-tank-target"); select.innerHTML = ""; let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
     tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">💧 ${t.name}</option>`; });
     if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
@@ -859,7 +896,7 @@ window.submitInbound = function() {
     db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").add(payload); document.getElementById("inbound-modal").classList.add("hidden"); alert(`Berhasil mencatat kedatangan ${qty} Liter ke ${targetTank}.`); runBackgroundSync();
 }
 
-window.openCuciModal = function() {
+function openCuciModal() {
     let select = document.getElementById("cuci-tank"); select.innerHTML = ""; let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
     tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">💧 ${t.name}</option>`; });
     if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
@@ -872,7 +909,7 @@ window.submitCuciTandon = function() {
     db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").add(payload); document.getElementById("cuci-modal").classList.add("hidden"); alert("Laporan Cuci Tandon berhasil disimpan. Menunggu validasi Admin."); runBackgroundSync();
 }
 
-window.openLaporModal = function() {
+function openLaporModal() {
     let select = document.getElementById("lapor-tank"); select.innerHTML = ""; let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
     tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">⚠️ ${t.name}</option>`; });
     if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">⚠️ Tangki Air RO</option><option value="Tangki Air Standar">⚠️ Tangki Air Standar</option>`; }
@@ -885,7 +922,7 @@ window.submitLaporMasalah = function() {
     db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").add(payload); document.getElementById("lapor-modal").classList.add("hidden"); alert("Laporan Masalah (Bocor) berhasil dikirim. Menunggu validasi Admin."); runBackgroundSync();
 }
 
-window.openExpenseModal = function() {
+function openExpenseModal() {
     document.getElementById("expense-modal").classList.remove("hidden"); 
 }
 window.saveExpense = function() {
@@ -897,7 +934,7 @@ window.saveExpense = function() {
     document.getElementById("expense-modal").classList.add("hidden"); document.getElementById("exp-amount").value = ""; document.getElementById("exp-category").value = ""; document.getElementById("exp-desc").value = ""; alert("Pengeluaran Berhasil Dicatat!"); runBackgroundSync();
 }
 
-window.openHistoryModal = function() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
+function openHistoryModal() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
 window.renderHistoryList = function(type) {
     const container = document.getElementById("history-container"); container.innerHTML = "";
     if (type === 'orders') {
@@ -1145,6 +1182,62 @@ window.openShiftReport = function() {
             };
         };
     };
+}
+
+// ⚡ NEW: SHIFT REPORT PRINTER ENGINE ⚡
+window.printShiftReport = async function() {
+    if (!window.currentShiftData) return alert("Data shift belum siap.");
+    const payloadBytes = await buildEscPosShiftReport(window.currentShiftData);
+    await printViaBluetooth(payloadBytes);
+}
+
+async function buildEscPosShiftReport(data) {
+    const settings = await getDynamicSettings();
+    const h1 = settings["Header_1"] || "PURE WATER";
+    const dateStr = new Date().toLocaleString('id-ID');
+    
+    const initCmd = "\x1B\x40"; 
+    const centerAlign = "\x1B\x61\x01";
+    const leftAlign = "\x1B\x61\x00";
+    const boldOn = "\x1B\x45\x01";
+    const boldOff = "\x1B\x45\x00";
+    const normalText = "\x1B\x21\x00";
+
+    let receipt = initCmd;
+    receipt += centerAlign + boldOn + h1 + "\nLAPORAN SHIFT\n" + normalText + boldOff;
+    receipt += dateStr + "\n";
+    receipt += leftAlign + "-".repeat(32) + "\n";
+    receipt += `Shift: ${currentShiftId}\nKasir: ${currentCashier}\nMasuk: ${new Date(currentLoginTime).toLocaleTimeString('id-ID')}\nKeluar: ${new Date().toLocaleTimeString('id-ID')}\n`;
+    receipt += "-".repeat(32) + "\n";
+    
+    receipt += boldOn + "RINGKASAN PENJUALAN\n" + boldOff;
+    receipt += formatLine("Total Nota:", String(data.totalOrders), false);
+    receipt += formatLine("Total Omset:", "Rp " + data.totalOmset.toLocaleString('id-ID'), false);
+    receipt += "-".repeat(32) + "\n";
+    
+    receipt += boldOn + "PEMASUKAN\n" + boldOff;
+    receipt += formatLine("Tunai:", "Rp " + data.totalCash.toLocaleString('id-ID'), false);
+    receipt += formatLine("QRIS:", "Rp " + data.totalQris.toLocaleString('id-ID'), false);
+    receipt += formatLine("Transfer:", "Rp " + data.totalTransfer.toLocaleString('id-ID'), false);
+    receipt += formatLine("Piutang Dibayar:", "Rp " + data.piutangPaid.toLocaleString('id-ID'), false);
+    receipt += "-".repeat(32) + "\n";
+    
+    receipt += boldOn + "PENGELUARAN / HUTANG\n" + boldOff;
+    receipt += formatLine("Keluar Laci:", "Rp " + data.totalExpenses.toLocaleString('id-ID'), false);
+    receipt += formatLine("Piutang Baru:", "Rp " + data.piutangGiven.toLocaleString('id-ID'), false);
+    receipt += formatLine("Diskon/Gratis:", "Rp " + data.totalFree.toLocaleString('id-ID'), false);
+    receipt += "-".repeat(32) + "\n";
+    
+    receipt += boldOn + formatLine("UANG LACI (NET):", "Rp " + data.net.toLocaleString('id-ID'), false) + boldOff;
+    receipt += "-".repeat(32) + "\n";
+    
+    receipt += boldOn + "ITEM TERJUAL\n" + boldOff;
+    for (const [name, qty] of Object.entries(data.foodSummary)) {
+        receipt += formatLine(name, String(qty), false);
+    }
+    
+    receipt += "\n\n\n\n\n"; 
+    return new TextEncoder().encode(receipt);
 }
 
 window.initiateLogoutSequence = function() { 
