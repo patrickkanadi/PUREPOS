@@ -1,6 +1,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbz797WvLnGIpjpVwdhgoy5YbSJtklutmIXlqjhvZx6LU0fVDTImgJ341NIqB7Y58kp2/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 12; 
+const DB_VERSION = 13; // Version bump for Escrow & Galon schema
 let db;
 
 let posSessions = [{ cart: [], customer: null }, { cart: [], customer: null }, { cart: [], customer: null }];
@@ -297,7 +297,6 @@ function handleAutocomplete(e) {
     };
 }
 
-// ⚡ TRUE-DATA EXPENSE CATEGORIES ONLY ⚡
 window.handleCategoryAutocomplete = function() {
     if (!db) return;
     const val = document.getElementById("exp-category").value.toLowerCase().trim(); 
@@ -305,7 +304,7 @@ window.handleCategoryAutocomplete = function() {
     
     db.transaction(["expense_categories"], "readonly").objectStore("expense_categories").getAll().onsuccess = (ev) => {
         let categories = ev.target.result.map(c => c.name);
-        
+
         let matches = categories;
         if (val.length > 0) { matches = categories.filter(c => c.toLowerCase().includes(val)); }
 
@@ -699,6 +698,7 @@ async function finalizeOrder(shouldPrint) {
         let cartItem = currentCart.find(i => i.itemId === itemId); if (cartItem) cartItem.redeemed = qty;
     });
 
+    // ⚡ LOYALTY ESCROW: Only add points to wallet if NO DEBT ⚡
     let loyaltyChanges = {}; let freeItemsRedeemed = [];
     currentCart.forEach(item => {
         if (item.redeemed > 0) { freeItemsRedeemed.push({ name: item.name, qty: item.redeemed }); }
@@ -716,10 +716,16 @@ async function finalizeOrder(shouldPrint) {
         updatedWallet = JSON.parse(JSON.stringify(activeCustomerProfile.wallet || {})); 
         for(let itemName in loyaltyChanges) {
             if(!updatedWallet[itemName]) updatedWallet[itemName] = {points:0, free:0};
-            let c = loyaltyChanges[itemName]; updatedWallet[itemName].points += c.earned; updatedWallet[itemName].free -= c.redeemed;
-            if(c.threshold > 0) {
-                let newFree = Math.floor(updatedWallet[itemName].points / c.threshold);
-                updatedWallet[itemName].points = updatedWallet[itemName].points % c.threshold; updatedWallet[itemName].free += newFree;
+            
+            // Redemptions always deduct immediately. Earnings only add if debt is 0.
+            updatedWallet[itemName].free -= loyaltyChanges[itemName].redeemed;
+            if (debtAmount === 0) {
+                updatedWallet[itemName].points += loyaltyChanges[itemName].earned;
+                if(loyaltyChanges[itemName].threshold > 0) {
+                    let newFree = Math.floor(updatedWallet[itemName].points / loyaltyChanges[itemName].threshold);
+                    updatedWallet[itemName].points = updatedWallet[itemName].points % loyaltyChanges[itemName].threshold; 
+                    updatedWallet[itemName].free += newFree;
+                }
             }
         }
         activeCustomerProfile.piutang = newPiutang;
@@ -828,7 +834,7 @@ async function buildEscPosReceipt(orderId, order, deposit, debt, payMethod, upda
     return new TextEncoder().encode(receipt);
 }
 
-function openInboundModal() {
+window.openInboundModal = function() {
     let select = document.getElementById("inbound-tank-target"); select.innerHTML = ""; let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
     tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">💧 ${t.name}</option>`; });
     if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
@@ -841,7 +847,7 @@ window.submitInbound = function() {
     db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").add(payload); document.getElementById("inbound-modal").classList.add("hidden"); alert(`Berhasil mencatat kedatangan ${qty} Liter ke ${targetTank}.`); runBackgroundSync();
 }
 
-function openCuciModal() {
+window.openCuciModal = function() {
     let select = document.getElementById("cuci-tank"); select.innerHTML = ""; let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
     tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">💧 ${t.name}</option>`; });
     if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
@@ -854,7 +860,7 @@ window.submitCuciTandon = function() {
     db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").add(payload); document.getElementById("cuci-modal").classList.add("hidden"); alert("Laporan Cuci Tandon berhasil disimpan. Menunggu validasi Admin."); runBackgroundSync();
 }
 
-function openLaporModal() {
+window.openLaporModal = function() {
     let select = document.getElementById("lapor-tank"); select.innerHTML = ""; let tanks = globalMenuData.filter(m => m.category === "Tandon" || m.subCategory === "Raw Water");
     tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">⚠️ ${t.name}</option>`; });
     if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">⚠️ Tangki Air RO</option><option value="Tangki Air Standar">⚠️ Tangki Air Standar</option>`; }
@@ -864,14 +870,13 @@ window.submitLaporMasalah = function() {
     let tank = document.getElementById("lapor-tank").value; let qty = Number(document.getElementById("lapor-qty").value); let notes = document.getElementById("lapor-notes").value.trim();
     if (qty <= 0 || notes === "") return alert("Harap masukkan estimasi air hilang dan kronologi kejadian dengan lengkap.");
     let payload = { logId: "LPR-" + Date.now(), timestamp: getWibDate(), cashier: currentCashier, shiftId: currentShiftId, outlet: currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
-    db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").add(payload); document.getElementById("lapor-modal").classList.add("hidden"); alert("Laporan Masalah berhasil dikirim. Menunggu validasi Admin."); runBackgroundSync();
+    db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").add(payload); document.getElementById("lapor-modal").classList.add("hidden"); alert("Laporan Masalah (Bocor) berhasil dikirim. Menunggu validasi Admin."); runBackgroundSync();
 }
 
-function openExpenseModal() {
+window.openExpenseModal = function() {
     document.getElementById("expense-modal").classList.remove("hidden"); 
 }
-
-function saveExpense() {
+window.saveExpense = function() {
     const amount = Number(document.getElementById("exp-amount").value); const category = document.getElementById("exp-category").value.trim();
     if (amount <= 0 || !category) return alert("Harap masukkan jumlah dan kategori yang benar.");
     db.transaction(["expense_categories"], "readwrite").objectStore("expense_categories").put({ name: category });
@@ -880,8 +885,8 @@ function saveExpense() {
     document.getElementById("expense-modal").classList.add("hidden"); document.getElementById("exp-amount").value = ""; document.getElementById("exp-category").value = ""; document.getElementById("exp-desc").value = ""; alert("Pengeluaran Berhasil Dicatat!"); runBackgroundSync();
 }
 
-function openHistoryModal() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
-function renderHistoryList(type) {
+window.openHistoryModal = function() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
+window.renderHistoryList = function(type) {
     const container = document.getElementById("history-container"); container.innerHTML = "";
     if (type === 'orders') {
         db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
@@ -932,16 +937,8 @@ window.showOrderDetail = function(orderId) {
     };
 }
 
-window.reprintOrder = async function(orderId) {
-    const order = await new Promise(res => db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = e => res(e.target.result));
-    if (!order) return alert("Order tidak ditemukan di memori tablet lokal.");
-    const deposit = (order.cashAmount || 0) + (order.qrisAmount || 0) + (order.transferAmount || 0) + (order.freeAmount || 0);
-    const payloadBytes = await buildEscPosReceipt(order.orderId, order, deposit, (order.debtAmount || 0), order.paymentMethod, {});
-    await printViaBluetooth(payloadBytes);
-}
-
-function requestVoid(type, id) { currentVoidTarget = { type, id }; document.getElementById("admin-void-pin").value = ""; document.getElementById("admin-void-modal").classList.remove("hidden"); }
-function submitRemoteVoid() {
+window.requestVoid = function(type, id) { currentVoidTarget = { type, id }; document.getElementById("admin-void-pin").value = ""; document.getElementById("admin-void-modal").classList.remove("hidden"); }
+window.submitRemoteVoid = function() {
     const type = currentVoidTarget.type; const id = currentVoidTarget.id; const storeName = type === 'orders' ? "orders" : "expenses";
     db.transaction([storeName], "readwrite").objectStore(storeName).get(id).onsuccess = (e) => {
         const item = e.target.result; if (type === 'orders') item.orderStatus = "Void Pending"; else item.status = "Void Pending";
@@ -950,7 +947,7 @@ function submitRemoteVoid() {
     db.transaction(["void_requests"], "readwrite").objectStore("void_requests").add({ id: id, type: type, status: "Void Pending", authName: "Menunggu" });
     document.getElementById("admin-void-modal").classList.add("hidden"); runBackgroundSync(); alert("Request Pembatalan dikirim ke Admin.");
 }
-async function confirmAdminVoid() {
+window.confirmAdminVoid = async function() {
     const pinInput = document.getElementById("admin-void-pin").value.trim(); 
     if (!pinInput) return alert("Harap masukkan PIN Admin.");
     
@@ -1071,7 +1068,7 @@ function calculateLiveDrawer(callback) {
     };
 }
 
-function openCashDrop(forLogout = false) {
+window.openCashDrop = function(forLogout = false) {
     isLoggingOut = forLogout; document.getElementById("cash-drop-title").innerText = isLoggingOut ? "🔒 Tutup Shift & Setor Laci" : "🏦 Simpan / Tarik Uang Laci";
     document.getElementById("btn-drop-cancel").innerText = isLoggingOut ? "Batal Logout" : "Batal"; document.getElementById("btn-drop-confirm").innerText = isLoggingOut ? "Konfirmasi & Logout" : "Simpan Data";
     document.getElementById("drop-amount").value = ""; document.getElementById("drop-destination").value = "Admin"; document.getElementById("drop-notes").value = "";
@@ -1079,7 +1076,7 @@ function openCashDrop(forLogout = false) {
     calculateLiveDrawer((liveAmount) => { document.getElementById("live-drawer-display").innerText = `Rp ${liveAmount.toLocaleString('id-ID')}`; document.getElementById("cash-drop-modal").classList.remove("hidden"); });
 }
 
-function submitCashDrop() {
+window.submitCashDrop = function() {
     const pullAmount = Number(document.getElementById("drop-amount").value) || 0;
     if (pullAmount < 0) return alert("⚠️ ERROR: Nominal uang tidak valid.");
     if (pullAmount === 0 && !isLoggingOut) return alert("⚠️ ERROR: Harap masukkan nominal uang yang diambil dari laci.");
@@ -1097,7 +1094,7 @@ function submitCashDrop() {
     });
 }
 
-function openShiftReport() {
+window.openShiftReport = function() {
     let tCust = 0; let tOrders = 0; let tOmset = 0; let tCash = 0; let tQris = 0; let tTransfer = 0; let tFree = 0; let tExpense = 0; let tPiutangGiven = 0; let tPiutangPaidCash = 0; let foodSummary = {};
     document.getElementById("meter-water").value = "";
     
@@ -1130,7 +1127,7 @@ function openShiftReport() {
     };
 }
 
-function initiateLogoutSequence() { 
+window.initiateLogoutSequence = function() { 
     const meterW = document.getElementById("meter-water").value;
     if (meterW === "") return alert("⚠️ ERROR: Wajib mengisi Angka Meteran Air sebelum mengakhiri Shift.");
     window.currentShiftData.meterWater = Number(meterW);
@@ -1159,7 +1156,7 @@ async function executeFinalLogout(netCash) {
     window.location.reload(); 
 }
 
-function lockScreen() { window.location.reload(); }
+window.lockScreen = function() { window.location.reload(); }
 
 async function runBackgroundSync() {
     if (!navigator.onLine || isSyncing) return;
