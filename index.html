@@ -15,10 +15,12 @@
         .login-box button:disabled { background: #95a5a6; cursor: not-allowed; }
 
         #pos-screen { display: flex; flex-direction: column; height: 100%; }
-        #top-bar { background: #2c3e50; color: white; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
-        .status-indicator { display: flex; align-items: center; gap: 8px; flex-wrap:wrap;}
+        #top-bar { background: #2c3e50; color: white; padding: 10px 15px; display: flex; justify-content: space-between; align-items: center; }
+        
+        /* ⚡ COMPACT TOP BAR CSS ⚡ */
+        .status-indicator { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end;}
         .dot-online { height: 12px; width: 12px; background-color: #2ecc71; border-radius: 50%; flex-shrink: 0; }
-        .btn-top { margin-left: 8px; padding: 6px 12px; cursor: pointer; border: 1px solid white; color: white; border-radius: 4px; font-weight: bold; }
+        .btn-top { margin-left: 0; padding: 6px 8px; cursor: pointer; border: 1px solid white; color: white; border-radius: 4px; font-weight: bold; font-size: 12px; }
         
         #main-workspace { display: flex; flex-direction: row; flex: 1; overflow: hidden; }
         
@@ -151,18 +153,21 @@
                 <strong>Kasir:</strong> <span id="display-cashier">---</span> 
                 <span style="color:#f1c40f; margin-left: 10px;">📍 <span id="display-outlet">---</span></span>
             </div>
+            <!-- ⚡ COMPACT, NO-DROPDOWN TOP BAR ⚡ -->
             <div class="status-indicator">
-                <span class="dot-online" id="network-dot"></span><span id="network-text" style="margin-right: 10px;">Memuat...</span>
-                <button class="btn-top hidden" id="btn-install" style="background:#2980b9; border-color:#2980b9;" onclick="installPWA()">📲 Install App</button>
-                <button class="btn-top" id="btn-connect-printer" style="background:#f39c12; border-color:#f39c12;" onclick="connectBluetoothPrinter()">🖨️ Konek Printer</button>
-                <button class="btn-top" style="background:#34495e; border-color:#34495e;" onclick="manualPushSync()">🔄 Sinkron</button>
-                <button class="btn-top" style="background:#8e44ad; border-color:#8e44ad;" onclick="openBukuPiutang()">📒 Buku Piutang</button>
-                <button class="btn-top" style="background:#27ae60; border-color:#27ae60;" onclick="openCuciModal()">🧹 Cuci Tandon</button>
-                <button class="btn-top" style="background:#c0392b; border-color:#c0392b;" onclick="openLaporModal()">⚠️ Lapor Masalah</button>
-                <button class="btn-top" style="background:#3498db; border-color:#3498db;" onclick="openInboundModal()">🚚 Truk Air</button>
-                <button class="btn-top" style="background:#16a085; border-color:#16a085;" onclick="openCashDrop(false)">🏦 Laci Uang</button>
+                <div style="display:flex; align-items:center; gap:5px; margin-right:5px;">
+                    <span class="dot-online" id="network-dot"></span><span id="network-text" style="font-size:12px;">Memuat...</span>
+                </div>
+                <button class="btn-top hidden" id="btn-install" style="background:#2980b9; border-color:#2980b9;" onclick="installPWA()">📲 App</button>
+                <button class="btn-top" id="btn-connect-printer" style="background:#f39c12; border-color:#f39c12;" onclick="connectBluetoothPrinter()">🖨️ Printer</button>
+                <button class="btn-top" style="background:#34495e; border-color:#34495e;" onclick="manualPushSync()">🔄 Sync</button>
+                <button class="btn-top" style="background:#8e44ad; border-color:#8e44ad;" onclick="openBukuPiutang()">📒 Piutang</button>
+                <button class="btn-top" style="background:#27ae60; border-color:#27ae60;" onclick="openCuciModal()">🧹 Cuci</button>
+                <button class="btn-top" style="background:#c0392b; border-color:#c0392b;" onclick="openLaporModal()">⚠️ Lapor</button>
+                <button class="btn-top" style="background:#3498db; border-color:#3498db;" onclick="openInboundModal()">🚚 Truk</button>
+                <button class="btn-top" style="background:#16a085; border-color:#16a085;" onclick="openCashDrop(false)">🏦 Laci</button>
                 <button class="btn-top" style="background:#8e44ad; border-color:#8e44ad;" onclick="openHistoryModal()">📋 Riwayat</button>
-                <button class="btn-top" style="background:#e67e22; border-color:#e67e22;" onclick="openExpenseModal()">💸 Pengeluaran</button>
+                <button class="btn-top" style="background:#e67e22; border-color:#e67e22;" onclick="openExpenseModal()">💸 Keluar</button>
                 <button class="btn-top" style="background:#2980b9; border-color:#2980b9;" onclick="openShiftReport()">📊 Shift</button>
                 <button class="btn-top" style="background:#7f8c8d; border-color:#7f8c8d;" onclick="lockScreen()">🔒 Kunci</button>
             </div>
@@ -269,7 +274,7 @@
         </div>
     </div>
 
-    <!-- ⚡ Detail Pesanan Modal (FIXED Z-INDEX) ⚡ -->
+    <!-- Modal Detail Order -->
     <div id="order-detail-modal" class="modal-overlay hidden" style="z-index: 10005;">
         <div class="modal-content">
             <h2 style="margin-top:0; color:#2980b9;">🔍 Detail Pesanan</h2>
@@ -320,6 +325,7 @@
         </div>
     </div>
 
+    <!-- Cuci Tandon & Lapor Masalah -->
     <div id="cuci-modal" class="modal-overlay hidden"><div class="modal-content" style="max-width: 400px;"><h2 style="margin-top:0; color: #27ae60;">🧹 Lapor Cuci Tandon</h2><p style="color: #7f8c8d; font-size: 14px;">Catat air yang terbuang. Stok akan terpotong setelah disetujui Admin.</p><div class="form-box"><label>Pilih Tandon</label><select id="cuci-tank" style="font-size: 18px; font-weight: bold;"></select></div><div class="form-box"><label>Estimasi Air Terbuang (Liter)</label><input type="number" id="cuci-qty" placeholder="Misal: 50" style="font-size: 20px; font-weight: bold;"></div><div class="form-box"><label>Catatan</label><input type="text" id="cuci-notes" placeholder="Misal: Pengurasan rutin"></div><div style="display: flex; gap: 10px; margin-top: 20px;"><button onclick="document.getElementById('cuci-modal').classList.add('hidden')" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold;">Batal</button><button onclick="submitCuciTandon()" style="flex:2; padding:15px; background:#27ae60; color:white; border:none; border-radius:8px; font-weight:bold;">Kirim</button></div></div></div>
     <div id="lapor-modal" class="modal-overlay hidden"><div class="modal-content" style="max-width: 450px;"><h2 style="margin-top:0; color: #c0392b;">⚠️ Lapor Masalah</h2><p style="color: #7f8c8d; font-size: 14px;">Laporkan kehilangan air. Stok terpotong setelah disetujui Admin.</p><div class="form-box"><label>Pilih Tandon</label><select id="lapor-tank" style="font-size: 18px; font-weight: bold;"></select></div><div class="form-box"><label>Estimasi Air Hilang (Liter)</label><input type="number" id="lapor-qty" placeholder="Misal: 100" style="font-size: 20px; font-weight: bold; border-color: #c0392b;"></div><div class="form-box"><label>Kronologi</label><textarea id="lapor-notes" rows="3" placeholder="Pipa filter pecah..."></textarea></div><div style="display: flex; gap: 10px; margin-top: 20px;"><button onclick="document.getElementById('lapor-modal').classList.add('hidden')" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold;">Batal</button><button onclick="submitLaporMasalah()" style="flex:2; padding:15px; background:#c0392b; color:white; border:none; border-radius:8px; font-weight:bold;">Kirim</button></div></div></div>
     <div id="inbound-modal" class="modal-overlay hidden"><div class="modal-content" style="max-width: 400px;"><h2 style="margin-top:0; color: #3498db;">🚚 Terima Truk Air</h2><div class="form-box"><label>Tandon Tujuan</label><select id="inbound-tank-target" style="font-size: 18px; font-weight: bold;"></select></div><div class="form-box"><label>Volume Air (Liter)</label><input type="number" id="inbound-qty" placeholder="Misal: 8000" style="font-size: 20px; font-weight: bold;"></div><div class="form-box"><label>Plat Truk</label><input type="text" id="inbound-notes"></div><div style="display: flex; gap: 10px; margin-top: 20px;"><button onclick="document.getElementById('inbound-modal').classList.add('hidden')" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold;">Batal</button><button onclick="submitInbound()" style="flex:2; padding:15px; background:#3498db; color:white; border:none; border-radius:8px; font-weight:bold;">Simpan</button></div></div></div>
