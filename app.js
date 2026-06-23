@@ -302,17 +302,18 @@ window.handleAutocomplete = function(e) {
                 let wStr = JSON.stringify(m.wallet || {}).replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
                 let nameStr = String(m.name || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let fOut = String(m.firstOutlet || "").replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
-                let rOut = String(m.recentOutlets || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                let displayFOut = (fOut && fOut !== "Unknown") ? fOut : "-";
+                let rOutStr = m.recentOutlets || "";
+                let rOutList = rOutStr ? rOutStr.split(",").map(s => s.trim()) : [];
+                let lOut = rOutList.length > 0 ? rOutList[rOutList.length - 1] : "-";
                 let safePhone = String(m.phone || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 
                 let crossDebtWarning = "";
                 let localDebt = m.piutang || 0;
                 let remoteDebt = 0;
                 let remoteOutlets = [];
-                let rOutList = m.recentOutlets ? m.recentOutlets.split(",").map(s => s.trim()) : [];
-                let lOut = rOutList.length > 0 ? rOutList[rOutList.length - 1] : "-";
                 
-                let outletBadge = `<span style="font-size:11px; background:#ecf0f1; color:#2c3e50; padding:2px 6px; border-radius:4px; margin-left:6px; font-weight:normal;">📍 Akhir: ${lOut}</span>`;
+                let outletBadge = `<span style="font-size:11px; background:#ecf0f1; color:#2c3e50; padding:2px 6px; border-radius:4px; margin-left:6px; font-weight:normal;">📍 Awal: ${displayFOut} | Akhir: ${lOut}</span>`;
                 
                 if (m.piutangBreakdown) {
                     localDebt = m.piutangBreakdown[window.currentOutlet] || 0;
@@ -328,7 +329,7 @@ window.handleAutocomplete = function(e) {
                     crossDebtWarning = `<div style="font-size:12px; color:#c0392b; font-weight:bold; margin-top:2px;">⚠️ Piutang Rp ${remoteDebt.toLocaleString('id-ID')} di cabang lain (${remoteOutlets.join(', ')})</div>`;
                 }
 
-                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localDebt}, '${fOut}', '${rOut}', '${crossDebtWarning.replace(/'/g, "\\'").replace(/"/g, '&quot;')}')">
+                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localDebt}, '${fOut}', '${rOutStr}', '${crossDebtWarning.replace(/'/g, "\\'").replace(/"/g, '&quot;')}')">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div class="autocomplete-name">${m.name} ${outletBadge} ${crossDebtWarning}</div>
                         <div class="autocomplete-phone" style="font-size:14px; color:#7f8c8d;">${m.phone}</div>
@@ -1048,7 +1049,7 @@ window.renderHistoryList = function(type) {
             });
         };
     } else if (type === 'shifts') {
-        window.db.transaction(["local_shift_history"], "readonly").objectStore("local_shift_history").getAll().onsuccess = (e) => {
+        window.db.transaction(["shift_reports"], "readonly").objectStore("shift_reports").getAll().onsuccess = (e) => {
             const shifts = e.target.result.filter(s => s.outlet === window.currentOutlet).reverse().slice(0, 50);
             if(shifts.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada histori shift di cabang ini.</div>`;
             shifts.forEach(s => {
@@ -1271,7 +1272,7 @@ window.submitCashDrop = function() {
     });
 }
 
-window.openShiftReport = function() {
+window.openCurrentShiftReport = function() {
     let tCust = 0; let tOrders = 0; let tOmset = 0; let tCash = 0; let tQris = 0; let tTransfer = 0; let tFree = 0; let tExpense = 0; let tPiutangGiven = 0; let tPiutangPaidCash = 0; let foodSummary = {};
     document.getElementById("meter-water").value = "";
     
@@ -1308,6 +1309,7 @@ window.openShiftReport = function() {
         };
     };
 }
+window.openShiftReport = window.openCurrentShiftReport; // Fallback alias
 
 window.initiateLogoutSequence = function() { 
     const meterW = document.getElementById("meter-water").value;
