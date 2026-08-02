@@ -1,20 +1,56 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzWcVse-LJpaR9Glye5UzAVcwx3bVyhCm3GLW1ZMUfCFRNUClagblybq-OQQL4gucMs/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 13; 
+const DB_VERSION = 14; // Bumped version for new schema
 window.db = null;
 
+// Core State
 window.posSessions = [{ cart: [], customer: null }, { cart: [], customer: null }, { cart: [], customer: null }];
-window.activeSessionIndex = 0; window.currentCart = window.posSessions[0].cart; window.activeCustomerProfile = window.posSessions[0].customer;
+window.activeSessionIndex = 0; 
+window.currentCart = window.posSessions[0].cart; 
+window.activeCustomerProfile = window.posSessions[0].customer;
 window.piutangTargetMember = null;
 
+// App Context
 window.currentCashier = ""; window.currentPin = ""; window.currentShiftId = ""; window.currentLoginTime = ""; window.currentOutlet = "";
 window.globalMenuData = []; window.currentCategory = ""; 
 window.outletStocks = {}; window.isLoggingOut = false; window.currentVoidTarget = { type: null, id: null };
 window.isMenuLocked = true; window.isSyncing = false; window.loyaltyEnabled = false; 
-window.deferredPrompt = null;
 
+// Advanced Promos (From Laundry POS)
+window.promoRules = {};
+window.promoStampRules = {};
+
+window.deferredPrompt = null;
 window.bluetoothDevice = null;
 window.printerCharacteristic = null;
+
+window.initDB = function() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onupgradeneeded = (event) => {
+            window.db = event.target.result;
+            if (!window.db.objectStoreNames.contains("staff")) window.db.createObjectStore("staff", { keyPath: "pin" });
+            if (!window.db.objectStoreNames.contains("menu")) window.db.createObjectStore("menu", { keyPath: "itemId" });
+            if (!window.db.objectStoreNames.contains("settings")) window.db.createObjectStore("settings", { keyPath: "key" });
+            if (!window.db.objectStoreNames.contains("orders")) window.db.createObjectStore("orders", { keyPath: "orderId" });
+            if (!window.db.objectStoreNames.contains("active_shifts")) window.db.createObjectStore("active_shifts", { keyPath: "pin" }); 
+            if (!window.db.objectStoreNames.contains("cash_drops")) window.db.createObjectStore("cash_drops", { keyPath: "dropId" }); 
+            if (!window.db.objectStoreNames.contains("shift_reports")) window.db.createObjectStore("shift_reports", { keyPath: "shiftId" }); 
+            if (!window.db.objectStoreNames.contains("expenses")) window.db.createObjectStore("expenses", { keyPath: "expenseId" });
+            if (!window.db.objectStoreNames.contains("members")) window.db.createObjectStore("members", { keyPath: "phone" });
+            if (!window.db.objectStoreNames.contains("unsynced_members")) window.db.createObjectStore("unsynced_members", { keyPath: "phone" });
+            if (!window.db.objectStoreNames.contains("expense_categories")) window.db.createObjectStore("expense_categories", { keyPath: "name" });
+            if (!window.db.objectStoreNames.contains("void_requests")) window.db.createObjectStore("void_requests", { keyPath: "id" });
+            if (!window.db.objectStoreNames.contains("local_shift_history")) window.db.createObjectStore("local_shift_history", { keyPath: "shiftId" });
+            if (!window.db.objectStoreNames.contains("stock_inbound")) window.db.createObjectStore("stock_inbound", { keyPath: "logId" });
+            if (!window.db.objectStoreNames.contains("cuci_tandon")) window.db.createObjectStore("cuci_tandon", { keyPath: "logId" });
+            if (!window.db.objectStoreNames.contains("lapor_masalah")) window.db.createObjectStore("lapor_masalah", { keyPath: "logId" });
+            if (!window.db.objectStoreNames.contains("bayar_piutang")) window.db.createObjectStore("bayar_piutang", { keyPath: "payId" });
+        };
+        request.onsuccess = (e) => { window.db = e.target.result; resolve(window.db); };
+        request.onerror = (e) => reject(e);
+    });
+}
 
 window.formatDateReadable = function(dateInput) {
     if (!dateInput) return "-";
@@ -61,37 +97,7 @@ window.installPWA = function() {
     }
 }
 
-window.initDB = function() {
-    return new Promise((resolve, reject) => {
-        const request = indexedDB.open(DB_NAME, DB_VERSION);
-        request.onupgradeneeded = (event) => {
-            window.db = event.target.result;
-            if (!window.db.objectStoreNames.contains("staff")) window.db.createObjectStore("staff", { keyPath: "pin" });
-            if (!window.db.objectStoreNames.contains("menu")) window.db.createObjectStore("menu", { keyPath: "itemId" });
-            if (!window.db.objectStoreNames.contains("settings")) window.db.createObjectStore("settings", { keyPath: "key" });
-            if (!window.db.objectStoreNames.contains("orders")) window.db.createObjectStore("orders", { keyPath: "orderId" });
-            if (!window.db.objectStoreNames.contains("active_shifts")) window.db.createObjectStore("active_shifts", { keyPath: "pin" }); 
-            if (!window.db.objectStoreNames.contains("cash_drops")) window.db.createObjectStore("cash_drops", { keyPath: "dropId" }); 
-            if (!window.db.objectStoreNames.contains("shift_reports")) window.db.createObjectStore("shift_reports", { keyPath: "shiftId" }); 
-            if (!window.db.objectStoreNames.contains("expenses")) window.db.createObjectStore("expenses", { keyPath: "expenseId" });
-            if (!window.db.objectStoreNames.contains("members")) window.db.createObjectStore("members", { keyPath: "phone" });
-            if (!window.db.objectStoreNames.contains("unsynced_members")) window.db.createObjectStore("unsynced_members", { keyPath: "phone" });
-            if (!window.db.objectStoreNames.contains("expense_categories")) window.db.createObjectStore("expense_categories", { keyPath: "name" });
-            if (!window.db.objectStoreNames.contains("void_requests")) window.db.createObjectStore("void_requests", { keyPath: "id" });
-            if (!window.db.objectStoreNames.contains("local_shift_history")) window.db.createObjectStore("local_shift_history", { keyPath: "shiftId" });
-            if (!window.db.objectStoreNames.contains("stock_inbound")) window.db.createObjectStore("stock_inbound", { keyPath: "logId" });
-            if (!window.db.objectStoreNames.contains("cuci_tandon")) window.db.createObjectStore("cuci_tandon", { keyPath: "logId" });
-            if (!window.db.objectStoreNames.contains("lapor_masalah")) window.db.createObjectStore("lapor_masalah", { keyPath: "logId" });
-            if (!window.db.objectStoreNames.contains("bayar_piutang")) window.db.createObjectStore("bayar_piutang", { keyPath: "payId" });
-        };
-        request.onsuccess = (e) => { window.db = e.target.result; resolve(window.db); };
-        request.onerror = (e) => reject(e);
-    });
-}
-
-window.getStaffFromDB = async function() {
-    return new Promise(resolve => { window.db.transaction(["staff"], "readonly").objectStore("staff").getAll().onsuccess = e => resolve(e.target.result); });
-}
+window.getStaffFromDB = async function() { return new Promise(resolve => { window.db.transaction(["staff"], "readonly").objectStore("staff").getAll().onsuccess = e => resolve(e.target.result); }); }
 
 window.checkAutoCloseShifts = async function() {
     if (!window.db) return;
@@ -180,7 +186,7 @@ window.attemptLogin = async function() {
                 window.lockMenu(); 
             };
         } else { alert("PIN Salah atau Data Kasir Tidak Ditemukan."); }
-    } catch (err) { console.error("Login Error:", err); alert("Terjadi kesalahan sistem saat login.");
+    } catch (err) { alert("Terjadi kesalahan sistem saat login.");
     } finally { loginBtn.disabled = false; loginBtn.innerText = "Masuk / Buka Shift"; }
 }
 
@@ -231,29 +237,50 @@ window.syncMasterData = async function() {
     
     try {
         if (!window.db) { await window.initDB(); }
-
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron PIN (Cepat)...";
         if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
 
         const authResponse = await fetch(API_URL + "?type=auth_only", { mode: 'cors', redirect: 'follow' });
-        const authContentType = authResponse.headers.get("content-type");
-        if (authContentType && authContentType.includes("text/html")) throw new Error("Akses Ditolak Google pada Phase 1.");
-        
         const authResult = await authResponse.json();
+        
         if (authResult.status === "Success") {
             const tx = window.db.transaction(["staff", "settings"], "readwrite");
             const staffStore = tx.objectStore("staff"); staffStore.clear(); authResult.data.staff.forEach(s => staffStore.put(s));
-            const settingsStore = tx.objectStore("settings"); settingsStore.clear(); for (const [k, v] of Object.entries(authResult.data.settings)) { settingsStore.put({ key: k, value: v }); }
+            const settingsStore = tx.objectStore("settings"); settingsStore.clear(); 
+            
+            // NEW: Parse Settings AND Promos
+            for (const [k, v] of Object.entries(authResult.data.settings)) { 
+                settingsStore.put({ key: k, value: v }); 
+                
+                // Parse Promo Rules for Checkout Logic
+                let upperKey = String(k).toUpperCase().replace(/\s+/g, '');
+                if (upperKey.includes("PROMO")) {
+                    let valStr = String(v || "");
+                    if (valStr.includes(":")) {
+                        valStr.split(",").forEach(p => {
+                            let parts = p.split(":");
+                            if (parts.length === 2) {
+                                let itemName = parts[0].trim().toUpperCase().replace(/\s+/g, '');
+                                let reqQty = Number(parts[1].trim());
+                                if (itemName && !isNaN(reqQty)) window.promoRules[itemName] = reqQty;
+                            } else if (parts.length === 4) {
+                                let itemName = parts[0].trim().toUpperCase().replace(/\s+/g, '');
+                                let minQty = Number(parts[1].trim());
+                                let target = Number(parts[2].trim());
+                                let rewardQty = Number(parts[3].trim());
+                                if (itemName && !isNaN(target)) window.promoStampRules[itemName] = { target, minQty, rewardQty, originalName: parts[0].trim() };
+                            }
+                        });
+                    }
+                }
+            }
+            
             const rawOutlets = authResult.data.settings["Outlet_List"] || "Pusat"; const outletArray = rawOutlets.split(",").map(s => s.trim()); const selectBox = document.getElementById("login-outlet");
             if(selectBox) { selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); }
         }
 
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Download Data Member...";
         const fullResponse = await fetch(API_URL, { mode: 'cors', redirect: 'follow' });
-        
-        const fullContentType = fullResponse.headers.get("content-type");
-        if (fullContentType && fullContentType.includes("text/html")) throw new Error("Akses Ditolak Google pada Phase 2 (Members).");
-
         const fullResult = await fullResponse.json();
         
         if (fullResult.status === "Success") {
@@ -272,11 +299,8 @@ window.syncMasterData = async function() {
             if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
             if (!document.getElementById("pos-screen").classList.contains("hidden")) { window.loadMenuUI(); }
         }
-
     } catch (e) { 
         console.error("Sync Error:", e);
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Gagal Sinkron"; 
-        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c";
         if (e.name === 'InvalidStateError' || e.message.includes("closing")) { await window.initDB(); }
     }
 }
@@ -290,48 +314,22 @@ window.handleAutocomplete = function(e) {
         const members = ev.target.result || []; 
         let matches = members;
         
-        if (val.length > 0) { 
-            matches = members.filter(m => String(m.phone).toLowerCase().includes(val) || String(m.name).toLowerCase().includes(val)); 
-        }
-        
-        matches.sort((a, b) => (b.spent || 0) - (a.spent || 0));
-        matches = matches.slice(0, 15);
+        if (val.length > 0) { matches = members.filter(m => String(m.phone).toLowerCase().includes(val) || String(m.name).toLowerCase().includes(val)); }
+        matches.sort((a, b) => (b.spent || 0) - (a.spent || 0)); matches = matches.slice(0, 15);
 
         if (matches.length > 0) {
             resBox.innerHTML = matches.map(m => {
                 let wStr = JSON.stringify(m.wallet || {}).replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
                 let nameStr = String(m.name || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let fOut = String(m.firstOutlet || "").replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
-                let displayFOut = (fOut && fOut !== "Unknown") ? fOut : "-";
                 let rOutStr = m.recentOutlets || "";
                 let rOutList = rOutStr ? rOutStr.split(",").map(s => s.trim()) : [];
                 let lOut = rOutList.length > 0 ? rOutList[rOutList.length - 1] : "-";
                 let safePhone = String(m.phone || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 
-                let crossDebtWarning = "";
-                let localDebt = m.piutang || 0;
-                let remoteDebt = 0;
-                let remoteOutlets = [];
-                
-                let outletBadge = `<span style="font-size:11px; background:#ecf0f1; color:#2c3e50; padding:2px 6px; border-radius:4px; margin-left:6px; font-weight:normal;">📍 Awal: ${displayFOut} | Akhir: ${lOut}</span>`;
-                
-                if (m.piutangBreakdown) {
-                    localDebt = m.piutangBreakdown[window.currentOutlet] || 0;
-                    for (let out in m.piutangBreakdown) {
-                        if (out !== window.currentOutlet && m.piutangBreakdown[out] > 0) {
-                            remoteDebt += m.piutangBreakdown[out];
-                            remoteOutlets.push(out);
-                        }
-                    }
-                }
-                
-                if (remoteDebt > 0) {
-                    crossDebtWarning = `<div style="font-size:12px; color:#c0392b; font-weight:bold; margin-top:2px;">⚠️ Piutang Rp ${remoteDebt.toLocaleString('id-ID')} di cabang lain (${remoteOutlets.join(', ')})</div>`;
-                }
-
-                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localDebt}, '${fOut}', '${rOutStr}', '${crossDebtWarning.replace(/'/g, "\\'").replace(/"/g, '&quot;')}')">
+                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0}, '${fOut}', '${rOutStr}')">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div class="autocomplete-name">${m.name} ${outletBadge} ${crossDebtWarning}</div>
+                        <div class="autocomplete-name">${m.name} <span style="font-size:11px; background:#ecf0f1; padding:2px 6px; border-radius:4px; margin-left:6px;">📍 Awal: ${fOut !== "Unknown" ? fOut : "-"} | Akhir: ${lOut}</span></div>
                         <div class="autocomplete-phone" style="font-size:14px; color:#7f8c8d;">${m.phone}</div>
                     </div>
                 </div>`;
@@ -370,14 +368,14 @@ window.selectCategory = function(name) {
     document.getElementById("cat-autocomplete-results").classList.add("hidden");
 };
 
-window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localPiutang, firstOutlet, recentOutlets, crossDebtWarningHTML) {
+window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localPiutang, firstOutlet, recentOutlets) {
     document.getElementById("autocomplete-results").classList.add("hidden");
     let lockedQueue = window.isCustomerLocked(phone);
     if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan pesanan di sana terlebih dahulu.`); }
 
     document.getElementById("cust-phone").value = phone; document.getElementById("cust-name").value = name; 
     let wallet = {}; try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
-    window.activeCustomerProfile = { phone: phone, name: name, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed, piutang: localPiutang, firstOutlet: firstOutlet, recentOutlets: recentOutlets, crossDebtHTML: crossDebtWarningHTML };
+    window.activeCustomerProfile = { phone: phone, name: name, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed, piutang: localPiutang, firstOutlet: firstOutlet, recentOutlets: recentOutlets };
     window.updatePromoBanner(window.activeCustomerProfile);
 };
 
@@ -457,42 +455,69 @@ window.clearCart = function() { window.lockMenu(); }
 window.reviewOrder = function() {
     if (window.currentCart.length === 0) return alert("Keranjang masih kosong!");
     window.cartGrandTotal = window.cartSubtotal;
-    const redeemContainer = document.getElementById("redemption-items"); redeemContainer.innerHTML = ""; let hasRedeemable = false;
+    const redeemContainer = document.getElementById("redemption-items"); redeemContainer.innerHTML = ""; 
+    let hasRedeemable = false;
 
     if (window.loyaltyEnabled && window.activeCustomerProfile) {
         let wallet = window.activeCustomerProfile.wallet || {};
+        
+        let cartAgg = {};
+        window.currentCart.forEach(item => {
+            let nameKey = String(item.name).trim().toUpperCase().replace(/\s+/g, '');
+            cartAgg[nameKey] = { qty: (cartAgg[nameKey]?.qty || 0) + item.qty, price: item.price, originalName: item.name, itemId: item.itemId };
+        });
+
+        // 1. Loyalty Points (Standard Pure Water POS)
         window.currentCart.forEach(item => {
             if (item.loyaltyThreshold > 0) {
                 let existingFree = wallet[item.name] ? wallet[item.name].free : 0;
                 let existingPoints = wallet[item.name] ? wallet[item.name].points : 0;
                 let t = item.loyaltyThreshold;
-                
-                let maxRedeemable = Math.min(existingFree, item.qty);
-                
-                for (let f = maxRedeemable; f <= item.qty; f++) {
+                let maxRedeemable = 0;
+                for (let f = Math.floor(item.qty); f >= 0; f--) {
                     let paidQty = item.qty - f;
                     let generatedFree = Math.floor((existingPoints + paidQty) / t);
-                    if (f <= existingFree + generatedFree) {
-                        maxRedeemable = f;
-                    } else {
-                        break;
-                    }
+                    if (f <= existingFree + generatedFree) { maxRedeemable = f; break; }
                 }
                 
                 if (maxRedeemable > 0) {
                     hasRedeemable = true;
-                    let availText = maxRedeemable > existingFree 
-                        ? `${existingFree} Saldo + ${maxRedeemable - existingFree} Dari Order Ini` 
-                        : `${existingFree} Saldo`;
-
                     redeemContainer.innerHTML += `
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding-bottom:8px; border-bottom:1px dashed #bce8f1;">
-                            <span style="font-size:14px; font-weight:bold; color:#2c3e50;">${item.name} <br><small style="font-weight:normal; color:#7f8c8d;">(Maks Tukar: ${maxRedeemable} | Info: ${availText})</small></span>
-                            <div style="display:flex; align-items:center; gap:8px;"><label style="font-size:12px;">Pakai:</label><input type="number" class="redeem-input" data-item="${item.itemId}" data-price="${item.price}" max="${maxRedeemable}" min="0" value="0" style="width:60px; padding:8px; text-align:center; font-size:16px; border:2px solid #bdc3c7; border-radius:6px;" onclick="this.select()" oninput="window.recalcRedemptions()"></div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding-bottom:8px; border-bottom:1px dashed #bce8f1; background:#fef9e7; padding:10px; border-radius:6px;">
+                            <span style="font-size:14px; font-weight:bold; color:#856404;">🎁 Loyalty: ${item.name} <br><small>Maks Tukar: ${maxRedeemable}</small></span>
+                            <input type="number" class="redeem-input" data-type="loyalty" data-item="${item.itemId}" data-name="${item.name}" data-price="${item.price}" max="${maxRedeemable}" min="0" value="0" style="width:60px; padding:8px; text-align:center; font-size:16px; border:2px solid #d4ac0d; border-radius:6px;" oninput="window.recalcRedemptions()">
                         </div>`;
                 }
             }
         });
+
+        // 2. Buy X Get 1 Promos (Laundry POS ported)
+        for (let itemName in cartAgg) {
+            let cartQty = cartAgg[itemName].qty;
+            let ruleKey = itemName;
+            let ruleQty = 0;
+            for (let pk in window.promoRules) { if (ruleKey.includes(pk) || pk.includes(ruleKey)) { ruleQty = window.promoRules[pk]; break; } }
+            
+            if (ruleQty > 0) {
+                let pItem = Number(wallet["_prog_" + cartAgg[itemName].originalName]) || 0;
+                let fItem = Number(wallet[cartAgg[itemName].originalName]) || 0;
+                let maxItemRedeemable = 0;
+                for (let r = Math.floor(cartQty); r >= 0; r--) {
+                    let paidItems = cartQty - r;
+                    let earnedFree = Math.floor((pItem + paidItems) / ruleQty);
+                    if (r <= fItem + earnedFree) { maxItemRedeemable = r; break; }
+                }
+
+                if (maxItemRedeemable > 0) {
+                    hasRedeemable = true;
+                    redeemContainer.innerHTML += `
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding-bottom:8px; border-bottom:1px dashed #bce8f1; background:#e8f8f5; padding:10px; border-radius:6px;">
+                        <span style="font-size:14px; font-weight:bold; color:#117a65;">🎉 Beli ${ruleQty} Gratis 1: ${cartAgg[itemName].originalName} <br><small>Maks Guna: ${maxItemRedeemable}</small></span>
+                        <input type="number" class="redeem-input" data-type="buy_x_get_1" data-item="${cartAgg[itemName].itemId}" data-name="${cartAgg[itemName].originalName}" data-price="${cartAgg[itemName].price}" max="${maxItemRedeemable}" min="0" value="0" style="width:60px; padding:8px; text-align:center; font-size:16px; border:2px solid #1abc9c; border-radius:6px;" oninput="window.recalcRedemptions()">
+                    </div>`;
+                }
+            }
+        }
     }
 
     if (hasRedeemable) { document.getElementById("redemption-section").classList.remove("hidden"); } else { document.getElementById("redemption-section").classList.add("hidden"); }
@@ -568,7 +593,6 @@ window.isCustomerLocked = function(phone) {
 window.updatePromoBanner = function(member) {
     const promoBanner = document.getElementById("promo-indicator-banner");
     const piutangBanner = document.getElementById("piutang-indicator-banner");
-    const warnBanner = document.getElementById("piutang-warning-banner");
     const outletDisplay = document.getElementById("active-cust-outlets");
 
     if (member && outletDisplay) {
@@ -578,10 +602,6 @@ window.updatePromoBanner = function(member) {
         let lOut = rOutList.length > 0 ? rOutList[rOutList.length - 1] : "-";
         outletDisplay.innerHTML = `📍 Awal: <strong>${fOut}</strong> | Akhir: <strong>${lOut}</strong>`;
     }
-
-    if (member && member.crossDebtHTML && member.crossDebtHTML !== "") {
-        if(warnBanner) { warnBanner.innerHTML = member.crossDebtHTML.replace(/&quot;/g, '"'); warnBanner.classList.remove("hidden"); }
-    } else { if(warnBanner) warnBanner.classList.add("hidden"); }
 
     if (member && member.piutang > 0) {
         piutangBanner.innerHTML = `<span>⚠️ <strong>Total Piutang Lokal:</strong> Rp ${member.piutang.toLocaleString('id-ID')}</span> <button onclick="window.openPiutangModal()" style="padding:5px 10px; background:#c0392b; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Lunasi Piutang</button>`;
@@ -613,20 +633,19 @@ window.lockMenu = function() {
     window.renderCart();
     const promoBanner = document.getElementById("promo-indicator-banner"); if(promoBanner) promoBanner.classList.add("hidden");
     const piutangBanner = document.getElementById("piutang-indicator-banner"); if(piutangBanner) piutangBanner.classList.add("hidden");
-    const warnBanner = document.getElementById("piutang-warning-banner"); if(warnBanner) warnBanner.classList.add("hidden");
     const outletDisplay = document.getElementById("active-cust-outlets"); if(outletDisplay) outletDisplay.innerHTML = "";
 }
 
 window.unlockMenu = function(isGuest) {
     let phone = "-"; let name = "Walk-in";
-    const promoBanner = document.getElementById("promo-indicator-banner"); const piutangBanner = document.getElementById("piutang-indicator-banner"); const warnBanner = document.getElementById("piutang-warning-banner");
+    const promoBanner = document.getElementById("promo-indicator-banner"); const piutangBanner = document.getElementById("piutang-indicator-banner"); 
     const outletDisplay = document.getElementById("active-cust-outlets");
 
     if (isGuest) { 
         document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = "Walk-in"; window.activeCustomerProfile = null; 
         document.getElementById("active-cust-name").innerText = name; document.getElementById("active-cust-phone").innerText = "";
         document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
-        if(promoBanner) promoBanner.classList.add("hidden"); if(piutangBanner) piutangBanner.classList.add("hidden"); if(warnBanner) warnBanner.classList.add("hidden");
+        if(promoBanner) promoBanner.classList.add("hidden"); if(piutangBanner) piutangBanner.classList.add("hidden");
         if(outletDisplay) outletDisplay.innerHTML = "";
         window.isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
     } else {
@@ -776,9 +795,17 @@ window.finalizeOrder = async function(shouldPrint) {
 
     let status = "Completed"; 
     window.currentCart.forEach(i => i.redeemed = 0);
+    let redeemedPromos = []; 
+    
     document.querySelectorAll(".redeem-input").forEach(input => {
-        let itemId = input.getAttribute("data-item"); let qty = Number(input.value) || 0;
-        let cartItem = window.currentCart.find(i => i.itemId === itemId); if (cartItem) cartItem.redeemed = qty;
+        let itemId = input.getAttribute("data-item"); 
+        let name = input.getAttribute("data-name");
+        let qty = Number(input.value) || 0;
+        let type = input.getAttribute("data-type") || "loyalty";
+        
+        let cartItem = window.currentCart.find(i => i.itemId === itemId); 
+        if (cartItem) cartItem.redeemed = (cartItem.redeemed || 0) + qty;
+        if (qty > 0) redeemedPromos.push({ source: type, item: name, qty: qty });
     });
 
     let loyaltyChanges = {}; let freeItemsRedeemed = [];
@@ -794,11 +821,14 @@ window.finalizeOrder = async function(shouldPrint) {
     });
 
     let updatedWallet = {}; let newPiutang = (window.activeCustomerProfile ? window.activeCustomerProfile.piutang || 0 : 0) + debtAmount;
+    let newEarnedRewards = [];
+    
     if (window.loyaltyEnabled && window.activeCustomerProfile) {
         updatedWallet = JSON.parse(JSON.stringify(window.activeCustomerProfile.wallet || {})); 
+        
+        // 1. Standard Loyalty Math
         for(let itemName in loyaltyChanges) {
             if(!updatedWallet[itemName]) updatedWallet[itemName] = {points:0, free:0};
-            
             updatedWallet[itemName].free -= loyaltyChanges[itemName].redeemed;
             if (debtAmount === 0) {
                 updatedWallet[itemName].points += loyaltyChanges[itemName].earned;
@@ -809,6 +839,43 @@ window.finalizeOrder = async function(shouldPrint) {
                 }
             }
         }
+        
+        // 2. Buy X Get 1 & Stamp Promos Math
+        if (debtAmount === 0) {
+            let cartAggT = {};
+            window.currentCart.forEach(item => {
+                let n = String(item.name).trim().toUpperCase().replace(/\s+/g, '');
+                cartAggT[n] = { qty: (cartAggT[n]?.qty || 0) + item.qty, orig: item.name };
+            });
+            
+            for (let cName in cartAggT) {
+                 for (let pk in window.promoRules) {
+                     if (cName.includes(pk) || pk.includes(cName)) {
+                         let ruleQty = window.promoRules[pk];
+                         let paid = cartAggT[cName].qty;
+                         let claimed = 0;
+                         redeemedPromos.forEach(rp => { if(rp.item === cartAggT[cName].orig && rp.source === 'buy_x_get_1') claimed += rp.qty; });
+                         paid = Math.max(0, paid - claimed);
+                         
+                         let pKey = "_prog_" + cartAggT[cName].orig;
+                         let curProg = Number(updatedWallet[pKey]) || 0;
+                         let totalAccum = curProg + paid;
+                         let earned = Math.floor(totalAccum / ruleQty);
+                         let leftover = totalAccum % ruleQty;
+                         
+                         let initF = Number(updatedWallet[cartAggT[cName].orig]) || 0;
+                         let finalF = Math.max(0, (initF + earned) - claimed);
+                         
+                         if (finalF > 0) updatedWallet[cartAggT[cName].orig] = finalF; else delete updatedWallet[cartAggT[cName].orig];
+                         if (leftover > 0) updatedWallet[pKey] = leftover; else delete updatedWallet[pKey];
+                         
+                         if (earned > 0) newEarnedRewards.push({ item: cartAggT[cName].orig, qty: earned, code: "BUY_X_GET_1" });
+                         break;
+                     }
+                 }
+            }
+        }
+
         window.activeCustomerProfile.piutang = newPiutang;
         window.saveMemberToDB(window.activeCustomerProfile.phone, window.activeCustomerProfile.name, updatedWallet, window.activeCustomerProfile.bottlesBorrowed + rentBottleQty, newPiutang, window.activeCustomerProfile.firstOutlet, window.activeCustomerProfile.recentOutlets);
     } else if (custPhone !== "-") {
@@ -820,7 +887,9 @@ window.finalizeOrder = async function(shouldPrint) {
         orderId: "ORD-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId,
         customerName: custName, customerPhone: custPhone, orderStatus: status, items: window.currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
         paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, debtAmount: debtAmount,
-        loyaltyChanges: loyaltyChanges, freeItemsRedeemed: freeItemsRedeemed, outlet: window.currentOutlet, syncStatus: "Pending" 
+        loyaltyChanges: loyaltyChanges, freeItemsRedeemed: freeItemsRedeemed, 
+        redeemedPromos: redeemedPromos, newEarnedRewards: newEarnedRewards, finalStoredRewards: JSON.stringify(updatedWallet),
+        outlet: window.currentOutlet, syncStatus: "Pending" 
     };
 
     const txMenu = window.db.transaction(["menu"], "readwrite"); const storeMenu = txMenu.objectStore("menu");
@@ -958,7 +1027,7 @@ window.buildEscPosShiftReport = async function(data) {
     receipt += window.formatLine("Diskon/Gratis:", "Rp " + data.totalFree.toLocaleString('id-ID'), false);
     receipt += "-".repeat(32) + "\n";
     
-    receipt += boldOn + window.formatLine("UANG LACI (NET):", "Rp " + data.net.toLocaleString('id-ID'), false) + boldOff;
+    receipt += boldOn + window.formatLine("UANG LACI (NET):", "Rp " + data.netCash.toLocaleString('id-ID'), false) + boldOff;
     receipt += "-".repeat(32) + "\n";
     
     receipt += boldOn + "ITEM TERJUAL\n" + boldOff;
@@ -976,6 +1045,7 @@ window.openInboundModal = function() {
     if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
     document.getElementById("inbound-qty").value = ""; document.getElementById("inbound-notes").value = ""; document.getElementById("inbound-modal").classList.remove("hidden");
 }
+
 window.submitInbound = function() {
     const qty = Number(document.getElementById("inbound-qty").value); const targetTank = document.getElementById("inbound-tank-target").value; const notes = document.getElementById("inbound-notes").value.trim() || "-";
     if (qty <= 0) return alert("Masukkan jumlah liter air yang benar.");
@@ -989,6 +1059,7 @@ window.openCuciModal = function() {
     if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
     document.getElementById("cuci-qty").value = ""; document.getElementById("cuci-notes").value = ""; document.getElementById("cuci-modal").classList.remove("hidden");
 }
+
 window.submitCuciTandon = function() {
     let tank = document.getElementById("cuci-tank").value; let qty = Number(document.getElementById("cuci-qty").value); let notes = document.getElementById("cuci-notes").value.trim() || "-";
     if (qty <= 0) return alert("Masukkan estimasi air terbuang dengan benar.");
@@ -1002,6 +1073,7 @@ window.openLaporModal = function() {
     if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">⚠️ Tangki Air RO</option><option value="Tangki Air Standar">⚠️ Tangki Air Standar</option>`; }
     document.getElementById("lapor-qty").value = ""; document.getElementById("lapor-notes").value = ""; document.getElementById("lapor-modal").classList.remove("hidden");
 }
+
 window.submitLaporMasalah = function() {
     let tank = document.getElementById("lapor-tank").value; let qty = Number(document.getElementById("lapor-qty").value); let notes = document.getElementById("lapor-notes").value.trim();
     if (qty <= 0 || notes === "") return alert("Harap masukkan estimasi air hilang dan kronologi kejadian dengan lengkap.");
@@ -1009,9 +1081,8 @@ window.submitLaporMasalah = function() {
     window.db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").add(payload); document.getElementById("lapor-modal").classList.add("hidden"); alert("Laporan Masalah (Bocor) berhasil dikirim. Menunggu validasi Admin."); window.runBackgroundSync();
 }
 
-window.openExpenseModal = function() {
-    document.getElementById("expense-modal").classList.remove("hidden"); 
-}
+window.openExpenseModal = function() { document.getElementById("expense-modal").classList.remove("hidden"); }
+
 window.saveExpense = function() {
     const amount = Number(document.getElementById("exp-amount").value); const category = document.getElementById("exp-category").value.trim();
     if (amount <= 0 || !category) return alert("Harap masukkan jumlah dan kategori yang benar.");
@@ -1022,6 +1093,7 @@ window.saveExpense = function() {
 }
 
 window.openHistoryModal = function() { document.getElementById("history-modal").classList.remove("hidden"); window.renderHistoryList('orders'); }
+
 window.renderHistoryList = function(type) {
     const container = document.getElementById("history-container"); container.innerHTML = "";
     if (type === 'orders') {
@@ -1045,7 +1117,7 @@ window.renderHistoryList = function(type) {
             shiftExpenses.forEach(exp => {
                 let badge = exp.status === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : exp.status === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">Aktif</span>`;
                 let btn = (exp.status !== "Voided" && exp.status !== "Void Pending") ? `<button onclick="window.requestVoid('expenses', '${exp.expenseId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Batal/Void</button>` : '';
-                container.innerHTML += `<div class="history-row"><div><strong>${exp.category}</strong><br><small style="color:#7f8c8d;">${window.formatDateReadable(exp.timestamp)} | Rp ${exp.amount.toLocaleString('id-ID')}</small><br><small>${exp.description}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div>`;
+                container.innerHTML += `<div class="history-row"><div><strong>${exp.category}</strong><br><small style="color:#7f8c8d;">${window.formatDateReadable(exp.timestamp)} | Rp ${exp.amount.toLocaleString('id-ID')}</small><br><small>${exp.description}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div></div>`;
             });
         };
     } else if (type === 'shifts') {
@@ -1109,7 +1181,8 @@ window.reprintOrder = async function(orderId) {
     const order = await new Promise(res => window.db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = e => res(e.target.result));
     if (!order) return alert("Order tidak ditemukan di memori tablet lokal.");
     const deposit = (order.cashAmount || 0) + (order.qrisAmount || 0) + (order.transferAmount || 0) + (order.freeAmount || 0);
-    const payloadBytes = await window.buildEscPosReceipt(order.orderId, order, deposit, (order.debtAmount || 0), order.paymentMethod, {});
+    const updatedWallet = {}; try { updatedWallet = JSON.parse(order.finalStoredRewards || "{}"); } catch(e){}
+    const payloadBytes = await window.buildEscPosReceipt(order.orderId, order, deposit, (order.debtAmount || 0), order.paymentMethod, updatedWallet);
     await window.printViaBluetooth(payloadBytes);
 }
 
@@ -1212,22 +1285,21 @@ window.applyVoidAftermath = function(order) {
                 mem.bottlesBorrowed = Math.max(0, (mem.bottlesBorrowed || 0) - (order.rentBottleQty || 0));
                 mem.piutang = Math.max(0, (mem.piutang || 0) - (order.debtAmount || 0));
                 
-                if (order.loyaltyChanges && mem.wallet) {
-                    for(let itemName in order.loyaltyChanges) {
-                        let c = order.loyaltyChanges[itemName];
-                        if(!mem.wallet[itemName]) mem.wallet[itemName] = {points:0, free:0};
-                        mem.wallet[itemName].points -= c.earned; mem.wallet[itemName].free += c.redeemed;
-                        while (mem.wallet[itemName].points < 0 && mem.wallet[itemName].free > 0) { mem.wallet[itemName].points += c.threshold; mem.wallet[itemName].free -= 1; }
-                        if(mem.wallet[itemName].free < 0) mem.wallet[itemName].free = 0; if(mem.wallet[itemName].points < 0) mem.wallet[itemName].points = 0;
-                    }
+                // RESTORE WALLET FROM order.finalStoredRewards JSON SNAPSHOT IF AVAILABLE
+                if (order.finalStoredRewards) {
+                    try {
+                         let originalWalletBeforeOrder = JSON.parse(order.finalStoredRewards);
+                         mem.wallet = originalWalletBeforeOrder;
+                    } catch(e) {}
                 }
+
                 memberStore.put(mem); 
             } 
         };
     }
     tx.oncomplete = () => { window.renderProductGrid(); };
     let payloadItems = []; if (order.items) order.items.forEach(i => payloadItems.push({name: i.name, qty: i.qty}));
-    if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: payloadItems, rentBottleQty: order.rentBottleQty, debtAmount: order.debtAmount, loyaltyChanges: order.loyaltyChanges, cashAmount: order.cashAmount, outlet: order.outlet } }) });
+    if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: payloadItems, rentBottleQty: order.rentBottleQty, debtAmount: order.debtAmount, loyaltyChanges: order.loyaltyChanges, cashAmount: order.cashAmount, outlet: order.outlet, finalStoredRewards: order.finalStoredRewards } }) });
 }
 
 window.calculateLiveDrawer = function(callback) {
@@ -1279,7 +1351,6 @@ window.openCurrentShiftReport = function() {
     let meterContainer = document.getElementById("meter-water-container"); if(meterContainer) meterContainer.classList.remove("hidden");
     let btnEndShift = document.getElementById("btn-end-shift"); if(btnEndShift) btnEndShift.classList.remove("hidden");
     
-    // ⚡ FIX: UNHIDE PRINT BUTTON FOR CURRENT SHIFT AND ASSIGN FUNCTION ⚡
     let btnPrintHist = document.getElementById("btn-print-history"); 
     if (btnPrintHist) { 
         btnPrintHist.classList.remove("hidden"); 
