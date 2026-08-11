@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbzAwQo5Lqv5_CZhi7aphlk3mN_en-U4GRZRcIp2gQQjmC1O0iVIyHfky2e875oxYt9q/exec"; 
+const API_URL = "https://script.google.com/macros/s/AKfycbwLOC0uTUDLIK7gpFLV0pcxUEgepmjZQhIAe0AHUBADpkqA7oHfAVx0WHauE_TfyRA/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 14; 
 window.db = null;
@@ -1328,7 +1328,11 @@ window.confirmAdminVoid = async function() {
                 const authName = isMaster ? "Master Admin" : staff.name; const type = window.currentVoidTarget.type; const id = window.currentVoidTarget.id; const storeName = type === 'orders' ? "orders" : "expenses";
                 window.db.transaction([storeName], "readwrite").objectStore(storeName).get(id).onsuccess = (ev) => {
                     const item = ev.target.result;
-                    if (type === 'orders') { item.orderStatus = "Voided"; item.voidAuth = authName; if(item.items) item.items.forEach(i => i.qty = Number(i.qty)); window.applyLocalVoidAftermath(item); } 
+                    if (type === 'orders') { 
+                        item.orderStatus = "Voided"; item.voidAuth = authName; 
+                        if(item.items) item.items.forEach(i => i.qty = Number(i.qty)); 
+                        window.applyLocalVoidAftermath(item); // UPDATED TO LOCAL ONLY
+                    } 
                     else { item.status = "Voided"; item.voidAuth = authName; }
                     item.syncStatus = "Pending"; window.db.transaction([storeName], "readwrite").objectStore(storeName).put(item); window.renderHistoryList(type);
                 };
@@ -1393,7 +1397,9 @@ window.applyLocalVoidAftermath = function(order) {
                 mem.spent = Math.max(0, (mem.spent || 0) - order.grandTotal); 
                 mem.bottlesBorrowed = Math.max(0, (mem.bottlesBorrowed || 0) - (order.rentBottleQty || 0));
                 mem.piutang = Math.max(0, (mem.piutang || 0) - (order.debtAmount || 0));
-                if (order.finalStoredRewards) { try { mem.wallet = JSON.parse(order.finalStoredRewards); } catch(err) {} }
+                if (order.finalStoredRewards) {
+                    try { mem.wallet = JSON.parse(order.finalStoredRewards); } catch(err) {}
+                }
                 memberStore.put(mem); 
             } 
         };
@@ -1408,6 +1414,7 @@ window.runBackgroundSync = async function() {
         if (!window.db) { await window.initDB(); }
         await window.checkAutoCloseShifts();
         
+        // 1. READ EVERYTHING INTO MEMORY FIRST (Prevents database timeout)
         let tx = window.db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah", "bayar_piutang"], "readonly");
         
         let orders = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
@@ -1421,13 +1428,13 @@ window.runBackgroundSync = async function() {
         let cuciLogs = await new Promise(res => tx.objectStore("cuci_tandon").getAll().onsuccess = e => res(e.target.result));
         let laporLogs = await new Promise(res => tx.objectStore("lapor_masalah").getAll().onsuccess = e => res(e.target.result));
 
+        // 2. THEN DO THE INTERNET FETCHES
         for (const order of orders) {
             if (order.syncStatus === "Pending") {
                 order.syncStatus = "Syncing"; window.db.transaction(["orders"], "readwrite").objectStore("orders").put(order);
                 try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncOrder", data: order }) }); if ((await r.json()).status === "Success") { order.syncStatus = "Synced"; window.db.transaction(["orders"], "readwrite").objectStore("orders").put(order); } else { order.syncStatus = "Pending"; window.db.transaction(["orders"], "readwrite").objectStore("orders").put(order); } } catch(e) { order.syncStatus = "Pending"; window.db.transaction(["orders"], "readwrite").objectStore("orders").put(order); }
             }
         }
-
         for (const bp of piutangs) {
             if (bp.syncStatus === "Pending") { try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncBayarPiutang", data: bp }) }); if ((await r.json()).status === "Success") { window.db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").delete(bp.payId); } } catch(e) {} }
         }
