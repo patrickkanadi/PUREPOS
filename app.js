@@ -232,27 +232,29 @@ window.manualPushSync = async function() {
 window.syncMasterData = async function() {
     if (!navigator.onLine) {
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Mode Offline";
-        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c"; return;
+        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c"; 
+        return;
     }
     
     try {
         if (!window.db) { await window.initDB(); }
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron PIN (Cepat)...";
+        
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron Cepat (Menu & Kasir)...";
         if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
 
-        const authResponse = await fetch(API_URL + "?type=auth_only", { mode: 'cors', redirect: 'follow' });
+        // === STAGE 1: FAST SYNC (Loads PINs, Settings, and Menu instantly) ===
+        const authResponse = await fetch(API_URL + "?type=fast", { mode: 'cors', redirect: 'follow' });
         const authResult = await authResponse.json();
         
         if (authResult.status === "Success") {
-            const tx = window.db.transaction(["staff", "settings"], "readwrite");
+            const tx = window.db.transaction(["staff", "settings", "menu"], "readwrite");
             const staffStore = tx.objectStore("staff"); staffStore.clear(); authResult.data.staff.forEach(s => staffStore.put(s));
+            const menuStore = tx.objectStore("menu"); menuStore.clear(); authResult.data.menu.forEach(m => menuStore.put(m));
             const settingsStore = tx.objectStore("settings"); settingsStore.clear(); 
             
-            // NEW: Parse Settings AND Promos
             for (const [k, v] of Object.entries(authResult.data.settings)) { 
                 settingsStore.put({ key: k, value: v }); 
                 
-                // Parse Promo Rules for Checkout Logic
                 let upperKey = String(k).toUpperCase().replace(/\s+/g, '');
                 if (upperKey.includes("PROMO")) {
                     let valStr = String(v || "");
@@ -277,30 +279,43 @@ window.syncMasterData = async function() {
             
             const rawOutlets = authResult.data.settings["Outlet_List"] || "Pusat"; const outletArray = rawOutlets.split(",").map(s => s.trim()); const selectBox = document.getElementById("login-outlet");
             if(selectBox) { selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); }
-        }
-
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Download Data Member...";
-        const fullResponse = await fetch(API_URL, { mode: 'cors', redirect: 'follow' });
-        const fullResult = await fullResponse.json();
-        
-        if (fullResult.status === "Success") {
-            window.outletStocks = fullResult.data.outletStocks; 
-            const tx2 = window.db.transaction(["menu", "members", "expense_categories"], "readwrite");
             
-            const menuStore = tx2.objectStore("menu"); menuStore.clear(); fullResult.data.menu.forEach(m => menuStore.put(m));
-            const memStore = tx2.objectStore("members"); memStore.clear(); fullResult.data.members.forEach(m => memStore.put(m));
-            const expCatStore = tx2.objectStore("expense_categories"); expCatStore.clear(); 
-            if(fullResult.data.expenseCategories) fullResult.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
-            
-            if (fullResult.data.authStatuses) window.processServerUpdates(fullResult.data.authStatuses);
-            window.globalMenuData = fullResult.data.menu; window.loyaltyEnabled = String(fullResult.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
+            window.globalMenuData = authResult.data.menu; 
+            window.loyaltyEnabled = String(authResult.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
 
-            if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
-            if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
+            // If user is already on the homepage (POS), load the menu right now!
             if (!document.getElementById("pos-screen").classList.contains("hidden")) { window.loadMenuUI(); }
         }
+
+        // === STAGE 2: ASYNC FULL SYNC (Downloads Members & Histories in the background) ===
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Download Data Pelanggan...";
+        
+        fetch(API_URL, { mode: 'cors', redirect: 'follow' })
+            .then(res => res.json())
+            .then(fullResult => {
+                if (fullResult.status === "Success") {
+                    window.outletStocks = fullResult.data.outletStocks; 
+                    const tx2 = window.db.transaction(["members", "expense_categories"], "readwrite");
+                    
+                    const memStore = tx2.objectStore("members"); memStore.clear(); fullResult.data.members.forEach(m => memStore.put(m));
+                    const expCatStore = tx2.objectStore("expense_categories"); expCatStore.clear(); 
+                    if(fullResult.data.expenseCategories) fullResult.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
+                    
+                    if (fullResult.data.authStatuses) window.processServerUpdates(fullResult.data.authStatuses);
+
+                    if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
+                    if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
+                }
+            })
+            .catch(err => {
+                console.error("Background Fetch Error:", err);
+                if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Gagal Download Member";
+            });
+
     } catch (e) { 
-        console.error("Sync Error:", e);
+        console.error("Fast Sync Error:", e);
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Gagal Sinkron"; 
+        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c";
         if (e.name === 'InvalidStateError' || e.message.includes("closing")) { await window.initDB(); }
     }
 }
@@ -628,19 +643,66 @@ window.updatePromoBanner = function(member) {
 
     if (!window.loyaltyEnabled || !promoBanner) { if(promoBanner) promoBanner.classList.add("hidden"); return; }
 
-    let pointSummary = []; let wallet = member ? (member.wallet || {}) : {};
-    let loyaltyItems = window.globalMenuData.filter(m => m.loyaltyThreshold > 0);
-    loyaltyItems.forEach(item => {
-        let w = wallet[item.name] || { points: 0, free: 0 };
-        pointSummary.push(`💧 <strong>${item.name}</strong>: ${w.points}/${item.loyaltyThreshold} Poin${w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : ''}`);
+    let pointSummary = []; 
+    let wallet = member ? (member.wallet || {}) : {};
+    
+    // 1. FILTER: Hanya ambil data menu yang TERSUDIA di CABANG INI
+    let availableMenu = window.globalMenuData.filter(m => {
+        const avail = (m.availableAt || "ALL").toUpperCase();
+        return avail === "ALL" || avail.includes(window.currentOutlet.toUpperCase());
     });
-    for (let itemName in wallet) {
-        if (!loyaltyItems.find(i => i.name === itemName)) {
-             let w = wallet[itemName]; pointSummary.push(`💧 <strong>${itemName}</strong>: ${w.points} Poin${w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : ''}`);
+
+    // 2. Tampilkan Poin Loyalty Standar HANYA untuk item cabang ini
+    let loyaltyItems = availableMenu.filter(m => m.loyaltyThreshold > 0);
+    loyaltyItems.forEach(item => {
+        let w = wallet[item.name];
+        if (w && typeof w === 'object') {
+            pointSummary.push(`💧 <strong>${item.name}</strong>: ${w.points}/${item.loyaltyThreshold} Poin${w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : ''}`);
+        } else {
+            pointSummary.push(`💧 <strong>${item.name}</strong>: 0/${item.loyaltyThreshold} Poin`);
+        }
+    });
+
+    // 3. Tampilkan Promo Lanjutan (Buy X Get 1 & Stamp) HANYA untuk item cabang ini
+    for (let key in wallet) {
+        let val = wallet[key];
+        
+        // Promo/Reward disimpan sebagai Angka (Number)
+        if (typeof val === 'number' && val > 0) {
+            // Hilangkan prefix untuk mendapatkan nama item aslinya
+            let baseName = key.replace("_prog_", "").replace("_stamp_", "");
+            
+            // Cek apakah item ini dijual di cabang ini
+            let isAvail = availableMenu.find(m => m.name === baseName);
+            if (isAvail) {
+                if (key.startsWith("_prog_")) {
+                    let target = 0;
+                    for (let pk in window.promoRules) {
+                        if (baseName.toUpperCase().replace(/\s+/g, '').includes(pk)) { target = window.promoRules[pk]; break; }
+                    }
+                    if (target > 0) pointSummary.push(`⏳ Progres <strong>${baseName}</strong>: ${val}/${target}`);
+                } else if (key.startsWith("_stamp_")) {
+                    let target = 0;
+                    for (let sk in window.promoStampRules) {
+                        if (window.promoStampRules[sk].originalName === baseName) { target = window.promoStampRules[sk].target; break; }
+                    }
+                    pointSummary.push(`🏷️ Stempel <strong>${baseName}</strong>: ${val}${target > 0 ? '/'+target : ''}`);
+                } else {
+                    // Jika tidak ada prefix, berarti ini adalah Reward (Barang Gratis) yang siap diklaim
+                    pointSummary.push(`🎁 <strong>${baseName}</strong>: <span style="color:#27ae60;">${val} Siap Ditukar!</span>`);
+                }
+            }
         }
     }
-    if (pointSummary.length > 0) { promoBanner.innerHTML = `🌟 <strong>Info Saldo Poin:</strong><br>` + pointSummary.join('<br>'); promoBanner.classList.remove("hidden"); } 
-    else { promoBanner.innerHTML = `🌟 Promo Loyalty tidak ada barang aktif.`; promoBanner.classList.remove("hidden"); }
+
+    // 4. Update UI Banner
+    if (pointSummary.length > 0) { 
+        promoBanner.innerHTML = `🌟 <strong>Info Saldo Poin & Promo:</strong><br>` + pointSummary.join('<br>'); 
+        promoBanner.classList.remove("hidden"); 
+    } else { 
+        promoBanner.innerHTML = `🌟 Promo Loyalty belum ada progress di cabang ini.`; 
+        promoBanner.classList.remove("hidden"); 
+    }
 }
 
 window.lockMenu = function() {
