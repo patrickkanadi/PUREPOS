@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbyVeQ2qcT4_qG7d7YnoKjZb8L3Qk-Aq9zuOgXUmaSIqhQYrQHrTSivGpJsbh5gz9Jo/exec"; 
+const API_URL = "https://script.google.com/macros/s/AKfycbzKKoDiGt-giZZiYUWmNZ1_Knqed0KNGhf6DG8Jq0B4GfM91NXsBNLdpnYPW4PpHlbc/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 14; // Bumped version for new schema
 window.db = null;
