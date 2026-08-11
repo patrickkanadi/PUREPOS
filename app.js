@@ -601,7 +601,12 @@ window.switchCart = function(index) {
     window.renderCart();
     
     if (window.activeCustomerProfile) {
-        document.getElementById("cust-name").value = window.activeCustomerProfile.name; document.getElementById("cust-phone").value = window.activeCustomerProfile.phone || "";
+        document.getElementById("cust-name").value = window.activeCustomerProfile.name; 
+        document.getElementById("cust-phone").value = window.activeCustomerProfile.phone || "";
+        
+        let addressField = document.getElementById("cust-address"); 
+        if (addressField) addressField.value = window.activeCustomerProfile.address || "";
+        
         document.getElementById("active-cust-name").innerText = window.activeCustomerProfile.name; document.getElementById("active-cust-phone").innerText = window.activeCustomerProfile.phone !== "-" ? `(${window.activeCustomerProfile.phone})` : "";
         document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
         window.isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; document.getElementById("glass-overlay").style.pointerEvents = "none";
@@ -609,10 +614,16 @@ window.switchCart = function(index) {
     } else {
         document.getElementById("customer-input-section").classList.remove("hidden"); document.getElementById("active-customer-banner").classList.add("hidden");
         document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
-        document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = ""; 
+        
+        // Wipe all 3 fields empty
+        document.getElementById("cust-phone").value = ""; 
+        document.getElementById("cust-name").value = ""; 
+        let addressField = document.getElementById("cust-address"); 
+        if (addressField) addressField.value = "";
+        
         const promoBanner = document.getElementById("promo-indicator-banner"); if(promoBanner) promoBanner.classList.add("hidden");
         const piutangBanner = document.getElementById("piutang-indicator-banner"); if(piutangBanner) piutangBanner.classList.add("hidden");
-        const warnBanner = document.getElementById("piutang-warning-banner"); if(warnBanner) warnBanner.classList.add("hidden");
+        const outletDisplay = document.getElementById("active-cust-outlets"); if(outletDisplay) outletDisplay.innerHTML = "";
         window.isMenuLocked = true;
     }
 }
@@ -709,7 +720,13 @@ window.lockMenu = function() {
     window.isMenuLocked = true; window.activeCustomerProfile = null; window.posSessions[window.activeSessionIndex].customer = null; window.posSessions[window.activeSessionIndex].cart = []; window.currentCart = window.posSessions[window.activeSessionIndex].cart;
     document.getElementById("customer-input-section").classList.remove("hidden"); document.getElementById("active-customer-banner").classList.add("hidden");
     document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
-    document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = ""; 
+    
+    // Reset all inputs
+    document.getElementById("cust-phone").value = ""; 
+    document.getElementById("cust-name").value = ""; 
+    let addressField = document.getElementById("cust-address"); 
+    if (addressField) addressField.value = ""; 
+    
     window.renderCart();
     const promoBanner = document.getElementById("promo-indicator-banner"); if(promoBanner) promoBanner.classList.add("hidden");
     const piutangBanner = document.getElementById("piutang-indicator-banner"); if(piutangBanner) piutangBanner.classList.add("hidden");
@@ -722,7 +739,12 @@ window.unlockMenu = function(isGuest) {
     const outletDisplay = document.getElementById("active-cust-outlets");
 
     if (isGuest) { 
-        document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = "Walk-in"; window.activeCustomerProfile = null; 
+        document.getElementById("cust-phone").value = ""; 
+        document.getElementById("cust-name").value = "Walk-in"; 
+        let addressField = document.getElementById("cust-address"); 
+        if (addressField) addressField.value = ""; 
+        
+        window.activeCustomerProfile = null; 
         document.getElementById("active-cust-name").innerText = name; document.getElementById("active-cust-phone").innerText = "";
         document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
         if(promoBanner) promoBanner.classList.add("hidden"); if(piutangBanner) piutangBanner.classList.add("hidden");
@@ -741,8 +763,20 @@ window.unlockMenu = function(isGuest) {
         const tx = window.db.transaction(["members"], "readonly");
         tx.objectStore("members").get(searchPhone).onsuccess = (ev) => {
             const member = ev.target.result;
-            if (member) { window.activeCustomerProfile = member; name = member.name; document.getElementById("cust-name").value = name; window.updatePromoBanner(member); } 
-            else { window.activeCustomerProfile = { phone: searchPhone, name: name, wallet: {}, bottlesBorrowed: 0, piutang: 0, firstOutlet: window.currentOutlet, recentOutlets: window.currentOutlet }; window.updatePromoBanner(window.activeCustomerProfile); }
+            let currentAddress = document.getElementById("cust-address").value.trim();
+            
+            if (member) { 
+                window.activeCustomerProfile = member; 
+                name = member.name; 
+                document.getElementById("cust-name").value = name; 
+                // Prioritize newly typed address, fallback to saved
+                if (currentAddress !== "") window.activeCustomerProfile.address = currentAddress;
+                window.updatePromoBanner(member); 
+            } 
+            else { 
+                window.activeCustomerProfile = { phone: searchPhone, name: name, address: currentAddress, wallet: {}, bottlesBorrowed: 0, piutang: 0, firstOutlet: window.currentOutlet, recentOutlets: window.currentOutlet }; 
+                window.updatePromoBanner(window.activeCustomerProfile); 
+            }
 
             document.getElementById("active-cust-name").innerText = name; document.getElementById("active-cust-phone").innerText = `(${searchPhone})`;
             document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
@@ -962,9 +996,7 @@ window.finalizeOrder = async function(shouldPrint) {
         window.saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount, fOut, rOut);
     }
 
-    let custAddress = document.getElementById("cust-address").value.trim() || "";
-
-    const orderPayload = {
+     const orderPayload = {
         orderId: "ORD-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId,
         customerName: custName, customerPhone: custPhone, customerAddress: custAddress, orderStatus: status, items: window.currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
         paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, debtAmount: debtAmount,
@@ -1366,7 +1398,6 @@ window.applyVoidAftermath = function(order) {
                 mem.bottlesBorrowed = Math.max(0, (mem.bottlesBorrowed || 0) - (order.rentBottleQty || 0));
                 mem.piutang = Math.max(0, (mem.piutang || 0) - (order.debtAmount || 0));
                 
-                // RESTORE WALLET FROM order.finalStoredRewards JSON SNAPSHOT IF AVAILABLE
                 if (order.finalStoredRewards) {
                     try {
                          let originalWalletBeforeOrder = JSON.parse(order.finalStoredRewards);
@@ -1379,10 +1410,36 @@ window.applyVoidAftermath = function(order) {
         };
     }
     tx.oncomplete = () => { window.renderProductGrid(); };
-    let payloadItems = []; if (order.items) order.items.forEach(i => payloadItems.push({name: i.name, qty: i.qty}));
-    if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: payloadItems, rentBottleQty: order.rentBottleQty, debtAmount: order.debtAmount, loyaltyChanges: order.loyaltyChanges, cashAmount: order.cashAmount, outlet: order.outlet, finalStoredRewards: order.finalStoredRewards } }) });
+    
+    // Inject Price & Full Financials to Payload
+    let payloadItems = []; 
+    if (order.items) order.items.forEach(i => payloadItems.push({name: i.name, qty: i.qty, price: i.originalPrice || i.price})); 
+    
+    if (navigator.onLine) {
+        fetch(API_URL, { 
+            method: "POST", 
+            body: JSON.stringify({ 
+                action: "executeVoidAftermath", 
+                data: { 
+                    orderId: order.orderId, 
+                    shiftId: order.shiftId, // INJECTED SHIFT ID
+                    customerPhone: order.customerPhone, 
+                    amount: order.grandTotal, 
+                    itemsToReturn: payloadItems, 
+                    rentBottleQty: order.rentBottleQty, 
+                    debtAmount: order.debtAmount, 
+                    loyaltyChanges: order.loyaltyChanges, 
+                    cashAmount: order.cashAmount, 
+                    qrisAmount: order.qrisAmount || 0,         // INJECTED
+                    transferAmount: order.transferAmount || 0, // INJECTED
+                    freeAmount: order.freeAmount || 0,         // INJECTED
+                    outlet: order.outlet, 
+                    finalStoredRewards: order.finalStoredRewards 
+                } 
+            }) 
+        });
+    }
 }
-
 window.calculateLiveDrawer = function(callback) {
     let liveDrawer = (window.outletStocks && window.outletStocks[window.currentOutlet] && window.outletStocks[window.currentOutlet]["Saldo_Laci"]) ? window.outletStocks[window.currentOutlet]["Saldo_Laci"] : 0; 
     
