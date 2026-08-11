@@ -861,7 +861,7 @@ window.finalizeOrder = async function(shouldPrint) {
 
     let custPhoneRaw = document.getElementById("cust-phone").value.trim(); let custPhone = custPhoneRaw || "-";
     const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
-    const custAddress = document.getElementById("cust-address").value.trim() || ""; // GET ADDRESS
+    const custAddress = document.getElementById("cust-address").value.trim() || "";
 
     if (remaining !== 0) return alert("⚠️ PEMBAYARAN DITOLAK:\nTotal pembayaran (termasuk hutang) harus persis sama dengan Total Akhir.");
     if (debtAmount > 0 && (!custPhone || custPhone === "-")) return alert("⚠️ TRANSAKSI DITOLAK:\nAnda WAJIB memasukkan nomor WhatsApp pelanggan untuk mencatat Piutang.");
