@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbzKKoDiGt-giZZiYUWmNZ1_Knqed0KNGhf6DG8Jq0B4GfM91NXsBNLdpnYPW4PpHlbc/exec"; 
+const API_URL = "https://script.google.com/macros/s/AKfycbxXbNzsq2vMv8F2Fuhf_p5Psh4CMZJR7cjTRp6JwAsrWQiyIbD-IRoll_vb6nfORyX4/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 14; // Bumped version for new schema
 window.db = null;
@@ -1352,7 +1352,8 @@ window.processServerUpdates = function(authStatuses) {
             const remote = authStatuses.orders[order.orderId];
             if (remote) {
                 let changed = false;
-                if (remote.status === "Voided" && order.orderStatus !== "Voided") { order.orderStatus = "Voided"; changed = true; window.applyVoidAftermath(order); } 
+                // CHANGED THIS LINE:
+                if (remote.status === "Voided" && order.orderStatus !== "Voided") { order.orderStatus = "Voided"; changed = true; window.applyLocalVoidAftermath(order); } 
                 else if (remote.status !== "Void Pending" && remote.status !== "Voided" && order.orderStatus === "Void Pending") { order.orderStatus = remote.status; changed = true; }
                 
                 if (remote.paymentMethod && order.paymentMethod !== remote.paymentMethod) { order.paymentMethod = remote.paymentMethod; changed = true; }
@@ -1375,17 +1376,16 @@ window.processServerUpdates = function(authStatuses) {
     };
 }
 
-window.applyVoidAftermath = function(order) {
-    const tx = window.db.transaction(["menu", "members"], "readwrite"); const menuStore = tx.objectStore("menu"); const memberStore = tx.objectStore("members");
+window.applyLocalVoidAftermath = function(order) {
+    const tx = window.db.transaction(["menu", "members"], "readwrite"); 
+    const menuStore = tx.objectStore("menu"); 
+    const memberStore = tx.objectStore("members");
 
     if (order.items) {
         order.items.forEach(item => {
-            menuStore.openCursor().onsuccess = (e) => {
-                const cursor = e.target.result;
-                if (cursor) { 
-                    if (cursor.value.name === item.name && cursor.value.trackStock) { const updated = cursor.value; updated.currentStock += item.qty; cursor.update(updated); } 
-                    cursor.continue(); 
-                }
+            menuStore.get(item.itemId).onsuccess = (e) => {
+                let mItem = e.target.result;
+                if (mItem && mItem.trackStock) { mItem.currentStock += item.qty; menuStore.put(mItem); }
             };
         });
     }
@@ -1397,55 +1397,14 @@ window.applyVoidAftermath = function(order) {
                 mem.spent = Math.max(0, (mem.spent || 0) - order.grandTotal); 
                 mem.bottlesBorrowed = Math.max(0, (mem.bottlesBorrowed || 0) - (order.rentBottleQty || 0));
                 mem.piutang = Math.max(0, (mem.piutang || 0) - (order.debtAmount || 0));
-                
-                // RESTORE WALLET FROM order.finalStoredRewards JSON SNAPSHOT IF AVAILABLE
                 if (order.finalStoredRewards) {
-                    try {
-                         let originalWalletBeforeOrder = JSON.parse(order.finalStoredRewards);
-                         mem.wallet = originalWalletBeforeOrder;
-                    } catch(e) {}
+                    try { mem.wallet = JSON.parse(order.finalStoredRewards); } catch(err) {}
                 }
-
                 memberStore.put(mem); 
             } 
         };
     }
-    tx.oncomplete = () => { window.renderProductGrid(); };
-    
-    // INJECT PRICE & FULL FINANCIALS TO PAYLOAD
-    let payloadItems = []; 
-    if (order.items) {
-        order.items.forEach(i => payloadItems.push({
-            name: i.name, 
-            qty: i.qty, 
-            price: i.originalPrice || i.price || 0 // FIXED: Now sends price
-        }));
-    }
-    
-    if (navigator.onLine) {
-        fetch(API_URL, { 
-            method: "POST", 
-            body: JSON.stringify({ 
-                action: "executeVoidAftermath", 
-                data: { 
-                    orderId: order.orderId, 
-                    shiftId: order.shiftId, // FIXED: Now sends Shift ID
-                    customerPhone: order.customerPhone, 
-                    amount: order.grandTotal, 
-                    itemsToReturn: payloadItems, 
-                    rentBottleQty: order.rentBottleQty, 
-                    debtAmount: order.debtAmount, 
-                    loyaltyChanges: order.loyaltyChanges, 
-                    cashAmount: order.cashAmount || 0, 
-                    qrisAmount: order.qrisAmount || 0,         // FIXED: Now sends QRIS
-                    transferAmount: order.transferAmount || 0, // FIXED: Now sends Transfer
-                    freeAmount: order.freeAmount || 0,         // FIXED: Now sends Free Amt
-                    outlet: order.outlet, 
-                    finalStoredRewards: order.finalStoredRewards 
-                } 
-            }) 
-        });
-    }
+    tx.oncomplete = () => { if (!document.getElementById("pos-screen").classList.contains("hidden")) window.renderProductGrid(); };
 }
 
 window.calculateLiveDrawer = function(callback) {
