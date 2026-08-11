@@ -1398,6 +1398,7 @@ window.applyVoidAftermath = function(order) {
                 mem.bottlesBorrowed = Math.max(0, (mem.bottlesBorrowed || 0) - (order.rentBottleQty || 0));
                 mem.piutang = Math.max(0, (mem.piutang || 0) - (order.debtAmount || 0));
                 
+                // RESTORE WALLET FROM order.finalStoredRewards JSON SNAPSHOT IF AVAILABLE
                 if (order.finalStoredRewards) {
                     try {
                          let originalWalletBeforeOrder = JSON.parse(order.finalStoredRewards);
@@ -1411,9 +1412,15 @@ window.applyVoidAftermath = function(order) {
     }
     tx.oncomplete = () => { window.renderProductGrid(); };
     
-    // Inject Price & Full Financials to Payload
+    // INJECT PRICE & FULL FINANCIALS TO PAYLOAD
     let payloadItems = []; 
-    if (order.items) order.items.forEach(i => payloadItems.push({name: i.name, qty: i.qty, price: i.originalPrice || i.price})); 
+    if (order.items) {
+        order.items.forEach(i => payloadItems.push({
+            name: i.name, 
+            qty: i.qty, 
+            price: i.originalPrice || i.price || 0 // FIXED: Now sends price
+        }));
+    }
     
     if (navigator.onLine) {
         fetch(API_URL, { 
@@ -1422,17 +1429,17 @@ window.applyVoidAftermath = function(order) {
                 action: "executeVoidAftermath", 
                 data: { 
                     orderId: order.orderId, 
-                    shiftId: order.shiftId, // INJECTED SHIFT ID
+                    shiftId: order.shiftId, // FIXED: Now sends Shift ID
                     customerPhone: order.customerPhone, 
                     amount: order.grandTotal, 
                     itemsToReturn: payloadItems, 
                     rentBottleQty: order.rentBottleQty, 
                     debtAmount: order.debtAmount, 
                     loyaltyChanges: order.loyaltyChanges, 
-                    cashAmount: order.cashAmount, 
-                    qrisAmount: order.qrisAmount || 0,         // INJECTED
-                    transferAmount: order.transferAmount || 0, // INJECTED
-                    freeAmount: order.freeAmount || 0,         // INJECTED
+                    cashAmount: order.cashAmount || 0, 
+                    qrisAmount: order.qrisAmount || 0,         // FIXED: Now sends QRIS
+                    transferAmount: order.transferAmount || 0, // FIXED: Now sends Transfer
+                    freeAmount: order.freeAmount || 0,         // FIXED: Now sends Free Amt
                     outlet: order.outlet, 
                     finalStoredRewards: order.finalStoredRewards 
                 } 
@@ -1440,6 +1447,7 @@ window.applyVoidAftermath = function(order) {
         });
     }
 }
+
 window.calculateLiveDrawer = function(callback) {
     let liveDrawer = (window.outletStocks && window.outletStocks[window.currentOutlet] && window.outletStocks[window.currentOutlet]["Saldo_Laci"]) ? window.outletStocks[window.currentOutlet]["Saldo_Laci"] : 0; 
     
