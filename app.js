@@ -343,7 +343,8 @@ window.handleAutocomplete = function(e) {
                 let safePhone = String(m.phone || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let safeAddress = String(m.address || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 
-                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0}, '${fOut}', '${rOutStr}', '${safeAddress}')">
+                // Added new analytics variables to selectMember
+                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div class="autocomplete-name">${m.name} <span style="font-size:11px; background:#ecf0f1; padding:2px 6px; border-radius:4px; margin-left:6px;">📍 Awal: ${fOut !== "Unknown" ? fOut : "-"} | Akhir: ${lOut}</span></div>
                         <div class="autocomplete-phone" style="font-size:14px; color:#7f8c8d;">${m.phone}</div>
@@ -385,7 +386,7 @@ window.selectCategory = function(name) {
     document.getElementById("cat-autocomplete-results").classList.add("hidden");
 };
 
-window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localPiutang, firstOutlet, recentOutlets, address) {
+window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localPiutang, firstOutlet, recentOutlets, address, lastPurchase, avgRO, avgStd, frequency) {
     document.getElementById("autocomplete-results").classList.add("hidden");
     let lockedQueue = window.isCustomerLocked(phone);
     if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan pesanan di sana terlebih dahulu.`); }
@@ -395,7 +396,15 @@ window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localP
     document.getElementById("cust-address").value = address || ""; 
     
     let wallet = {}; try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
-    window.activeCustomerProfile = { phone: phone, name: name, address: address, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed, piutang: localPiutang, firstOutlet: firstOutlet, recentOutlets: recentOutlets };
+    
+    // Save analytics to active profile
+    window.activeCustomerProfile = { 
+        phone: phone, name: name, address: address, wallet: wallet, 
+        bottlesBorrowed: dbBottlesBorrowed, piutang: localPiutang, 
+        firstOutlet: firstOutlet, recentOutlets: recentOutlets,
+        lastPurchase: lastPurchase, avgRO: avgRO, avgStd: avgStd, frequency: frequency
+    };
+    
     window.updatePromoBanner(window.activeCustomerProfile);
 };
 
@@ -640,11 +649,25 @@ window.updatePromoBanner = function(member) {
     const outletDisplay = document.getElementById("active-cust-outlets");
 
     if (member && outletDisplay) {
-        let fOut = member.firstOutlet && member.firstOutlet !== "Unknown" ? member.firstOutlet : "-";
+        // Build Analytics Dashboard
         let rOutStr = member.recentOutlets || "";
-        let rOutList = rOutStr ? rOutStr.split(",").map(s => s.trim()) : [];
-        let lOut = rOutList.length > 0 ? rOutList[rOutList.length - 1] : "-";
-        outletDisplay.innerHTML = `📍 Awal: <strong>${fOut}</strong> | Akhir: <strong>${lOut}</strong>`;
+        let latestOutletsText = rOutStr ? rOutStr.split(",").join(" ➔ ") : "-"; 
+        
+        let lastVisit = member.lastPurchase ? window.formatDateReadable(member.lastPurchase) : "Belum ada riwayat";
+        let freq = member.frequency || "Baru 1x Kunjungan";
+        
+        let avgText = [];
+        if (member.avgRO > 0) avgText.push(`${member.avgRO} RO`);
+        if (member.avgStd > 0) avgText.push(`${member.avgStd} Standar`);
+        let avgDisplay = avgText.length > 0 ? avgText.join(" & ") : "Belum ada 19L";
+
+        outletDisplay.innerHTML = `
+            <div style="display:flex; flex-direction:column; gap:6px; text-align:left; font-size:13px; color:#2c3e50; margin-top:5px; padding:10px; background:#ecf0f1; border-radius:6px; border:1px solid #bdc3c7;">
+                <div>📍 <strong>3 Cabang Terakhir:</strong> <span style="color:#2980b9; font-weight:bold;">${latestOutletsText}</span></div>
+                <div>🔄 <strong>Frekuensi Beli:</strong> <span style="color:#27ae60; font-weight:bold;">${freq}</span></div>
+                <div>📅 <strong>Terakhir Beli:</strong> ${lastVisit}</div>
+                <div>📦 <strong>Rata-Rata Beli (19L):</strong> <span style="color:#8e44ad; font-weight:bold;">${avgDisplay} / Visit</span></div>
+            </div>`;
     }
 
     if (member && member.piutang > 0) {
@@ -657,13 +680,11 @@ window.updatePromoBanner = function(member) {
     let pointSummary = []; 
     let wallet = member ? (member.wallet || {}) : {};
     
-    // 1. FILTER: Hanya ambil data menu yang TERSUDIA di CABANG INI
     let availableMenu = window.globalMenuData.filter(m => {
         const avail = (m.availableAt || "ALL").toUpperCase();
         return avail === "ALL" || avail.includes(window.currentOutlet.toUpperCase());
     });
 
-    // 2. Tampilkan Poin Loyalty Standar HANYA untuk item cabang ini
     let loyaltyItems = availableMenu.filter(m => m.loyaltyThreshold > 0);
     loyaltyItems.forEach(item => {
         let w = wallet[item.name];
@@ -674,16 +695,10 @@ window.updatePromoBanner = function(member) {
         }
     });
 
-    // 3. Tampilkan Promo Lanjutan (Buy X Get 1 & Stamp) HANYA untuk item cabang ini
     for (let key in wallet) {
         let val = wallet[key];
-        
-        // Promo/Reward disimpan sebagai Angka (Number)
         if (typeof val === 'number' && val > 0) {
-            // Hilangkan prefix untuk mendapatkan nama item aslinya
             let baseName = key.replace("_prog_", "").replace("_stamp_", "");
-            
-            // Cek apakah item ini dijual di cabang ini
             let isAvail = availableMenu.find(m => m.name === baseName);
             if (isAvail) {
                 if (key.startsWith("_prog_")) {
@@ -699,14 +714,12 @@ window.updatePromoBanner = function(member) {
                     }
                     pointSummary.push(`🏷️ Stempel <strong>${baseName}</strong>: ${val}${target > 0 ? '/'+target : ''}`);
                 } else {
-                    // Jika tidak ada prefix, berarti ini adalah Reward (Barang Gratis) yang siap diklaim
                     pointSummary.push(`🎁 <strong>${baseName}</strong>: <span style="color:#27ae60;">${val} Siap Ditukar!</span>`);
                 }
             }
         }
     }
 
-    // 4. Update UI Banner
     if (pointSummary.length > 0) { 
         promoBanner.innerHTML = `🌟 <strong>Info Saldo Poin & Promo:</strong><br>` + pointSummary.join('<br>'); 
         promoBanner.classList.remove("hidden"); 
