@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbzWcVse-LJpaR9Glye5UzAVcwx3bVyhCm3GLW1ZMUfCFRNUClagblybq-OQQL4gucMs/exec"; 
+const API_URL = "https://script.google.com/macros/s/AKfycbwY4xxtYh5cxIsSQJ2bub8J2k7gM6EyDCLNidr8ADAn68qtM2EInBNuxVlz0WZhX6bj/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 14; // Bumped version for new schema
 window.db = null;
@@ -326,12 +326,15 @@ window.handleAutocomplete = function(e) {
                 let rOutList = rOutStr ? rOutStr.split(",").map(s => s.trim()) : [];
                 let lOut = rOutList.length > 0 ? rOutList[rOutList.length - 1] : "-";
                 let safePhone = String(m.phone || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                // Find the return `<div class="autocomplete-item"...` inside window.handleAutocomplete and replace it with this:
+                let safeAddress = String(m.address || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 
-                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0}, '${fOut}', '${rOutStr}')">
+                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0}, '${fOut}', '${rOutStr}', '${safeAddress}')">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div class="autocomplete-name">${m.name} <span style="font-size:11px; background:#ecf0f1; padding:2px 6px; border-radius:4px; margin-left:6px;">📍 Awal: ${fOut !== "Unknown" ? fOut : "-"} | Akhir: ${lOut}</span></div>
                         <div class="autocomplete-phone" style="font-size:14px; color:#7f8c8d;">${m.phone}</div>
                     </div>
+                    <div style="font-size:12px; color:#95a5a6; margin-top:4px;">${m.address || "Alamat belum diisi"}</div>
                 </div>`;
             }).join("");
             resBox.classList.remove("hidden");
@@ -368,14 +371,18 @@ window.selectCategory = function(name) {
     document.getElementById("cat-autocomplete-results").classList.add("hidden");
 };
 
-window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localPiutang, firstOutlet, recentOutlets) {
+// Add address parameter to the function
+window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localPiutang, firstOutlet, recentOutlets, address) {
     document.getElementById("autocomplete-results").classList.add("hidden");
     let lockedQueue = window.isCustomerLocked(phone);
-    if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan pesanan di sana terlebih dahulu.`); }
+    if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}.`); }
 
-    document.getElementById("cust-phone").value = phone; document.getElementById("cust-name").value = name; 
+    document.getElementById("cust-phone").value = phone; 
+    document.getElementById("cust-name").value = name; 
+    document.getElementById("cust-address").value = address || ""; // Inject address
+    
     let wallet = {}; try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
-    window.activeCustomerProfile = { phone: phone, name: name, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed, piutang: localPiutang, firstOutlet: firstOutlet, recentOutlets: recentOutlets };
+    window.activeCustomerProfile = { phone: phone, name: name, address: address, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed, piutang: localPiutang, firstOutlet: firstOutlet, recentOutlets: recentOutlets };
     window.updatePromoBanner(window.activeCustomerProfile);
 };
 
@@ -417,7 +424,20 @@ window.renderProductGrid = function() {
 
 window.addToCart = function(item, qty) {
     const existing = window.currentCart.find(i => i.itemId === item.itemId);
-    if (existing) { existing.qty += qty; } else { window.currentCart.push({ ...item, qty: qty, originalPrice: item.price, autoDeduct: item.autoDeduct, loyaltyThreshold: item.loyaltyThreshold, redeemed: 0 }); }
+    if (existing) { 
+        existing.qty += qty; 
+    } else { 
+        window.currentCart.push({ 
+            ...item, 
+            qty: qty, 
+            originalPrice: item.price, 
+            autoDeduct: item.autoDeduct, 
+            loyaltyThreshold: item.loyaltyThreshold, 
+            volumeLiters: item.volumeLiters, // Added for analytics
+            tankSource: item.tankSource,     // Added for analytics
+            redeemed: 0 
+        }); 
+    }
     window.renderCart();
 }
 
@@ -883,9 +903,11 @@ window.finalizeOrder = async function(shouldPrint) {
         window.saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount, fOut, rOut);
     }
 
+    let custAddress = document.getElementById("cust-address").value.trim() || "";
+
     const orderPayload = {
         orderId: "ORD-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId,
-        customerName: custName, customerPhone: custPhone, orderStatus: status, items: window.currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
+        customerName: custName, customerPhone: custPhone, customerAddress: custAddress, orderStatus: status, items: window.currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
         paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, debtAmount: debtAmount,
         loyaltyChanges: loyaltyChanges, freeItemsRedeemed: freeItemsRedeemed, 
         redeemedPromos: redeemedPromos, newEarnedRewards: newEarnedRewards, finalStoredRewards: JSON.stringify(updatedWallet),
