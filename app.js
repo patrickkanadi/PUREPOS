@@ -446,8 +446,8 @@ window.addToCart = function(item, qty) {
             originalPrice: item.price, 
             autoDeduct: item.autoDeduct, 
             loyaltyThreshold: item.loyaltyThreshold, 
-            volumeLiters: item.volumeLiters, 
-            tankSource: item.tankSource,     
+            volumeLiters: item.volumeLiters, // Added for analytics
+            tankSource: item.tankSource,     // Added for analytics
             redeemed: 0 
         }); 
     }
@@ -961,6 +961,8 @@ window.finalizeOrder = async function(shouldPrint) {
         let fOut = window.activeCustomerProfile ? window.activeCustomerProfile.firstOutlet : window.currentOutlet; let rOut = window.activeCustomerProfile ? window.activeCustomerProfile.recentOutlets : window.currentOutlet;
         window.saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount, fOut, rOut);
     }
+
+    let custAddress = document.getElementById("cust-address").value.trim() || "";
 
     const orderPayload = {
         orderId: "ORD-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId,
