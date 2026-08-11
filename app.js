@@ -1,6 +1,6 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbwHXhM72h7ZuA0nqh_8HcRzeMLQU5zAVwbg8HfTRUhmq7FwbShSKdlsFbVQqCeO1NGM/exec"; 
+const API_URL = "https://script.google.com/macros/s/AKfycbzAwQo5Lqv5_CZhi7aphlk3mN_en-U4GRZRcIp2gQQjmC1O0iVIyHfky2e875oxYt9q/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 14; // Bumped version for new schema
+const DB_VERSION = 14; 
 window.db = null;
 
 // Core State
@@ -242,7 +242,6 @@ window.syncMasterData = async function() {
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron Cepat (Menu & Kasir)...";
         if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
 
-        // === STAGE 1: FAST SYNC (Loads PINs, Settings, and Menu instantly) ===
         const authResponse = await fetch(API_URL + "?type=fast", { mode: 'cors', redirect: 'follow' });
         const authResult = await authResponse.json();
         
@@ -283,11 +282,9 @@ window.syncMasterData = async function() {
             window.globalMenuData = authResult.data.menu; 
             window.loyaltyEnabled = String(authResult.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
 
-            // If user is already on the homepage (POS), load the menu right now!
             if (!document.getElementById("pos-screen").classList.contains("hidden")) { window.loadMenuUI(); }
         }
 
-        // === STAGE 2: ASYNC FULL SYNC (Downloads Members & Histories in the background) ===
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Download Data Pelanggan...";
         
         fetch(API_URL, { mode: 'cors', redirect: 'follow' })
@@ -343,7 +340,6 @@ window.handleAutocomplete = function(e) {
                 let safePhone = String(m.phone || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let safeAddress = String(m.address || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 
-                // Added new analytics variables to selectMember
                 return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div class="autocomplete-name">${m.name} <span style="font-size:11px; background:#ecf0f1; padding:2px 6px; border-radius:4px; margin-left:6px;">📍 Awal: ${fOut !== "Unknown" ? fOut : "-"} | Akhir: ${lOut}</span></div>
@@ -396,15 +392,7 @@ window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localP
     document.getElementById("cust-address").value = address || ""; 
     
     let wallet = {}; try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
-    
-    // Save analytics to active profile
-    window.activeCustomerProfile = { 
-        phone: phone, name: name, address: address, wallet: wallet, 
-        bottlesBorrowed: dbBottlesBorrowed, piutang: localPiutang, 
-        firstOutlet: firstOutlet, recentOutlets: recentOutlets,
-        lastPurchase: lastPurchase, avgRO: avgRO, avgStd: avgStd, frequency: frequency
-    };
-    
+    window.activeCustomerProfile = { phone: phone, name: name, address: address, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed, piutang: localPiutang, firstOutlet: firstOutlet, recentOutlets: recentOutlets, lastPurchase: lastPurchase, avgRO: avgRO, avgStd: avgStd, frequency: frequency };
     window.updatePromoBanner(window.activeCustomerProfile);
 };
 
@@ -455,8 +443,8 @@ window.addToCart = function(item, qty) {
             originalPrice: item.price, 
             autoDeduct: item.autoDeduct, 
             loyaltyThreshold: item.loyaltyThreshold, 
-            volumeLiters: item.volumeLiters, // Added for analytics
-            tankSource: item.tankSource,     // Added for analytics
+            volumeLiters: item.volumeLiters, 
+            tankSource: item.tankSource,     
             redeemed: 0 
         }); 
     }
@@ -509,7 +497,7 @@ window.reviewOrder = function() {
             cartAgg[nameKey] = { qty: (cartAgg[nameKey]?.qty || 0) + item.qty, price: item.price, originalName: item.name, itemId: item.itemId };
         });
 
-        // 1. Loyalty Points (Standard Pure Water POS)
+        // 1. Loyalty Points
         window.currentCart.forEach(item => {
             if (item.loyaltyThreshold > 0) {
                 let existingFree = wallet[item.name] ? wallet[item.name].free : 0;
@@ -533,7 +521,7 @@ window.reviewOrder = function() {
             }
         });
 
-        // 2. Buy X Get 1 Promos (Laundry POS ported)
+        // 2. Buy X Get 1 Promos
         for (let itemName in cartAgg) {
             let cartQty = cartAgg[itemName].qty;
             let ruleKey = itemName;
@@ -624,7 +612,6 @@ window.switchCart = function(index) {
         document.getElementById("customer-input-section").classList.remove("hidden"); document.getElementById("active-customer-banner").classList.add("hidden");
         document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
         
-        // Wipe all 3 fields empty
         document.getElementById("cust-phone").value = ""; 
         document.getElementById("cust-name").value = ""; 
         let addressField = document.getElementById("cust-address"); 
@@ -649,7 +636,6 @@ window.updatePromoBanner = function(member) {
     const outletDisplay = document.getElementById("active-cust-outlets");
 
     if (member && outletDisplay) {
-        // Build Analytics Dashboard
         let rOutStr = member.recentOutlets || "";
         let latestOutletsText = rOutStr ? rOutStr.split(",").join(" ➔ ") : "-"; 
         
@@ -734,7 +720,6 @@ window.lockMenu = function() {
     document.getElementById("customer-input-section").classList.remove("hidden"); document.getElementById("active-customer-banner").classList.add("hidden");
     document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
     
-    // Reset all inputs
     document.getElementById("cust-phone").value = ""; 
     document.getElementById("cust-name").value = ""; 
     let addressField = document.getElementById("cust-address"); 
@@ -782,7 +767,6 @@ window.unlockMenu = function(isGuest) {
                 window.activeCustomerProfile = member; 
                 name = member.name; 
                 document.getElementById("cust-name").value = name; 
-                // Prioritize newly typed address, fallback to saved
                 if (currentAddress !== "") window.activeCustomerProfile.address = currentAddress;
                 window.updatePromoBanner(member); 
             } 
@@ -1009,7 +993,7 @@ window.finalizeOrder = async function(shouldPrint) {
         window.saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount, fOut, rOut);
     }
 
-     const orderPayload = {
+    const orderPayload = {
         orderId: "ORD-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId,
         customerName: custName, customerPhone: custPhone, customerAddress: custAddress, orderStatus: status, items: window.currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
         paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, debtAmount: debtAmount,
@@ -1344,7 +1328,7 @@ window.confirmAdminVoid = async function() {
                 const authName = isMaster ? "Master Admin" : staff.name; const type = window.currentVoidTarget.type; const id = window.currentVoidTarget.id; const storeName = type === 'orders' ? "orders" : "expenses";
                 window.db.transaction([storeName], "readwrite").objectStore(storeName).get(id).onsuccess = (ev) => {
                     const item = ev.target.result;
-                    if (type === 'orders') { item.orderStatus = "Voided"; item.voidAuth = authName; if(item.items) item.items.forEach(i => i.qty = Number(i.qty)); window.applyVoidAftermath(item); } 
+                    if (type === 'orders') { item.orderStatus = "Voided"; item.voidAuth = authName; if(item.items) item.items.forEach(i => i.qty = Number(i.qty)); window.applyLocalVoidAftermath(item); } 
                     else { item.status = "Voided"; item.voidAuth = authName; }
                     item.syncStatus = "Pending"; window.db.transaction([storeName], "readwrite").objectStore(storeName).put(item); window.renderHistoryList(type);
                 };
@@ -1365,7 +1349,6 @@ window.processServerUpdates = function(authStatuses) {
             const remote = authStatuses.orders[order.orderId];
             if (remote) {
                 let changed = false;
-                // CHANGED THIS LINE:
                 if (remote.status === "Voided" && order.orderStatus !== "Voided") { order.orderStatus = "Voided"; changed = true; window.applyLocalVoidAftermath(order); } 
                 else if (remote.status !== "Void Pending" && remote.status !== "Voided" && order.orderStatus === "Void Pending") { order.orderStatus = remote.status; changed = true; }
                 
@@ -1418,129 +1401,6 @@ window.applyLocalVoidAftermath = function(order) {
     tx.oncomplete = () => { if (!document.getElementById("pos-screen").classList.contains("hidden")) window.renderProductGrid(); };
 }
 
-window.calculateLiveDrawer = function(callback) {
-    let liveDrawer = (window.outletStocks && window.outletStocks[window.currentOutlet] && window.outletStocks[window.currentOutlet]["Saldo_Laci"]) ? window.outletStocks[window.currentOutlet]["Saldo_Laci"] : 0; 
-    
-    let tx = window.db.transaction(["orders", "cash_drops", "expenses", "bayar_piutang"], "readonly");
-    let ordersReq = tx.objectStore("orders").getAll(); let dropReq = tx.objectStore("cash_drops").getAll(); 
-    let expReq = tx.objectStore("expenses").getAll(); let bpReq = tx.objectStore("bayar_piutang").getAll();
-    
-    tx.oncomplete = () => {
-        ordersReq.result.forEach(o => { if (o.syncStatus === "Pending" && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending") liveDrawer += (o.cashAmount || 0); });
-        dropReq.result.forEach(d => { if (d.syncStatus === "Pending") liveDrawer -= (d.toAdmin + d.toBank); });
-        expReq.result.forEach(e => { if (e.syncStatus === "Pending" && e.status === "Active") liveDrawer -= (e.amount || 0); });
-        bpReq.result.forEach(bp => { if (bp.syncStatus === "Pending") liveDrawer += (bp.cashAmount || 0); });
-        callback(liveDrawer);
-    };
-}
-
-window.openCashDrop = function(forLogout = false) {
-    window.isLoggingOut = forLogout; document.getElementById("cash-drop-title").innerText = window.isLoggingOut ? "🔒 Tutup Shift & Setor Laci" : "🏦 Simpan / Tarik Uang Laci";
-    document.getElementById("btn-drop-cancel").innerText = window.isLoggingOut ? "Batal Logout" : "Batal"; document.getElementById("btn-drop-confirm").innerText = window.isLoggingOut ? "Konfirmasi & Logout" : "Simpan Data";
-    document.getElementById("drop-amount").value = ""; document.getElementById("drop-destination").value = "Admin"; document.getElementById("drop-notes").value = "";
-    
-    window.calculateLiveDrawer((liveAmount) => { document.getElementById("live-drawer-display").innerText = `Rp ${liveAmount.toLocaleString('id-ID')}`; document.getElementById("cash-drop-modal").classList.remove("hidden"); });
-}
-
-window.submitCashDrop = function() {
-    const pullAmount = Number(document.getElementById("drop-amount").value) || 0;
-    if (pullAmount < 0) return alert("⚠️ ERROR: Nominal uang tidak valid.");
-    if (pullAmount === 0 && !window.isLoggingOut) return alert("⚠️ ERROR: Harap masukkan nominal uang yang diambil dari laci.");
-    
-    const destination = document.getElementById("drop-destination").value; const customNotes = document.getElementById("drop-notes").value || (window.isLoggingOut ? "Tutup Shift" : "Tarik Uang Tengah Shift");
-    let adminAmt = 0; let bankAmt = 0; if (destination === "Bank") bankAmt = pullAmount; else adminAmt = pullAmount;
-    const finalNotes = `[Ke ${destination}] ${customNotes}`;
-    
-    window.calculateLiveDrawer((liveAmount) => {
-        const leftInDrawer = liveAmount - pullAmount;
-        const payload = { dropId: "DRP-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId, toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: finalNotes, outlet: window.currentOutlet, syncStatus: "Pending" };
-        window.db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").add(payload);
-        document.getElementById("cash-drop-modal").classList.add("hidden"); window.runBackgroundSync();
-        if (window.isLoggingOut) { window.executeFinalLogout(leftInDrawer); } else { alert(`Setor Uang Berhasil!\nTujuan: ${destination}\nSisa Tunai di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); }
-    });
-}
-
-window.openCurrentShiftReport = function() {
-    let tCust = 0; let tOrders = 0; let tOmset = 0; let tCash = 0; let tQris = 0; let tTransfer = 0; let tFree = 0; let tExpense = 0; let tPiutangGiven = 0; let tPiutangPaidCash = 0; let foodSummary = {};
-    document.getElementById("meter-water").value = "";
-    
-    let meterContainer = document.getElementById("meter-water-container"); if(meterContainer) meterContainer.classList.remove("hidden");
-    let btnEndShift = document.getElementById("btn-end-shift"); if(btnEndShift) btnEndShift.classList.remove("hidden");
-    
-    let btnPrintHist = document.getElementById("btn-print-history"); 
-    if (btnPrintHist) { 
-        btnPrintHist.classList.remove("hidden"); 
-        btnPrintHist.onclick = window.printShiftReport; 
-    }
-    
-    let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = "";
-    
-    window.db.transaction(["orders", "expenses", "bayar_piutang"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        const validOrders = e.target.result.filter(o => o.shiftId === window.currentShiftId && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending");
-        validOrders.forEach(o => {
-            tOrders++; if(o.customerPhone && o.customerPhone !== "-") tCust++; tOmset += o.grandTotal;
-            tCash += (o.cashAmount || 0); tQris += (o.qrisAmount || 0); tTransfer += (o.transferAmount || 0); tFree += (o.freeAmount || 0); 
-            tPiutangGiven += (o.debtAmount || 0);
-            if (o.items) o.items.forEach(i => { if(!foodSummary[i.name]) foodSummary[i.name] = 0; foodSummary[i.name] += i.qty; });
-        });
-        
-        window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (ex) => {
-            const shiftExpenses = ex.target.result.filter(exp => exp.shiftId === window.currentShiftId && exp.status === "Active"); shiftExpenses.forEach(exp => { tExpense += (exp.amount || 0); });
-            
-            window.db.transaction(["bayar_piutang"], "readonly").objectStore("bayar_piutang").getAll().onsuccess = (bpRes) => {
-                const shiftPiutangs = bpRes.target.result.filter(bp => bp.shiftId === window.currentShiftId); shiftPiutangs.forEach(bp => { tPiutangPaidCash += (bp.cashAmount || 0); });
-                
-                window.calculateLiveDrawer((liveDrawer) => {
-                    document.getElementById("sr-orders").innerText = tOrders; document.getElementById("sr-customers").innerText = tCust; document.getElementById("sr-omset").innerText = `Rp ${tOmset.toLocaleString('id-ID')}`;
-                    document.getElementById("sr-cash").innerText = `Rp ${tCash.toLocaleString('id-ID')}`; document.getElementById("sr-qris").innerText = `Rp ${tQris.toLocaleString('id-ID')}`; document.getElementById("sr-transfer").innerText = `Rp ${tTransfer.toLocaleString('id-ID')}`;
-                    document.getElementById("sr-free").innerText = `Rp ${tFree.toLocaleString('id-ID')}`; document.getElementById("sr-expense").innerText = `Rp ${tExpense.toLocaleString('id-ID')}`;
-                    document.getElementById("sr-piutang-given").innerText = `Rp ${tPiutangGiven.toLocaleString('id-ID')}`; document.getElementById("sr-piutang-paid").innerText = `Rp ${tPiutangPaidCash.toLocaleString('id-ID')}`;
-                    document.getElementById("sr-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`; 
-                    
-                    let itemsHtml = ""; for (const [name, qty] of Object.entries(foodSummary)) { itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; }
-                    let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual.</div>";
-                    
-                    document.getElementById("shift-report-modal").classList.remove("hidden");
-                    
-                    window.currentShiftData = { shiftId: window.currentShiftId, loginTime: window.currentLoginTime, totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree, totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, logoutTime: window.getWibDate() };
-                });
-            };
-        };
-    };
-}
-window.openShiftReport = window.openCurrentShiftReport; 
-
-window.initiateLogoutSequence = function() { 
-    const meterW = document.getElementById("meter-water").value;
-    if (meterW === "") return alert("⚠️ ERROR: Wajib mengisi Angka Meteran Air sebelum mengakhiri Shift.");
-    window.currentShiftData.meterWater = Number(meterW);
-    document.getElementById("shift-report-modal").classList.add("hidden"); window.openCashDrop(true); 
-}
-
-window.executeFinalLogout = async function(netCash) { 
-    const data = window.currentShiftData;
-    const shiftPayload = {
-        shiftId: window.currentShiftId, timestamp: window.getWibDate(), cashier: window.currentCashier, loginTime: window.currentLoginTime, logoutTime: window.getWibDate(), 
-        totalCustomers: data.totalCustomers, totalOrders: data.totalOrders, totalOmset: data.totalOmset, totalCash: data.totalCash, totalQris: data.totalQris, totalTransfer: data.totalTransfer, totalFree: data.totalFree,
-        totalExpenses: data.totalExpenses, netCash: netCash, foodSummary: data.foodSummary, meterWater: data.meterWater, outlet: window.currentOutlet, syncStatus: "Pending", piutangGiven: data.piutangGiven, piutangPaid: data.piutangPaid
-    };
-
-    window.db.transaction(["local_shift_history"], "readwrite").objectStore("local_shift_history").add(shiftPayload);
-    window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").add(shiftPayload);
-    window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(window.currentPin); 
-    
-    if (navigator.onLine) {
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = `Mengirim Laporan Shift...`;
-        try {
-            let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) });
-            if ((await r.json()).status === "Success") { window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(shiftPayload.shiftId); }
-        } catch(e) {}
-    }
-    window.location.reload(); 
-}
-
-window.lockScreen = function() { window.location.reload(); }
-
 window.runBackgroundSync = async function() {
     if (!navigator.onLine || window.isSyncing) return;
     window.isSyncing = true; 
@@ -1548,7 +1408,6 @@ window.runBackgroundSync = async function() {
         if (!window.db) { await window.initDB(); }
         await window.checkAutoCloseShifts();
         
-        // 1. Read all tables into memory using one quick transaction
         let tx = window.db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah", "bayar_piutang"], "readonly");
         
         let orders = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
@@ -1562,7 +1421,6 @@ window.runBackgroundSync = async function() {
         let cuciLogs = await new Promise(res => tx.objectStore("cuci_tandon").getAll().onsuccess = e => res(e.target.result));
         let laporLogs = await new Promise(res => tx.objectStore("lapor_masalah").getAll().onsuccess = e => res(e.target.result));
 
-        // 2. NOW execute network fetches (which would normally kill the transaction)
         for (const order of orders) {
             if (order.syncStatus === "Pending") {
                 order.syncStatus = "Syncing"; window.db.transaction(["orders"], "readwrite").objectStore("orders").put(order);
@@ -1594,8 +1452,6 @@ window.runBackgroundSync = async function() {
         for (const inb of inbounds) {
             if (inb.syncStatus === "Pending") { try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncInbound", data: inb }) }); if ((await r.json()).status === "Success") { window.db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").delete(inb.logId); } } catch(e) {} }
         }
-        
-        // FIXED: CUCI & LAPOR MASALAH WILL NOW PROPERLY SYNC
         for (const log of cuciLogs) {
             if (log.syncStatus === "Pending") { try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncCuciTandon", data: log }) }); if ((await r.json()).status === "Success") { window.db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").delete(log.logId); } } catch(e) {} }
         }
