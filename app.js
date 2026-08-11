@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbwY4xxtYh5cxIsSQJ2bub8J2k7gM6EyDCLNidr8ADAn68qtM2EInBNuxVlz0WZhX6bj/exec"; 
+const API_URL = "https://script.google.com/macros/s/AKfycbyVeQ2qcT4_qG7d7YnoKjZb8L3Qk-Aq9zuOgXUmaSIqhQYrQHrTSivGpJsbh5gz9Jo/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 14; // Bumped version for new schema
 window.db = null;
@@ -326,7 +326,6 @@ window.handleAutocomplete = function(e) {
                 let rOutList = rOutStr ? rOutStr.split(",").map(s => s.trim()) : [];
                 let lOut = rOutList.length > 0 ? rOutList[rOutList.length - 1] : "-";
                 let safePhone = String(m.phone || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                // Find the return `<div class="autocomplete-item"...` inside window.handleAutocomplete and replace it with this:
                 let safeAddress = String(m.address || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 
                 return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0}, '${fOut}', '${rOutStr}', '${safeAddress}')">
@@ -371,15 +370,14 @@ window.selectCategory = function(name) {
     document.getElementById("cat-autocomplete-results").classList.add("hidden");
 };
 
-// Add address parameter to the function
 window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localPiutang, firstOutlet, recentOutlets, address) {
     document.getElementById("autocomplete-results").classList.add("hidden");
     let lockedQueue = window.isCustomerLocked(phone);
-    if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}.`); }
+    if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan pesanan di sana terlebih dahulu.`); }
 
     document.getElementById("cust-phone").value = phone; 
     document.getElementById("cust-name").value = name; 
-    document.getElementById("cust-address").value = address || ""; // Inject address
+    document.getElementById("cust-address").value = address || ""; 
     
     let wallet = {}; try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
     window.activeCustomerProfile = { phone: phone, name: name, address: address, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed, piutang: localPiutang, firstOutlet: firstOutlet, recentOutlets: recentOutlets };
@@ -433,8 +431,8 @@ window.addToCart = function(item, qty) {
             originalPrice: item.price, 
             autoDeduct: item.autoDeduct, 
             loyaltyThreshold: item.loyaltyThreshold, 
-            volumeLiters: item.volumeLiters, // Added for analytics
-            tankSource: item.tankSource,     // Added for analytics
+            volumeLiters: item.volumeLiters, 
+            tankSource: item.tankSource,     
             redeemed: 0 
         }); 
     }
@@ -801,6 +799,7 @@ window.finalizeOrder = async function(shouldPrint) {
 
     let custPhoneRaw = document.getElementById("cust-phone").value.trim(); let custPhone = custPhoneRaw || "-";
     const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
+    const custAddress = document.getElementById("cust-address").value.trim() || ""; // GET ADDRESS
 
     if (remaining !== 0) return alert("⚠️ PEMBAYARAN DITOLAK:\nTotal pembayaran (termasuk hutang) harus persis sama dengan Total Akhir.");
     if (debtAmount > 0 && (!custPhone || custPhone === "-")) return alert("⚠️ TRANSAKSI DITOLAK:\nAnda WAJIB memasukkan nomor WhatsApp pelanggan untuk mencatat Piutang.");
@@ -846,7 +845,6 @@ window.finalizeOrder = async function(shouldPrint) {
     if (window.loyaltyEnabled && window.activeCustomerProfile) {
         updatedWallet = JSON.parse(JSON.stringify(window.activeCustomerProfile.wallet || {})); 
         
-        // 1. Standard Loyalty Math
         for(let itemName in loyaltyChanges) {
             if(!updatedWallet[itemName]) updatedWallet[itemName] = {points:0, free:0};
             updatedWallet[itemName].free -= loyaltyChanges[itemName].redeemed;
@@ -860,7 +858,6 @@ window.finalizeOrder = async function(shouldPrint) {
             }
         }
         
-        // 2. Buy X Get 1 & Stamp Promos Math
         if (debtAmount === 0) {
             let cartAggT = {};
             window.currentCart.forEach(item => {
@@ -902,8 +899,6 @@ window.finalizeOrder = async function(shouldPrint) {
         let fOut = window.activeCustomerProfile ? window.activeCustomerProfile.firstOutlet : window.currentOutlet; let rOut = window.activeCustomerProfile ? window.activeCustomerProfile.recentOutlets : window.currentOutlet;
         window.saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount, fOut, rOut);
     }
-
-    let custAddress = document.getElementById("cust-address").value.trim() || "";
 
     const orderPayload = {
         orderId: "ORD-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId,
