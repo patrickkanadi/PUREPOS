@@ -169,8 +169,25 @@ window.attemptLogin = async function() {
                 window.currentCashier = staff.name; window.currentPin = staff.pin; 
                 
                 const dropdownSelection = document.getElementById("login-outlet").value;
-                if (dropdownSelection === "AUTO") { window.currentOutlet = staff.defaultOutlet || document.getElementById("login-outlet").options[1].value; } 
-                else { window.currentOutlet = dropdownSelection; }
+                const role = String(staff.role).toLowerCase().trim();
+                const isManagerOrAdmin = (role === 'manager' || role === 'admin');
+                const fallbackOutlet = document.getElementById("login-outlet").options.length > 1 ? document.getElementById("login-outlet").options[1].value : "Pusat";
+                const staffDefault = staff.defaultOutlet || fallbackOutlet;
+
+                // === ROLE-BASED OUTLET CHECK ===
+                if (isManagerOrAdmin) {
+                    if (dropdownSelection === "AUTO") { window.currentOutlet = staffDefault; } 
+                    else { window.currentOutlet = dropdownSelection; }
+                } else {
+                    // Blokir jika staff biasa mencoba ganti cabang di luar defaultOutlet-nya
+                    if (dropdownSelection !== "AUTO" && dropdownSelection !== staffDefault) {
+                        alert(`⚠️ Akses Ditolak!\nStaff biasa hanya dapat login ke cabang asal (${staffDefault}).`);
+                        document.getElementById("login-outlet").value = "AUTO"; 
+                        loginBtn.disabled = false; loginBtn.innerText = "Masuk / Buka Shift";
+                        return; // Stop login
+                    }
+                    window.currentOutlet = staffDefault;
+                }
 
                 if (activeShift) { 
                     window.currentShiftId = activeShift.shiftId; window.currentLoginTime = activeShift.loginTime; window.currentOutlet = activeShift.outlet || window.currentOutlet; 
@@ -731,55 +748,77 @@ window.lockMenu = function() {
     const outletDisplay = document.getElementById("active-cust-outlets"); if(outletDisplay) outletDisplay.innerHTML = "";
 }
 
-window.unlockMenu = function(isGuest) {
-    let phone = "-"; let name = "Walk-in";
-    const promoBanner = document.getElementById("promo-indicator-banner"); const piutangBanner = document.getElementById("piutang-indicator-banner"); 
+window.unlockMenu = function() {
+    let phoneRaw = document.getElementById("cust-phone").value.trim();
+    let nameRaw = document.getElementById("cust-name").value.trim();
+    let addressRaw = document.getElementById("cust-address") ? document.getElementById("cust-address").value.trim() : "";
+    
+    const promoBanner = document.getElementById("promo-indicator-banner"); 
+    const piutangBanner = document.getElementById("piutang-indicator-banner"); 
     const outletDisplay = document.getElementById("active-cust-outlets");
 
-    if (isGuest) { 
+    // === GUEST / WALK-IN CHECK ===
+    if (phoneRaw.length < 5) {
+        let confirmGuest = confirm("Data pelanggan tidak diisi atau tidak lengkap.\n\nLanjutkan transaksi sebagai Tamu / Walk-in?");
+        if (!confirmGuest) return; // Cashier clicked Cancel, stop here.
+        
+        // Proceed as Walk-in
         document.getElementById("cust-phone").value = ""; 
         document.getElementById("cust-name").value = "Walk-in"; 
-        let addressField = document.getElementById("cust-address"); 
-        if (addressField) addressField.value = ""; 
+        if (document.getElementById("cust-address")) document.getElementById("cust-address").value = ""; 
         
         window.activeCustomerProfile = null; 
-        document.getElementById("active-cust-name").innerText = name; document.getElementById("active-cust-phone").innerText = "";
-        document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
-        if(promoBanner) promoBanner.classList.add("hidden"); if(piutangBanner) piutangBanner.classList.add("hidden");
+        document.getElementById("active-cust-name").innerText = "Walk-in"; 
+        document.getElementById("active-cust-phone").innerText = "";
+        
+        document.getElementById("customer-input-section").classList.add("hidden"); 
+        document.getElementById("active-customer-banner").classList.remove("hidden");
+        
+        if(promoBanner) promoBanner.classList.add("hidden"); 
+        if(piutangBanner) piutangBanner.classList.add("hidden");
         if(outletDisplay) outletDisplay.innerHTML = "";
-        window.isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
-    } else {
-        phone = document.getElementById("cust-phone").value.trim(); name = document.getElementById("cust-name").value.trim() || "Pelanggan";
-        if (phone.length < 5) return alert("Harap masukkan Nomor WhatsApp yang valid terlebih dahulu.");
-
-        let searchPhone = phone.replace(/\D/g, ''); if (searchPhone.startsWith('62')) searchPhone = '0' + searchPhone.substring(2);
-        if (searchPhone.length > 0 && !searchPhone.startsWith('0')) searchPhone = '0' + searchPhone;
-
-        let lockedQueue = window.isCustomerLocked(searchPhone);
-        if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan pesanan di sana terlebih dahulu.`); }
-
-        const tx = window.db.transaction(["members"], "readonly");
-        tx.objectStore("members").get(searchPhone).onsuccess = (ev) => {
-            const member = ev.target.result;
-            let currentAddress = document.getElementById("cust-address").value.trim();
-            
-            if (member) { 
-                window.activeCustomerProfile = member; 
-                name = member.name; 
-                document.getElementById("cust-name").value = name; 
-                if (currentAddress !== "") window.activeCustomerProfile.address = currentAddress;
-                window.updatePromoBanner(member); 
-            } 
-            else { 
-                window.activeCustomerProfile = { phone: searchPhone, name: name, address: currentAddress, wallet: {}, bottlesBorrowed: 0, piutang: 0, firstOutlet: window.currentOutlet, recentOutlets: window.currentOutlet }; 
-                window.updatePromoBanner(window.activeCustomerProfile); 
-            }
-
-            document.getElementById("active-cust-name").innerText = name; document.getElementById("active-cust-phone").innerText = `(${searchPhone})`;
-            document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
-            window.isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
-        };
+        
+        window.isMenuLocked = false; 
+        document.getElementById("glass-overlay").style.opacity = "0"; 
+        setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
+        return;
     }
+
+    // === REGULAR MEMBER CHECK ===
+    let phone = phoneRaw;
+    let name = nameRaw || "Pelanggan";
+    let searchPhone = phone.replace(/\D/g, ''); 
+    if (searchPhone.startsWith('62')) searchPhone = '0' + searchPhone.substring(2);
+    if (searchPhone.length > 0 && !searchPhone.startsWith('0')) searchPhone = '0' + searchPhone;
+
+    let lockedQueue = window.isCustomerLocked(searchPhone);
+    if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan pesanan di sana terlebih dahulu.`); }
+
+    const tx = window.db.transaction(["members"], "readonly");
+    tx.objectStore("members").get(searchPhone).onsuccess = (ev) => {
+        const member = ev.target.result;
+        
+        if (member) { 
+            window.activeCustomerProfile = member; 
+            name = member.name; 
+            document.getElementById("cust-name").value = name; 
+            if (addressRaw !== "") window.activeCustomerProfile.address = addressRaw;
+            window.updatePromoBanner(member); 
+        } 
+        else { 
+            window.activeCustomerProfile = { phone: searchPhone, name: name, address: addressRaw, wallet: {}, bottlesBorrowed: 0, piutang: 0, firstOutlet: window.currentOutlet, recentOutlets: window.currentOutlet }; 
+            window.updatePromoBanner(window.activeCustomerProfile); 
+        }
+
+        document.getElementById("active-cust-name").innerText = name; 
+        document.getElementById("active-cust-phone").innerText = `(${searchPhone})`;
+        document.getElementById("customer-input-section").classList.add("hidden"); 
+        document.getElementById("active-customer-banner").classList.remove("hidden");
+        
+        window.isMenuLocked = false; 
+        document.getElementById("glass-overlay").style.opacity = "0"; 
+        setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
+    };
 }
 
 window.openBukuPiutang = function() {
