@@ -263,10 +263,25 @@ window.syncMasterData = async function() {
         const authResult = await authResponse.json();
         
         if (authResult.status === "Success") {
-            const tx = window.db.transaction(["staff", "settings", "menu"], "readwrite");
+            // Note: We added "members" to the local transaction
+            const tx = window.db.transaction(["staff", "settings", "menu", "members"], "readwrite");
+            
             const staffStore = tx.objectStore("staff"); staffStore.clear(); authResult.data.staff.forEach(s => staffStore.put(s));
             const menuStore = tx.objectStore("menu"); menuStore.clear(); authResult.data.menu.forEach(m => menuStore.put(m));
             const settingsStore = tx.objectStore("settings"); settingsStore.clear(); 
+            
+            // --- NEW: Process Members, Stocks, and Voids instantly ---
+            if (authResult.data.members) {
+                const memStore = tx.objectStore("members"); memStore.clear();
+                authResult.data.members.forEach(m => memStore.put(m));
+            }
+            if (authResult.data.outletStocks) {
+                window.outletStocks = authResult.data.outletStocks;
+            }
+            if (authResult.data.authStatuses) {
+                window.processServerUpdates(authResult.data.authStatuses);
+            }
+            // ---------------------------------------------------------
             
             for (const [k, v] of Object.entries(authResult.data.settings)) { 
                 settingsStore.put({ key: k, value: v }); 
