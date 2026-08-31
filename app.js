@@ -1074,6 +1074,7 @@ window.finalizeOrder = async function(shouldPrint) {
     }
     
     window.closeReview(); window.lockMenu(); window.renderProductGrid(); window.runBackgroundSync();
+    if(window.updatePengirimanBadge) window.updatePengirimanBadge(); // Force update badge instantly
 }
 
 window.getDynamicSettings = async function() { return new Promise(res => { let req = window.db.transaction(["settings"], "readonly").objectStore("settings").getAll(); req.onsuccess = e => { let s = {}; e.target.result.forEach(row => s[row.key] = row.value); res(s); }; }); }
@@ -1725,50 +1726,66 @@ window.openAbsensiModal = function() {
     window.renderAbsensi();
 }
 
+window.updatePengirimanBadge = function() {
+    if (!window.db) return;
+    window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
+        let count = e.target.result.filter(o => o.isDelivery && o.deliveryStatus === "Pending" && o.outlet === window.currentOutlet).length;
+        let tabBtn = document.getElementById("tab-left-pengiriman");
+        if (tabBtn) { tabBtn.innerText = count > 0 ? `🚚 Pengiriman Aktif (${count})` : `🚚 Pengiriman Aktif`; }
+    };
+}
+
 window.renderPengiriman = function() {
     const container = document.getElementById("pengiriman-list"); container.innerHTML = "";
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        let deliveries = e.target.result.filter(o => o.isDelivery && o.deliveryStatus === "Pending");
+        let deliveries = e.target.result.filter(o => o.isDelivery && o.deliveryStatus === "Pending" && o.outlet === window.currentOutlet);
+        window.updatePengirimanBadge(); // Sync badge
+
         if (deliveries.length === 0) return container.innerHTML = `<div style="padding:20px; color:#7f8c8d; text-align:center;">Tidak ada pengiriman tertunda.</div>`;
         
         deliveries.forEach(o => {
             let itemsStr = o.items.filter(i => !i.name.toLowerCase().includes("ongkos kirim")).map(i => `${i.qty}x ${i.name}`).join(", ");
             container.innerHTML += `
-            <div style="border:1px solid #bdc3c7; border-left:5px solid #e67e22; padding:15px; border-radius:6px; background:#fef9e7; display:flex; justify-content:space-between; align-items:center;">
+            <div style="border:1px solid #bdc3c7; border-left:5px solid #e67e22; padding:15px; border-radius:6px; background:#fef9e7; display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
                 <div>
                     <strong>🕒 ${window.formatDateReadable(o.timestamp)}</strong> | 👤 <strong>${o.customerName}</strong> (${o.customerPhone})<br>
                     📍 <span style="color:#c0392b;">${o.customerAddress || "ALAMAT KOSONG!"}</span><br>
-                    📦 <span style="color:#2980b9; font-weight:bold;">${itemsStr}</span>
+                    📦 <span style="color:#2980b9; font-weight:bold;">${itemsStr}</span><br>
+                    🏷️ Status: <strong style="color:#e67e22;">Menunggu Dikirim</strong>
                 </div>
-                <button onclick="window.markDeliveryDone('${o.orderId}')" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Selesai Diantar ✅</button>
+                <div style="display:flex; gap:10px;">
+                    <button onclick="window.showOrderDetail('${o.orderId}')" style="background:#f39c12; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">🔍 Cek</button>
+                    <button onclick="window.markDeliveryDone('${o.orderId}')" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">✅ Selesai</button>
+                </div>
             </div>`;
         });
     };
 }
 
 window.markDeliveryDone = function(orderId) {
+    if (!confirm("Konfirmasi: Apakah pesanan ini sudah selesai diantar?")) return;
     let tx = window.db.transaction(["orders"], "readwrite");
     tx.objectStore("orders").get(orderId).onsuccess = (e) => {
         let order = e.target.result;
         order.deliveryStatus = "Terkirim";
         tx.objectStore("orders").put(order);
-        
-        if (navigator.onLine) {
-            fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: "Terkirim" }) });
-        }
-        window.renderPengiriman();
+        if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: "Terkirim" }) });
+        window.renderPengiriman(); window.updatePengirimanBadge();
     };
 }
 
 window.renderAbsensi = async function() {
     const container = document.getElementById("absensi-list"); container.innerHTML = "";
     const staffList = await window.getStaffFromDB();
-    const today = window.getWibDate().split(" ")[0]; // YYYY-MM-DD
+    const today = window.getWibDate().split(" ")[0];
     
     window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (e) => {
         let logs = e.target.result.filter(l => l.date === today);
         
-        staffList.forEach(staff => {
+        // NEW: Filter staff by active outlet (or if they are Admin/Manager)
+        let outletStaff = staffList.filter(s => s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'admin' || s.role.toLowerCase() === 'manager');
+
+        outletStaff.forEach(staff => {
             let activeLog = logs.find(l => l.staffName === staff.name && !l.clockOut);
             let statusBadge = activeLog ? `<span style="color:#27ae60; font-weight:bold;">🟢 Sedang Tugas (Masuk: ${activeLog.clockIn.split(" ")[1]})</span>` : `<span style="color:#7f8c8d; font-weight:bold;">⚪ Belum Clock-in</span>`;
             
@@ -1777,7 +1794,7 @@ window.renderAbsensi = async function() {
                 : `<button onclick="window.clockInStaff('${staff.name}')" style="background:#3498db; color:white; border:none; padding:8px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Clock In</button>`;
 
             container.innerHTML += `
-            <div style="border:1px solid #ecf0f1; padding:15px; border-radius:6px; background:#f9fcfc; display:flex; justify-content:space-between; align-items:center;">
+            <div style="border:1px solid #ecf0f1; padding:15px; border-radius:6px; background:#f9fcfc; display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
                 <div>👤 <strong style="font-size:16px;">${staff.name}</strong> (${staff.role})<br>${statusBadge}</div>
                 <div>${btnAction}</div>
             </div>`;
@@ -1786,18 +1803,22 @@ window.renderAbsensi = async function() {
 }
 
 window.clockInStaff = function(staffName) {
+    if (!confirm(`Apakah Anda yakin ingin melakukan Clock-IN untuk ${staffName}?`)) return;
     let payload = { logId: "ABS-" + Date.now(), date: window.getWibDate().split(" ")[0], staffName: staffName, clockIn: window.getWibDate(), clockOut: null, loggedBy: window.currentCashier, syncStatus: "Pending" };
     window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
     window.renderAbsensi(); window.runBackgroundSync();
 }
 
 window.clockOutStaff = function(logId, manualTime = null) {
+    if (!manualTime && !confirm(`Apakah Anda yakin ingin melakukan Clock-OUT sekarang?`)) return;
     let tx = window.db.transaction(["attendance"], "readwrite");
     tx.objectStore("attendance").get(logId).onsuccess = (e) => {
         let log = e.target.result;
         log.clockOut = manualTime || window.getWibDate();
         log.syncStatus = "OutPending";
         tx.objectStore("attendance").put(log);
+        
+        if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: log }) });
         window.renderAbsensi(); window.runBackgroundSync();
     };
 }
@@ -1826,4 +1847,10 @@ window.onload = async () => {
     await window.syncMasterData(); 
     window.setInterval(window.runBackgroundSync, 15000); 
     window.setInterval(window.checkAutoCloseShifts, 3600000); 
+    
+    // NEW: Auto-update badge every 5 seconds
+    if(window.updatePengirimanBadge) {
+        window.setInterval(window.updatePengirimanBadge, 5000); 
+        window.updatePengirimanBadge();
+    }
 };
