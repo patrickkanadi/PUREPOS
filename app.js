@@ -1530,11 +1530,11 @@ window.submitCashDrop = function() {
 }
 
 window.openCurrentShiftReport = function() {
-    // === NEW: CHECK ACTIVE ATTENDANCE BEFORE SHIFT CLOSE ===
     const today = window.getWibDate().split(" ")[0];
+    
+    // 1. Check Attendance First
     window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (ev) => {
         let pendingOuts = ev.target.result.filter(l => l.date === today && !l.clockOut);
-        
         let currentHour = new Date(window.getWibDate().replace(' ', 'T')).getHours();
         
         if (pendingOuts.length > 0) {
@@ -1542,60 +1542,66 @@ window.openCurrentShiftReport = function() {
             pendingOuts.forEach(p => msg += `- ${p.staffName}\n`);
             
             if (currentHour >= 20) {
-                alert(msg + "\nKarena sudah lewat jam 20:00, sistem akan otomatis melakukan Clock-Out untuk mereka sekarang.");
+                alert(msg + "\nKarena sudah lewat jam 20:00, sistem otomatis melakukan Clock-Out untuk mereka sekarang.");
                 pendingOuts.forEach(p => window.clockOutStaff(p.logId, window.getWibDate()));
             } else {
-                let forceOut = prompt(msg + "\nMasukkan waktu Clock-Out manual untuk mereka (Format HH:MM) atau biarkan kosong jika mereka masih lanjut bekerja:", "");
+                let forceOut = prompt(msg + "\nMasukkan waktu Clock-Out manual untuk mereka (Format HH:MM) atau biarkan kosong jika masih bekerja:", "");
                 if (forceOut && forceOut.includes(":")) {
                     let outTime = `${today} ${forceOut}:00`;
                     pendingOuts.forEach(p => window.clockOutStaff(p.logId, outTime));
                 }
             }
-    let tCust = 0; let tOrders = 0; let tOmset = 0; let tCash = 0; let tQris = 0; let tTransfer = 0; let tFree = 0; let tExpense = 0; let tPiutangGiven = 0; let tPiutangPaidCash = 0; let foodSummary = {};
-    document.getElementById("meter-water").value = "";
-    
-    let meterContainer = document.getElementById("meter-water-container"); if(meterContainer) meterContainer.classList.remove("hidden");
-    let btnEndShift = document.getElementById("btn-end-shift"); if(btnEndShift) btnEndShift.classList.remove("hidden");
-    
-    let btnPrintHist = document.getElementById("btn-print-history"); 
-    if (btnPrintHist) { 
-        btnPrintHist.classList.remove("hidden"); 
-        btnPrintHist.onclick = window.printShiftReport; 
-    }
-    
-    let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = "";
-    
-    window.db.transaction(["orders", "expenses", "bayar_piutang"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        const validOrders = e.target.result.filter(o => o.shiftId === window.currentShiftId && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending");
-        validOrders.forEach(o => {
-            tOrders++; if(o.customerPhone && o.customerPhone !== "-") tCust++; tOmset += o.grandTotal;
-            tCash += (o.cashAmount || 0); tQris += (o.qrisAmount || 0); tTransfer += (o.transferAmount || 0); tFree += (o.freeAmount || 0); 
-            tPiutangGiven += (o.debtAmount || 0);
-            if (o.items) o.items.forEach(i => { if(!foodSummary[i.name]) foodSummary[i.name] = 0; foodSummary[i.name] += i.qty; });
-        });
-        
-        window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (ex) => {
-            const shiftExpenses = ex.target.result.filter(exp => exp.shiftId === window.currentShiftId && exp.status === "Active"); shiftExpenses.forEach(exp => { tExpense += (exp.amount || 0); });
+        }
+
+        // 2. Delay slightly to allow database to save clock-outs, then generate the actual Shift Report
+        setTimeout(() => {
+            let tCust = 0; let tOrders = 0; let tOmset = 0; let tCash = 0; let tQris = 0; let tTransfer = 0; let tFree = 0; let tExpense = 0; let tPiutangGiven = 0; let tPiutangPaidCash = 0; let foodSummary = {};
+            document.getElementById("meter-water").value = "";
             
-            window.db.transaction(["bayar_piutang"], "readonly").objectStore("bayar_piutang").getAll().onsuccess = (bpRes) => {
-                const shiftPiutangs = bpRes.target.result.filter(bp => bp.shiftId === window.currentShiftId); shiftPiutangs.forEach(bp => { tPiutangPaidCash += (bp.cashAmount || 0); });
-                
-                window.calculateLiveDrawer((liveDrawer) => {
-                    document.getElementById("sr-orders").innerText = tOrders; document.getElementById("sr-customers").innerText = tCust; document.getElementById("sr-omset").innerText = `Rp ${tOmset.toLocaleString('id-ID')}`;
-                    document.getElementById("sr-cash").innerText = `Rp ${tCash.toLocaleString('id-ID')}`; document.getElementById("sr-qris").innerText = `Rp ${tQris.toLocaleString('id-ID')}`; document.getElementById("sr-transfer").innerText = `Rp ${tTransfer.toLocaleString('id-ID')}`;
-                    document.getElementById("sr-free").innerText = `Rp ${tFree.toLocaleString('id-ID')}`; document.getElementById("sr-expense").innerText = `Rp ${tExpense.toLocaleString('id-ID')}`;
-                    document.getElementById("sr-piutang-given").innerText = `Rp ${tPiutangGiven.toLocaleString('id-ID')}`; document.getElementById("sr-piutang-paid").innerText = `Rp ${tPiutangPaidCash.toLocaleString('id-ID')}`;
-                    document.getElementById("sr-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`; 
-                    
-                    let itemsHtml = ""; for (const [name, qty] of Object.entries(foodSummary)) { itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; }
-                    let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual.</div>";
-                    
-                    document.getElementById("shift-report-modal").classList.remove("hidden");
-                    
-                    window.currentShiftData = { shiftId: window.currentShiftId, loginTime: window.currentLoginTime, totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree, totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, logoutTime: window.getWibDate() };
+            let meterContainer = document.getElementById("meter-water-container"); if(meterContainer) meterContainer.classList.remove("hidden");
+            let btnEndShift = document.getElementById("btn-end-shift"); if(btnEndShift) btnEndShift.classList.remove("hidden");
+            
+            let btnPrintHist = document.getElementById("btn-print-history"); 
+            if (btnPrintHist) { 
+                btnPrintHist.classList.remove("hidden"); 
+                btnPrintHist.onclick = window.printShiftReport; 
+            }
+            
+            let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = "";
+            
+            window.db.transaction(["orders", "expenses", "bayar_piutang"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
+                const validOrders = e.target.result.filter(o => o.shiftId === window.currentShiftId && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending");
+                validOrders.forEach(o => {
+                    tOrders++; if(o.customerPhone && o.customerPhone !== "-") tCust++; tOmset += o.grandTotal;
+                    tCash += (o.cashAmount || 0); tQris += (o.qrisAmount || 0); tTransfer += (o.transferAmount || 0); tFree += (o.freeAmount || 0); 
+                    tPiutangGiven += (o.debtAmount || 0);
+                    if (o.items) o.items.forEach(i => { if(!foodSummary[i.name]) foodSummary[i.name] = 0; foodSummary[i.name] += i.qty; });
                 });
+                
+                window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (ex) => {
+                    const shiftExpenses = ex.target.result.filter(exp => exp.shiftId === window.currentShiftId && exp.status === "Active"); shiftExpenses.forEach(exp => { tExpense += (exp.amount || 0); });
+                    
+                    window.db.transaction(["bayar_piutang"], "readonly").objectStore("bayar_piutang").getAll().onsuccess = (bpRes) => {
+                        const shiftPiutangs = bpRes.target.result.filter(bp => bp.shiftId === window.currentShiftId); shiftPiutangs.forEach(bp => { tPiutangPaidCash += (bp.cashAmount || 0); });
+                        
+                        window.calculateLiveDrawer((liveDrawer) => {
+                            document.getElementById("sr-orders").innerText = tOrders; document.getElementById("sr-customers").innerText = tCust; document.getElementById("sr-omset").innerText = `Rp ${tOmset.toLocaleString('id-ID')}`;
+                            document.getElementById("sr-cash").innerText = `Rp ${tCash.toLocaleString('id-ID')}`; document.getElementById("sr-qris").innerText = `Rp ${tQris.toLocaleString('id-ID')}`; document.getElementById("sr-transfer").innerText = `Rp ${tTransfer.toLocaleString('id-ID')}`;
+                            document.getElementById("sr-free").innerText = `Rp ${tFree.toLocaleString('id-ID')}`; document.getElementById("sr-expense").innerText = `Rp ${tExpense.toLocaleString('id-ID')}`;
+                            document.getElementById("sr-piutang-given").innerText = `Rp ${tPiutangGiven.toLocaleString('id-ID')}`; document.getElementById("sr-piutang-paid").innerText = `Rp ${tPiutangPaidCash.toLocaleString('id-ID')}`;
+                            document.getElementById("sr-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`; 
+                            
+                            let itemsHtml = ""; for (const [name, qty] of Object.entries(foodSummary)) { itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; }
+                            let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual.</div>";
+                            
+                            document.getElementById("shift-report-modal").classList.remove("hidden");
+                            
+                            window.currentShiftData = { shiftId: window.currentShiftId, loginTime: window.currentLoginTime, totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree, totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, logoutTime: window.getWibDate() };
+                        });
+                    };
+                };
             };
-        };
+        }, 300); // 300ms delay to finish logging out staff
     };
 }
 
