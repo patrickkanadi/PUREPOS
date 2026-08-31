@@ -840,31 +840,27 @@ window.unlockMenu = function() {
     };
 }
 
-window.openBukuPiutang = function() {
-    document.getElementById('buku-piutang-modal').classList.remove('hidden');
-    document.getElementById('search-piutang').value = "";
-    window.renderPiutangList();
-}
-
 window.renderPiutangList = function() {
     const filter = document.getElementById('search-piutang').value.toLowerCase().trim();
     const container = document.getElementById("piutang-list-container"); container.innerHTML = "";
     
     window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
         let members = e.target.result.filter(m => m.piutang > 0);
+        if(window.updateLeftBadges) window.updateLeftBadges(); // Sync badge
+        
         if (filter) members = members.filter(m => String(m.name).toLowerCase().includes(filter) || String(m.phone).includes(filter));
         
         if (members.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Tidak ada data piutang ditemukan.</div>`; return; }
         
         members.forEach(m => {
             container.innerHTML += `
-                <div class="history-row">
+                <div style="border:1px solid #bdc3c7; border-left:5px solid #d35400; padding:15px; border-radius:6px; background:#fdf2e9; display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
                     <div>
-                        <strong style="color:#2c3e50;">${m.name}</strong> <span style="font-size:12px; color:#7f8c8d;">(${m.phone})</span><br>
-                        <strong style="color:#c0392b; font-size:16px;">Rp ${m.piutang.toLocaleString('id-ID')}</strong>
+                        <strong style="color:#2c3e50; font-size:16px;">${m.name}</strong> <span style="font-size:14px; color:#7f8c8d;">(${m.phone})</span><br>
+                        💰 <strong style="color:#c0392b; font-size:18px;">Rp ${m.piutang.toLocaleString('id-ID')}</strong>
                     </div>
                     <div>
-                        <button onclick="window.triggerBayarPiutang('${m.phone}')" style="background:#27ae60; color:white; border:none; padding:8px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Lunasi Piutang</button>
+                        <button onclick="window.triggerBayarPiutang('${m.phone}')" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Lunasi Piutang</button>
                     </div>
                 </div>`;
         });
@@ -937,7 +933,7 @@ window.submitPiutang = function() {
         }
     };
 
-    document.getElementById("piutang-modal").classList.add("hidden"); alert("Pembayaran Piutang Berhasil Dicatat!"); window.runBackgroundSync();
+    document.getElementById("piutang-modal").classList.add("hidden"); alert("Pembayaran Piutang Berhasil Dicatat!"); if(window.updateLeftBadges) window.updateLeftBadges(); window.runBackgroundSync();
 }
 
 window.finalizeOrder = async function(shouldPrint) {
@@ -1074,7 +1070,7 @@ window.finalizeOrder = async function(shouldPrint) {
     }
     
     window.closeReview(); window.lockMenu(); window.renderProductGrid(); window.runBackgroundSync();
-    if(window.updatePengirimanBadge) window.updatePengirimanBadge(); // Force update badge instantly
+    if(window.updateLeftBadges) window.updateLeftBadges(); // Force update badge instantly
 }
 
 window.getDynamicSettings = async function() { return new Promise(res => { let req = window.db.transaction(["settings"], "readonly").objectStore("settings").getAll(); req.onsuccess = e => { let s = {}; e.target.result.forEach(row => s[row.key] = row.value); res(s); }; }); }
@@ -1141,11 +1137,55 @@ window.buildEscPosReceipt = async function(orderId, order, deposit, debt, payMet
     
     if (window.loyaltyEnabled && order.customerPhone && order.customerPhone !== "-") {
         receipt += "\n" + centerAlign + "-- INFO POIN --\n" + leftAlign;
-        let loyaltyItems = window.globalMenuData.filter(m => m.loyaltyThreshold > 0);
-        loyaltyItems.forEach(item => { 
-            let data = updatedWallet[item.name] || {points: 0, free: 0}; 
-            receipt += window.formatLine(item.name, `Poin:${data.points} | Free:${data.free}`, false); 
+        
+        // 1. Filter menu strictly by the outlet of this specific order
+        let availableMenu = window.globalMenuData.filter(m => {
+            const avail = (m.availableAt || "ALL").toUpperCase();
+            return avail === "ALL" || avail.includes(String(order.outlet).toUpperCase());
         });
+
+        // 2. Print Basic Loyalty Items relevant to this outlet
+        let loyaltyItems = availableMenu.filter(m => m.loyaltyThreshold > 0);
+        let hasPoints = false;
+
+        loyaltyItems.forEach(item => { 
+            let data = updatedWallet[item.name]; 
+            if (data && typeof data === 'object') {
+                receipt += window.formatLine(item.name, `Poin:${data.points}/${item.loyaltyThreshold} | Free:${data.free}`, false);
+                hasPoints = true;
+            } else {
+                receipt += window.formatLine(item.name, `Poin:0/${item.loyaltyThreshold} | Free:0`, false);
+                hasPoints = true;
+            }
+        });
+
+        // 3. Print Active Promos & Stamps relevant to this outlet
+        for (let key in updatedWallet) {
+            let val = updatedWallet[key];
+            if (typeof val === 'number' && val > 0) {
+                let baseName = key.replace("_prog_", "").replace("_stamp_", "");
+                let isAvail = availableMenu.find(m => m.name === baseName);
+                if (isAvail) {
+                    if (key.startsWith("_prog_")) {
+                        let target = 0;
+                        for (let pk in window.promoRules) {
+                            if (baseName.toUpperCase().replace(/\s+/g, '').includes(pk)) { target = window.promoRules[pk]; break; }
+                        }
+                        if (target > 0) { receipt += window.formatLine(`Prog ${baseName}`, `${val}/${target}`, false); hasPoints = true; }
+                    } else if (key.startsWith("_stamp_")) {
+                        let target = 0;
+                        for (let sk in window.promoStampRules) {
+                            if (window.promoStampRules[sk].originalName === baseName) { target = window.promoStampRules[sk].target; break; }
+                        }
+                        receipt += window.formatLine(`Stamp ${baseName}`, `${val}${target > 0 ? '/'+target : ''}`, false); hasPoints = true;
+                    } else {
+                        receipt += window.formatLine(`Gratis ${baseName}`, `${val} Siap!`, false); hasPoints = true;
+                    }
+                }
+            }
+        }
+        
+        if (!hasPoints) receipt += centerAlign + "Belum ada poin aktif\n" + leftAlign;
     }
 
     receipt += "\n" + centerAlign + boldOn + f1 + "\n" + normalText + boldOff;
@@ -1697,12 +1737,16 @@ window.runBackgroundSync = async function() {
 
 window.showNewOrder = function() {
     document.getElementById("pengiriman-section").classList.add("hidden");
+    document.getElementById("piutang-section").classList.add("hidden");
     document.getElementById("command-bar").classList.remove("hidden");
     document.getElementById("category-container").classList.remove("hidden");
     document.getElementById("product-grid").classList.remove("hidden");
+    document.getElementById("glass-overlay").style.display = window.isMenuLocked ? "flex" : "none"; // FIX OVERLAY BUG
     
     document.getElementById("tab-left-pengiriman").style.background = "transparent";
     document.getElementById("tab-left-pengiriman").style.color = "#333";
+    document.getElementById("tab-left-piutang").style.background = "transparent";
+    document.getElementById("tab-left-piutang").style.color = "#333";
     document.getElementById("tab-new-order").style.background = "#3498db";
     document.getElementById("tab-new-order").style.color = "white";
 }
@@ -1711,14 +1755,51 @@ window.showPengirimanTab = function() {
     document.getElementById("command-bar").classList.add("hidden");
     document.getElementById("category-container").classList.add("hidden");
     document.getElementById("product-grid").classList.add("hidden");
+    document.getElementById("piutang-section").classList.add("hidden");
     document.getElementById("pengiriman-section").classList.remove("hidden");
+    document.getElementById("glass-overlay").style.display = "none"; // FIX OVERLAY BUG
     
     document.getElementById("tab-new-order").style.background = "transparent";
     document.getElementById("tab-new-order").style.color = "#333";
+    document.getElementById("tab-left-piutang").style.background = "transparent";
+    document.getElementById("tab-left-piutang").style.color = "#333";
     document.getElementById("tab-left-pengiriman").style.background = "#8e44ad";
     document.getElementById("tab-left-pengiriman").style.color = "white";
     
     window.renderPengiriman();
+}
+
+window.showPiutangTab = function() {
+    document.getElementById("command-bar").classList.add("hidden");
+    document.getElementById("category-container").classList.add("hidden");
+    document.getElementById("product-grid").classList.add("hidden");
+    document.getElementById("pengiriman-section").classList.add("hidden");
+    document.getElementById("piutang-section").classList.remove("hidden");
+    document.getElementById("glass-overlay").style.display = "none"; // FIX OVERLAY BUG
+    
+    document.getElementById("tab-new-order").style.background = "transparent";
+    document.getElementById("tab-new-order").style.color = "#333";
+    document.getElementById("tab-left-pengiriman").style.background = "transparent";
+    document.getElementById("tab-left-pengiriman").style.color = "#333";
+    document.getElementById("tab-left-piutang").style.background = "#d35400";
+    document.getElementById("tab-left-piutang").style.color = "white";
+    
+    window.renderPiutangList();
+    document.getElementById("search-piutang").value = "";
+}
+
+window.updateLeftBadges = function() {
+    if (!window.db) return;
+    window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
+        let count = e.target.result.filter(o => o.isDelivery && o.deliveryStatus === "Pending" && o.outlet === window.currentOutlet).length;
+        let tabBtn = document.getElementById("tab-left-pengiriman");
+        if (tabBtn) { tabBtn.innerText = count > 0 ? `🚚 Pengiriman (${count})` : `🚚 Pengiriman`; }
+    };
+    window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
+        let pCount = e.target.result.filter(m => m.piutang > 0).length;
+        let pBtn = document.getElementById("tab-left-piutang");
+        if (pBtn) { pBtn.innerText = pCount > 0 ? `📒 Piutang (${pCount})` : `📒 Piutang`; }
+    };
 }
 
 window.openAbsensiModal = function() {
@@ -1726,20 +1807,11 @@ window.openAbsensiModal = function() {
     window.renderAbsensi();
 }
 
-window.updatePengirimanBadge = function() {
-    if (!window.db) return;
-    window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        let count = e.target.result.filter(o => o.isDelivery && o.deliveryStatus === "Pending" && o.outlet === window.currentOutlet).length;
-        let tabBtn = document.getElementById("tab-left-pengiriman");
-        if (tabBtn) { tabBtn.innerText = count > 0 ? `🚚 Pengiriman Aktif (${count})` : `🚚 Pengiriman Aktif`; }
-    };
-}
-
 window.renderPengiriman = function() {
     const container = document.getElementById("pengiriman-list"); container.innerHTML = "";
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
         let deliveries = e.target.result.filter(o => o.isDelivery && o.deliveryStatus === "Pending" && o.outlet === window.currentOutlet);
-        window.updatePengirimanBadge(); // Sync badge
+         // Sync badge
 
         if (deliveries.length === 0) return container.innerHTML = `<div style="padding:20px; color:#7f8c8d; text-align:center;">Tidak ada pengiriman tertunda.</div>`;
         
@@ -1770,7 +1842,7 @@ window.markDeliveryDone = function(orderId) {
         order.deliveryStatus = "Terkirim";
         tx.objectStore("orders").put(order);
         if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: "Terkirim" }) });
-        window.renderPengiriman(); window.updatePengirimanBadge();
+        window.renderPengiriman(); 
     };
 }
 
@@ -1886,9 +1958,9 @@ window.onload = async () => {
     window.setInterval(window.runBackgroundSync, 15000); 
     window.setInterval(window.checkAutoCloseShifts, 3600000); 
     
-    // NEW: Auto-update badge every 5 seconds
-    if(window.updatePengirimanBadge) {
-        window.setInterval(window.updatePengirimanBadge, 5000); 
-        window.updatePengirimanBadge();
-    }
+    // NEW: Auto-update badges every 5 seconds
+    if(window.updateLeftBadges) {
+        window.setInterval(window.updateLeftBadges, 5000); 
+        window.updateLeftBadges();
+    } 
 };
