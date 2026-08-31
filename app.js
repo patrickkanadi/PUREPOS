@@ -1,6 +1,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbwLOC0uTUDLIK7gpFLV0pcxUEgepmjZQhIAe0AHUBADpkqA7oHfAVx0WHauE_TfyRA/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 14; 
+const DB_VERSION = 15; 
 window.db = null;
 
 // Core State
@@ -46,6 +46,7 @@ window.initDB = function() {
             if (!window.db.objectStoreNames.contains("cuci_tandon")) window.db.createObjectStore("cuci_tandon", { keyPath: "logId" });
             if (!window.db.objectStoreNames.contains("lapor_masalah")) window.db.createObjectStore("lapor_masalah", { keyPath: "logId" });
             if (!window.db.objectStoreNames.contains("bayar_piutang")) window.db.createObjectStore("bayar_piutang", { keyPath: "payId" });
+            if (!window.db.objectStoreNames.contains("attendance")) window.db.createObjectStore("attendance", { keyPath: "logId" });
         };
         request.onsuccess = (e) => { window.db = e.target.result; resolve(window.db); };
         request.onerror = (e) => reject(e);
@@ -1047,11 +1048,15 @@ window.finalizeOrder = async function(shouldPrint) {
         window.saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount, fOut, rOut);
     }
 
+    // Cek apakah ada ongkos kirim
+    let isDelivery = window.currentCart.some(i => i.name.toLowerCase().includes("ongkos kirim") || i.category.toLowerCase().includes("ongkos kirim"));
+
     const orderPayload = {
         orderId: "ORD-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId,
         customerName: custName, customerPhone: custPhone, customerAddress: custAddress, orderStatus: status, items: window.currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
         paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, debtAmount: debtAmount,
         loyaltyChanges: loyaltyChanges, freeItemsRedeemed: freeItemsRedeemed, 
+        isDelivery: isDelivery, deliveryStatus: isDelivery ? "Pending" : "-",
         redeemedPromos: redeemedPromos, newEarnedRewards: newEarnedRewards, finalStoredRewards: JSON.stringify(updatedWallet),
         outlet: window.currentOutlet, syncStatus: "Pending" 
     };
@@ -1513,6 +1518,27 @@ window.submitCashDrop = function() {
 }
 
 window.openCurrentShiftReport = function() {
+    // === NEW: CHECK ACTIVE ATTENDANCE BEFORE SHIFT CLOSE ===
+    const today = window.getWibDate().split(" ")[0];
+    window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (ev) => {
+        let pendingOuts = ev.target.result.filter(l => l.date === today && !l.clockOut);
+        
+        let currentHour = new Date(window.getWibDate().replace(' ', 'T')).getHours();
+        
+        if (pendingOuts.length > 0) {
+            let msg = "Terdapat staff yang belum Clock-Out:\n";
+            pendingOuts.forEach(p => msg += `- ${p.staffName}\n`);
+            
+            if (currentHour >= 20) {
+                alert(msg + "\nKarena sudah lewat jam 20:00, sistem akan otomatis melakukan Clock-Out untuk mereka sekarang.");
+                pendingOuts.forEach(p => window.clockOutStaff(p.logId, window.getWibDate()));
+            } else {
+                let forceOut = prompt(msg + "\nMasukkan waktu Clock-Out manual untuk mereka (Format HH:MM) atau biarkan kosong jika mereka masih lanjut bekerja:", "");
+                if (forceOut && forceOut.includes(":")) {
+                    let outTime = `${today} ${forceOut}:00`;
+                    pendingOuts.forEach(p => window.clockOutStaff(p.logId, outTime));
+                }
+            }
     let tCust = 0; let tOrders = 0; let tOmset = 0; let tCash = 0; let tQris = 0; let tTransfer = 0; let tFree = 0; let tExpense = 0; let tPiutangGiven = 0; let tPiutangPaidCash = 0; let foodSummary = {};
     document.getElementById("meter-water").value = "";
     
@@ -1658,6 +1684,107 @@ window.runBackgroundSync = async function() {
         console.error("Background Sync Error:", e);
         if (e.name === 'InvalidStateError') { await window.initDB(); }
     } finally { window.isSyncing = false; }
+}
+
+window.showPengirimanTab = function() {
+    document.getElementById("product-grid").classList.add("hidden");
+    document.getElementById("category-container").classList.add("hidden");
+    document.getElementById("absensi-section").classList.add("hidden");
+    document.getElementById("pengiriman-section").classList.remove("hidden");
+    
+    document.querySelectorAll(".cart-tab").forEach(b => b.classList.remove("active"));
+    document.getElementById("tab-pengiriman").classList.add("active");
+    
+    window.renderPengiriman();
+}
+
+window.renderPengiriman = function() {
+    const container = document.getElementById("pengiriman-list"); container.innerHTML = "";
+    window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
+        let deliveries = e.target.result.filter(o => o.isDelivery && o.deliveryStatus === "Pending");
+        if (deliveries.length === 0) return container.innerHTML = `<div style="padding:20px; color:#7f8c8d; text-align:center;">Tidak ada pengiriman tertunda.</div>`;
+        
+        deliveries.forEach(o => {
+            let itemsStr = o.items.filter(i => !i.name.toLowerCase().includes("ongkos kirim")).map(i => `${i.qty}x ${i.name}`).join(", ");
+            container.innerHTML += `
+            <div style="border:1px solid #bdc3c7; border-left:5px solid #e67e22; padding:15px; border-radius:6px; background:#fef9e7; display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <strong>🕒 ${window.formatDateReadable(o.timestamp)}</strong> | 👤 <strong>${o.customerName}</strong> (${o.customerPhone})<br>
+                    📍 <span style="color:#c0392b;">${o.customerAddress || "ALAMAT KOSONG!"}</span><br>
+                    📦 <span style="color:#2980b9; font-weight:bold;">${itemsStr}</span>
+                </div>
+                <button onclick="window.markDeliveryDone('${o.orderId}')" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Selesai Diantar ✅</button>
+            </div>`;
+        });
+    };
+}
+
+window.markDeliveryDone = function(orderId) {
+    let tx = window.db.transaction(["orders"], "readwrite");
+    tx.objectStore("orders").get(orderId).onsuccess = (e) => {
+        let order = e.target.result;
+        order.deliveryStatus = "Terkirim";
+        tx.objectStore("orders").put(order);
+        
+        if (navigator.onLine) {
+            fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: "Terkirim" }) });
+        }
+        window.renderPengiriman();
+    };
+}
+
+window.showAbsensiTab = function() {
+    document.getElementById("product-grid").classList.add("hidden");
+    document.getElementById("category-container").classList.add("hidden");
+    document.getElementById("pengiriman-section").classList.add("hidden");
+    document.getElementById("absensi-section").classList.remove("hidden");
+    
+    document.querySelectorAll(".cart-tab").forEach(b => b.classList.remove("active"));
+    document.getElementById("tab-absensi").classList.add("active");
+    
+    window.renderAbsensi();
+}
+
+window.renderAbsensi = async function() {
+    const container = document.getElementById("absensi-list"); container.innerHTML = "";
+    const staffList = await window.getStaffFromDB();
+    const today = window.getWibDate().split(" ")[0]; // YYYY-MM-DD
+    
+    window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (e) => {
+        let logs = e.target.result.filter(l => l.date === today);
+        
+        staffList.forEach(staff => {
+            let activeLog = logs.find(l => l.staffName === staff.name && !l.clockOut);
+            let statusBadge = activeLog ? `<span style="color:#27ae60; font-weight:bold;">🟢 Sedang Tugas (Masuk: ${activeLog.clockIn.split(" ")[1]})</span>` : `<span style="color:#7f8c8d; font-weight:bold;">⚪ Belum Clock-in</span>`;
+            
+            let btnAction = activeLog 
+                ? `<button onclick="window.clockOutStaff('${activeLog.logId}')" style="background:#e74c3c; color:white; border:none; padding:8px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Clock Out</button>`
+                : `<button onclick="window.clockInStaff('${staff.name}')" style="background:#3498db; color:white; border:none; padding:8px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Clock In</button>`;
+
+            container.innerHTML += `
+            <div style="border:1px solid #ecf0f1; padding:15px; border-radius:6px; background:#f9fcfc; display:flex; justify-content:space-between; align-items:center;">
+                <div>👤 <strong style="font-size:16px;">${staff.name}</strong> (${staff.role})<br>${statusBadge}</div>
+                <div>${btnAction}</div>
+            </div>`;
+        });
+    };
+}
+
+window.clockInStaff = function(staffName) {
+    let payload = { logId: "ABS-" + Date.now(), date: window.getWibDate().split(" ")[0], staffName: staffName, clockIn: window.getWibDate(), clockOut: null, loggedBy: window.currentCashier, syncStatus: "Pending" };
+    window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
+    window.renderAbsensi(); window.runBackgroundSync();
+}
+
+window.clockOutStaff = function(logId, manualTime = null) {
+    let tx = window.db.transaction(["attendance"], "readwrite");
+    tx.objectStore("attendance").get(logId).onsuccess = (e) => {
+        let log = e.target.result;
+        log.clockOut = manualTime || window.getWibDate();
+        log.syncStatus = "OutPending";
+        tx.objectStore("attendance").put(log);
+        window.renderAbsensi(); window.runBackgroundSync();
+    };
 }
 
 window.onload = async () => { 
