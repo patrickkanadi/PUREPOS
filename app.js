@@ -1781,8 +1781,6 @@ window.renderAbsensi = async function() {
     
     window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (e) => {
         let logs = e.target.result.filter(l => l.date === today);
-        
-        // NEW: Filter staff by active outlet (or if they are Admin/Manager)
         let outletStaff = staffList.filter(s => s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'admin' || s.role.toLowerCase() === 'manager');
 
         outletStaff.forEach(staff => {
@@ -1799,7 +1797,47 @@ window.renderAbsensi = async function() {
                 <div>${btnAction}</div>
             </div>`;
         });
+        
+        // --- NEW: TAMBAH STAFF CEPAT ---
+        container.innerHTML += `
+        <div style="margin-top: 15px; padding-top: 15px; border-top: 2px dashed #bdc3c7;">
+            <p style="margin-top:0; font-weight:bold; color:#2c3e50; font-size:14px;">➕ Tambah Staff Baru Cepat</p>
+            <div style="display:flex; gap:10px;">
+                <input type="text" id="new-staff-name" placeholder="Ketik Nama Staff..." style="flex:1; padding:10px; border:2px solid #bdc3c7; border-radius:6px; font-size:14px;" autocomplete="off">
+                <button onclick="window.submitNewStaff()" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Tambah</button>
+            </div>
+        </div>`;
     };
+}
+
+window.submitNewStaff = async function() {
+    const nameInput = document.getElementById("new-staff-name");
+    const name = nameInput.value.trim();
+    if (!name) return alert("Harap masukkan nama staff!");
+    if (!navigator.onLine) return alert("Anda harus Online untuk menambah staff baru.");
+    
+    nameInput.disabled = true;
+    let btn = nameInput.nextElementSibling;
+    btn.innerText = "Loading...";
+    
+    try {
+        let res = await fetch(API_URL, {
+            method: "POST",
+            body: JSON.stringify({ action: "addStaff", staffName: name, outlet: window.currentOutlet, cashier: window.currentCashier })
+        });
+        let out = await res.json();
+        if (out.status === "Success") {
+            alert(`Staff "${name}" berhasil ditambahkan ke database!\n(Sistem otomatis membuat PIN sementara: ${out.pin})`);
+            await window.syncMasterData(); 
+            window.renderAbsensi(); 
+        } else {
+            alert("Gagal menambahkan staff.");
+            nameInput.disabled = false; btn.innerText = "Tambah";
+        }
+    } catch(e) {
+        alert("Terjadi kesalahan jaringan.");
+        nameInput.disabled = false; btn.innerText = "Tambah";
+    }
 }
 
 window.clockInStaff = function(staffName) {
