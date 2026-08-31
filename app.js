@@ -1864,10 +1864,15 @@ window.markDeliveryDone = function(orderId) {
     let tx = window.db.transaction(["orders"], "readwrite");
     tx.objectStore("orders").get(orderId).onsuccess = (e) => {
         let order = e.target.result;
-        order.deliveryStatus = "Terkirim";
+        let finishTime = window.getWibDate(); // Get the exact current time
+        
+        order.deliveryStatus = "Selesai: " + finishTime;
         order.orderStatus = "Completed"; // Officially mark as Complete!
         tx.objectStore("orders").put(order);
-        if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: "Terkirim", orderStatus: "Completed" }) });
+        
+        // Send the exact finish time to the Google Sheet instead of "Terkirim"
+        if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: "Selesai: " + finishTime, orderStatus: "Completed" }) });
+        
         window.renderPengiriman();
         if(window.updateLeftBadges) window.updateLeftBadges();
     };
