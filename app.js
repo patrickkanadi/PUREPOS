@@ -879,32 +879,55 @@ window.openPiutangModal = function(memberOverride) {
     
     document.getElementById("piutang-target-name").innerText = window.piutangTargetMember.name;
     document.getElementById("piutang-target-amount").innerText = "Rp " + window.piutangTargetMember.piutang.toLocaleString('id-ID');
-    document.getElementById("piutang-pay-amount").value = window.piutangTargetMember.piutang;
+    
+    // Auto fill cash as default
+    document.getElementById("piutang-pay-cash").value = window.piutangTargetMember.piutang;
+    document.getElementById("piutang-pay-qris").value = 0;
+    document.getElementById("piutang-pay-transfer").value = 0;
+    window.autoBalancePiutangPay();
     
     const orderSelect = document.getElementById("piutang-target-order"); orderSelect.innerHTML = `<option value="">-- Lunasi Saldo Global --</option>`;
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
         const memberOrders = e.target.result.filter(o => o.customerPhone === window.piutangTargetMember.phone && o.debtAmount > 0 && String(o.paymentMethod).includes("Piutang"));
         memberOrders.forEach(o => { orderSelect.innerHTML += `<option value="${o.orderId}">Nota: ${o.orderId} (Hutang Rp ${o.debtAmount.toLocaleString('id-ID')})</option>`; });
-        document.getElementById('buku-piutang-modal').classList.add('hidden');
+        
+        let oldModal = document.getElementById('buku-piutang-modal'); if (oldModal) oldModal.classList.add('hidden');
         document.getElementById("piutang-modal").classList.remove("hidden");
     };
 }
 
+window.autoBalancePiutangPay = function() {
+    const c = Number(document.getElementById("piutang-pay-cash").value) || 0; 
+    const q = Number(document.getElementById("piutang-pay-qris").value) || 0; 
+    const t = Number(document.getElementById("piutang-pay-transfer").value) || 0;
+    const total = c + q + t;
+    document.getElementById("piutang-total-dibayar").innerText = `Rp ${total.toLocaleString('id-ID')}`;
+}
+
 window.submitPiutang = function() {
-    let payAmount = Number(document.getElementById("piutang-pay-amount").value); let method = document.getElementById("piutang-method").value;
+    const c = Number(document.getElementById("piutang-pay-cash").value) || 0; 
+    const q = Number(document.getElementById("piutang-pay-qris").value) || 0; 
+    const t = Number(document.getElementById("piutang-pay-transfer").value) || 0;
+    let payAmount = c + q + t;
     let targetOrderId = document.getElementById("piutang-target-order").value;
     
-    if(payAmount <= 0) return alert("Jumlah tidak valid"); 
+    if(payAmount <= 0) return alert("Jumlah bayar tidak valid"); 
     if(payAmount > window.piutangTargetMember.piutang) return alert("Jumlah yang dimasukkan melebihi total piutang pelanggan!");
     
-    let cashAmt = method === "Tunai" ? payAmount : 0;
-    let payload = { payId: "BYR-" + Date.now(), timestamp: window.getWibDate(), customerName: window.piutangTargetMember.name, customerPhone: window.piutangTargetMember.phone, amountPaid: payAmount, paymentMethod: method, cashAmount: cashAmt, cashier: window.currentCashier, outlet: window.currentOutlet, syncStatus: "Pending", shiftId: window.currentShiftId, originalOrderId: targetOrderId };
+    let payMethods = [];
+    if(c > 0) payMethods.push("Tunai");
+    if(q > 0) payMethods.push("QRIS");
+    if(t > 0) payMethods.push("Trf.Bank");
+    let method = payMethods.join("+");
+    
+    let payload = { payId: "BYR-" + Date.now(), timestamp: window.getWibDate(), customerName: window.piutangTargetMember.name, customerPhone: window.piutangTargetMember.phone, amountPaid: payAmount, paymentMethod: method, cashAmount: c, qrisAmount: q, transferAmount: t, cashier: window.currentCashier, outlet: window.currentOutlet, syncStatus: "Pending", shiftId: window.currentShiftId, originalOrderId: targetOrderId };
     
     window.db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").add(payload);
     
     window.piutangTargetMember.piutang -= payAmount;
     window.saveMemberToDB(window.piutangTargetMember.phone, window.piutangTargetMember.name, window.piutangTargetMember.wallet, window.piutangTargetMember.bottlesBorrowed, window.piutangTargetMember.piutang, window.piutangTargetMember.firstOutlet, window.piutangTargetMember.recentOutlets);
     if (window.activeCustomerProfile && window.activeCustomerProfile.phone === window.piutangTargetMember.phone) { window.activeCustomerProfile = window.piutangTargetMember; window.updatePromoBanner(window.activeCustomerProfile); }
+    if(window.updateLeftBadges) window.updateLeftBadges();
     
     let remainingPay = payAmount;
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
@@ -933,7 +956,7 @@ window.submitPiutang = function() {
         }
     };
 
-    document.getElementById("piutang-modal").classList.add("hidden"); alert("Pembayaran Piutang Berhasil Dicatat!"); if(window.updateLeftBadges) window.updateLeftBadges(); window.runBackgroundSync();
+    document.getElementById("piutang-modal").classList.add("hidden"); alert("Pembayaran Piutang Berhasil Dicatat!"); window.runBackgroundSync();
 }
 
 window.finalizeOrder = async function(shouldPrint) {
@@ -1047,11 +1070,13 @@ window.finalizeOrder = async function(shouldPrint) {
         window.saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount, fOut, rOut);
     }
 
-    let isDelivery = window.currentCart.some(i => i.name.toLowerCase().includes("ongkos kirim") || i.category.toLowerCase().includes("ongkos kirim"));
+    // FIX: Catch any word containing "Kirim" in Name, Category, or SubCategory
+    let isDelivery = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
+    let finalStatus = isDelivery ? "Proses Kirim" : "Completed"; // Keep it pending until delivered!
 
     const orderPayload = {
         orderId: "ORD-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId,
-        customerName: custName, customerPhone: custPhone, customerAddress: custAddress, orderStatus: status, items: window.currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
+        customerName: custName, customerPhone: custPhone, customerAddress: custAddress, orderStatus: finalStatus, items: window.currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
         paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, debtAmount: debtAmount,
         loyaltyChanges: loyaltyChanges, freeItemsRedeemed: freeItemsRedeemed, 
         isDelivery: isDelivery, deliveryStatus: isDelivery ? "Pending" : "-",
@@ -1840,9 +1865,11 @@ window.markDeliveryDone = function(orderId) {
     tx.objectStore("orders").get(orderId).onsuccess = (e) => {
         let order = e.target.result;
         order.deliveryStatus = "Terkirim";
+        order.orderStatus = "Completed"; // Officially mark as Complete!
         tx.objectStore("orders").put(order);
-        if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: "Terkirim" }) });
-        window.renderPengiriman(); 
+        if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: "Terkirim", orderStatus: "Completed" }) });
+        window.renderPengiriman();
+        if(window.updateLeftBadges) window.updateLeftBadges();
     };
 }
 
