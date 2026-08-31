@@ -103,10 +103,22 @@ window.getStaffFromDB = async function() { return new Promise(resolve => { windo
 window.checkAutoCloseShifts = async function() {
     if (!window.db) return;
     const shifts = await new Promise(res => window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").getAll().onsuccess = e => res(e.target.result));
-    const now = Date.now();
+    const now = new Date();
+    const nowTime = now.getTime();
+    
     for (let shift of shifts) {
-        const loginTime = new Date(shift.loginTime).getTime();
-        if (now - loginTime > 12 * 60 * 60 * 1000) { await window.forceCloseShift(shift); }
+        // Safe date parsing across devices
+        const loginDate = new Date(String(shift.loginTime).replace(/-/g, '/')); 
+        let loginTime = loginDate.getTime();
+        if (isNaN(loginTime)) {
+            const fallbackDate = new Date(shift.loginTime);
+            loginTime = fallbackDate.getTime();
+        }
+        
+        // Auto-close if > 12 hours OR if it's no longer the same calendar day (midnight crossed)
+        if (nowTime - loginTime > 12 * 60 * 60 * 1000 || now.getDate() !== (isNaN(loginTime) ? now.getDate() : loginDate.getDate())) { 
+            await window.forceCloseShift(shift); 
+        }
     }
 }
 
@@ -128,6 +140,14 @@ window.forceCloseShift = async function(shift) {
     
     expenses.filter(ex => ex.shiftId === shift.shiftId && ex.status === "Active").forEach(ex => { tExpense += (ex.amount || 0); });
     piutangs.filter(bp => bp.shiftId === shift.shiftId).forEach(bp => { tPiutangPaidCash += (bp.cashAmount || 0); });
+    
+    // --- NEW: IGNORE EMPTY SHIFTS ---
+    const hasActivity = tOrders > 0 || tExpense > 0 || tPiutangGiven > 0 || tPiutangPaidCash > 0;
+    if (!hasActivity) {
+        window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(shift.pin);
+        return; // Stop here, do not create a shift report
+    }
+    // --------------------------------
     
     let liveDrawer = window.outletStocks && window.outletStocks[shift.outlet] && window.outletStocks[shift.outlet]["Saldo_Laci"] ? window.outletStocks[shift.outlet]["Saldo_Laci"] : (tCash + tPiutangPaidCash - tExpense);
     
@@ -1698,6 +1718,18 @@ window.openCurrentShiftReport = function() {
 window.openShiftReport = window.openCurrentShiftReport; 
 
 window.initiateLogoutSequence = function() { 
+    const data = window.currentShiftData;
+    
+    // --- NEW: IGNORE EMPTY SHIFTS ---
+    const hasActivity = data.totalOrders > 0 || data.totalExpenses > 0 || data.piutangGiven > 0 || data.piutangPaid > 0;
+    if (!hasActivity) {
+        window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(window.currentPin); 
+        alert("Shift kosong (tidak ada transaksi). Sesi diakhiri tanpa membuat laporan shift.");
+        window.location.reload();
+        return;
+    }
+    // --------------------------------
+
     const meterW = document.getElementById("meter-water").value;
     if (meterW === "") return alert("⚠️ ERROR: Wajib mengisi Angka Meteran Air sebelum mengakhiri Shift.");
     window.currentShiftData.meterWater = Number(meterW);
