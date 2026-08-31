@@ -623,18 +623,8 @@ window.calculateRemaining = function() {
 window.closeReview = function() { document.getElementById("review-modal").classList.add("hidden"); }
 
 window.switchCart = function(index) {
-    // --- NEW: HIDE ABSENSI & PENGIRIMAN, SHOW MENU ---
-    let pengirimanSec = document.getElementById("pengiriman-section");
-    let absensiSec = document.getElementById("absensi-section");
-    let productGrid = document.getElementById("product-grid");
-    let catContainer = document.getElementById("category-container");
+    window.showNewOrder(); // Ensure it forces the POS view open
     
-    if(pengirimanSec) pengirimanSec.classList.add("hidden");
-    if(absensiSec) absensiSec.classList.add("hidden");
-    if(productGrid) productGrid.classList.remove("hidden");
-    if(catContainer) catContainer.classList.remove("hidden");
-    // -------------------------------------------------
-
     window.posSessions[window.activeSessionIndex].customer = window.activeCustomerProfile; window.activeSessionIndex = index; window.currentCart = window.posSessions[window.activeSessionIndex].cart; window.activeCustomerProfile = window.posSessions[window.activeSessionIndex].customer;
     
     document.querySelectorAll(".cart-tab").forEach((btn, i) => {
@@ -1704,16 +1694,35 @@ window.runBackgroundSync = async function() {
     } finally { window.isSyncing = false; }
 }
 
+window.showNewOrder = function() {
+    document.getElementById("pengiriman-section").classList.add("hidden");
+    document.getElementById("command-bar").classList.remove("hidden");
+    document.getElementById("category-container").classList.remove("hidden");
+    document.getElementById("product-grid").classList.remove("hidden");
+    
+    document.getElementById("tab-left-pengiriman").style.background = "transparent";
+    document.getElementById("tab-left-pengiriman").style.color = "#333";
+    document.getElementById("tab-new-order").style.background = "#3498db";
+    document.getElementById("tab-new-order").style.color = "white";
+}
+
 window.showPengirimanTab = function() {
-    document.getElementById("product-grid").classList.add("hidden");
+    document.getElementById("command-bar").classList.add("hidden");
     document.getElementById("category-container").classList.add("hidden");
-    document.getElementById("absensi-section").classList.add("hidden");
+    document.getElementById("product-grid").classList.add("hidden");
     document.getElementById("pengiriman-section").classList.remove("hidden");
     
-    document.querySelectorAll(".cart-tab").forEach(b => b.classList.remove("active"));
-    document.getElementById("tab-pengiriman").classList.add("active");
+    document.getElementById("tab-new-order").style.background = "transparent";
+    document.getElementById("tab-new-order").style.color = "#333";
+    document.getElementById("tab-left-pengiriman").style.background = "#8e44ad";
+    document.getElementById("tab-left-pengiriman").style.color = "white";
     
     window.renderPengiriman();
+}
+
+window.openAbsensiModal = function() {
+    document.getElementById('absensi-modal').classList.remove('hidden');
+    window.renderAbsensi();
 }
 
 window.renderPengiriman = function() {
@@ -1749,18 +1758,6 @@ window.markDeliveryDone = function(orderId) {
         }
         window.renderPengiriman();
     };
-}
-
-window.showAbsensiTab = function() {
-    document.getElementById("product-grid").classList.add("hidden");
-    document.getElementById("category-container").classList.add("hidden");
-    document.getElementById("pengiriman-section").classList.add("hidden");
-    document.getElementById("absensi-section").classList.remove("hidden");
-    
-    document.querySelectorAll(".cart-tab").forEach(b => b.classList.remove("active"));
-    document.getElementById("tab-absensi").classList.add("active");
-    
-    window.renderAbsensi();
 }
 
 window.renderAbsensi = async function() {
