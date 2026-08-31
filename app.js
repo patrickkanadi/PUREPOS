@@ -1524,10 +1524,44 @@ window.applyLocalVoidAftermath = function(order) {
                 mem.spent = Math.max(0, (mem.spent || 0) - order.grandTotal); 
                 mem.bottlesBorrowed = Math.max(0, (mem.bottlesBorrowed || 0) - (order.rentBottleQty || 0));
                 mem.piutang = Math.max(0, (mem.piutang || 0) - (order.debtAmount || 0));
-                if (order.finalStoredRewards) {
-                    try { mem.wallet = JSON.parse(order.finalStoredRewards); } catch(err) {}
+                
+                // Revert Wallet Points & Free Items locally instantly
+                let currentWallet = typeof mem.wallet === 'object' ? mem.wallet : {};
+                if (order.loyaltyChanges) {
+                    for (let itemName in order.loyaltyChanges) {
+                        if (!currentWallet[itemName]) currentWallet[itemName] = {points: 0, free: 0};
+                        currentWallet[itemName].free += order.loyaltyChanges[itemName].redeemed;
+                        currentWallet[itemName].points -= order.loyaltyChanges[itemName].earned;
+                        while(currentWallet[itemName].points < 0 && currentWallet[itemName].free > 0) {
+                            currentWallet[itemName].free -= 1; currentWallet[itemName].points += order.loyaltyChanges[itemName].threshold;
+                        }
+                        if (currentWallet[itemName].points < 0) currentWallet[itemName].points = 0;
+                    }
                 }
+                
+                // Revert Advanced Stamp Promos locally instantly
+                if (order.newEarnedRewards) {
+                    order.newEarnedRewards.forEach(r => {
+                        if (typeof currentWallet[r.item] === 'number') {
+                            currentWallet[r.item] = Math.max(0, currentWallet[r.item] - r.qty);
+                            if (currentWallet[r.item] === 0) delete currentWallet[r.item];
+                        }
+                    });
+                }
+                if (order.redeemedPromos) {
+                    order.redeemedPromos.forEach(rp => {
+                        if (typeof currentWallet[rp.item] === 'number') currentWallet[rp.item] += rp.qty;
+                        else currentWallet[rp.item] = rp.qty;
+                    });
+                }
+
+                mem.wallet = currentWallet;
                 memberStore.put(mem); 
+                
+                if (window.activeCustomerProfile && window.activeCustomerProfile.phone === mem.phone) { 
+                    window.activeCustomerProfile = mem; 
+                    window.updatePromoBanner(window.activeCustomerProfile); 
+                }
             } 
         };
     }
