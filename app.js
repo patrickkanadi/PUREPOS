@@ -623,7 +623,20 @@ window.calculateRemaining = function() {
 window.closeReview = function() { document.getElementById("review-modal").classList.add("hidden"); }
 
 window.switchCart = function(index) {
+    // --- NEW: HIDE ABSENSI & PENGIRIMAN, SHOW MENU ---
+    let pengirimanSec = document.getElementById("pengiriman-section");
+    let absensiSec = document.getElementById("absensi-section");
+    let productGrid = document.getElementById("product-grid");
+    let catContainer = document.getElementById("category-container");
+    
+    if(pengirimanSec) pengirimanSec.classList.add("hidden");
+    if(absensiSec) absensiSec.classList.add("hidden");
+    if(productGrid) productGrid.classList.remove("hidden");
+    if(catContainer) catContainer.classList.remove("hidden");
+    // -------------------------------------------------
+
     window.posSessions[window.activeSessionIndex].customer = window.activeCustomerProfile; window.activeSessionIndex = index; window.currentCart = window.posSessions[window.activeSessionIndex].cart; window.activeCustomerProfile = window.posSessions[window.activeSessionIndex].customer;
+    
     document.querySelectorAll(".cart-tab").forEach((btn, i) => {
         if (i === index) { btn.classList.add("active"); btn.style.background = "#2c3e50"; btn.style.color = "white"; btn.style.borderTop = "3px solid #3498db"; } 
         else { btn.classList.remove("active"); btn.style.background = "#34495e"; btn.style.color = "#bdc3c7"; btn.style.borderTop = "none"; }
@@ -1048,7 +1061,6 @@ window.finalizeOrder = async function(shouldPrint) {
         window.saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount, fOut, rOut);
     }
 
-    // Cek apakah ada ongkos kirim
     let isDelivery = window.currentCart.some(i => i.name.toLowerCase().includes("ongkos kirim") || i.category.toLowerCase().includes("ongkos kirim"));
 
     const orderPayload = {
