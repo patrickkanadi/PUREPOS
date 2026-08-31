@@ -219,9 +219,22 @@
                     <button id="tab-btn-0" class="cart-tab active" style="background:#2c3e50; color:white; border-top:3px solid #3498db;" onclick="window.switchCart(0)">🛒 Antrean 1</button>
                     <button id="tab-btn-1" class="cart-tab" onclick="window.switchCart(1)">🛒 Antrean 2</button>
                     <button id="tab-btn-2" class="cart-tab" onclick="window.switchCart(2)">🛒 Antrean 3</button>
+                    <button id="tab-pengiriman" class="cart-tab" onclick="window.showPengirimanTab()" style="background:#8e44ad; margin-left:15px; border-radius: 6px 6px 0 0;">🚚 Pengiriman</button>
+                    <button id="tab-absensi" class="cart-tab" onclick="window.showAbsensiTab()" style="background:#d35400; border-radius: 6px 6px 0 0;">⏱️ Absensi</button>
                 </div>
 
                 <div id="cart-items"></div>
+                <!-- NEW CONTAINERS -->
+                <div id="pengiriman-section" class="hidden" style="padding:20px; background:white; overflow-y:auto; flex:1;">
+                    <h3 style="margin-top:0; color:#2c3e50;">🚚 Daftar Pengiriman Aktif</h3>
+                    <div id="pengiriman-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+                </div>
+
+                <div id="absensi-section" class="hidden" style="padding:20px; background:white; overflow-y:auto; flex:1;">
+                    <h3 style="margin-top:0; color:#2c3e50;">⏱️ Kehadiran Staff</h3>
+                    <div id="absensi-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+                </div>
+                
                 <div id="checkout-panel">
                     <div class="grand-total"><span>Total Akhir:</span> <span id="cart-total">Rp 0</span></div>
                     <button class="btn-pay" onclick="window.reviewOrder()">Bayar Order (Checkout)</button>
