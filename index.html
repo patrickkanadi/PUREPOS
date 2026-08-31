@@ -163,7 +163,6 @@
                 <button class="btn-top hidden" id="btn-install" style="background:#2980b9; border-color:#2980b9;" onclick="window.installPWA()">📲 App</button>
                 <button class="btn-top" id="btn-connect-printer" style="background:#f39c12; border-color:#f39c12;" onclick="window.connectBluetoothPrinter()">🖨️ Printer</button>
                 <button class="btn-top" style="background:#34495e; border-color:#34495e;" onclick="window.manualPushSync()">🔄 Sync</button>
-                <button class="btn-top" style="background:#8e44ad; border-color:#8e44ad;" onclick="window.openBukuPiutang()">📒 Piutang</button>
                 <button class="btn-top" style="background:#27ae60; border-color:#27ae60;" onclick="window.openCuciModal()">🧹 Cuci</button>
                 <button class="btn-top" style="background:#c0392b; border-color:#c0392b;" onclick="window.openLaporModal()">⚠️ Bocor</button>
                 <button class="btn-top" style="background:#3498db; border-color:#3498db;" onclick="window.openInboundModal()">🚚 Truk</button>
@@ -177,15 +176,23 @@
 
         <div id="main-workspace">
             <div id="menu-section">
-                <!-- NEW: Kiri Tabs (Pesanan Baru vs Pengiriman) -->
+                <!-- NEW: Kiri Tabs (Pesanan Baru vs Pengiriman vs Piutang) -->
                 <div style="display:flex; background:#ecf0f1; border-bottom:2px solid #bdc3c7;">
                     <button id="tab-new-order" class="cat-btn active" style="flex:1; border-radius:0; background:#3498db; color:white;" onclick="window.showNewOrder()">🛒 Pesanan Baru</button>
-                    <button id="tab-left-pengiriman" class="cat-btn" style="flex:1; border-radius:0;" onclick="window.showPengirimanTab()">🚚 Pengiriman Aktif</button>
+                    <button id="tab-left-pengiriman" class="cat-btn" style="flex:1; border-radius:0;" onclick="window.showPengirimanTab()">🚚 Pengiriman</button>
+                    <button id="tab-left-piutang" class="cat-btn" style="flex:1; border-radius:0;" onclick="window.showPiutangTab()">📒 Piutang</button>
                 </div>
                 
                 <div id="pengiriman-section" class="hidden" style="padding:20px; background:white; overflow-y:auto; flex:1;">
                     <h3 style="margin-top:0; color:#2c3e50;">🚚 Daftar Pengiriman Aktif</h3>
                     <div id="pengiriman-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+                </div>
+
+                <div id="piutang-section" class="hidden" style="padding:20px; background:white; overflow-y:auto; flex:1;">
+                    <h3 style="margin-top:0; color:#d35400;">📒 Daftar Piutang Aktif</h3>
+                    <p style="color:#7f8c8d; font-size:14px; margin-top:0;">Daftar pelanggan yang berhutang khusus di <strong>Cabang Ini</strong>.</p>
+                    <input type="text" id="search-piutang" placeholder="🔍 Cari Nama atau No. WA..." onkeyup="window.renderPiutangList()" style="width:100%; padding:12px; font-size:16px; border:2px solid #bdc3c7; border-radius:6px; margin-bottom:15px;">
+                    <div id="piutang-list-container" style="display:flex; flex-direction:column; gap:10px;"></div>
                 </div>
 
                 <div id="command-bar">
@@ -298,15 +305,7 @@
         </div>
     </div>
 
-    <div id="buku-piutang-modal" class="modal-overlay hidden">
-        <div class="modal-content modal-large">
-            <h2 style="margin-top:0; color:#8e44ad;">📒 Buku Piutang Lokal</h2>
-            <p style="color:#7f8c8d; font-size:14px; margin-top:0;">Daftar member yang berhutang khusus di <strong>Cabang Ini</strong>.</p>
-            <input type="text" id="search-piutang" placeholder="🔍 Cari Nama atau No. WA..." onkeyup="window.renderPiutangList()" style="width:100%; padding:12px; font-size:16px; border:2px solid #bdc3c7; border-radius:6px; margin-bottom:15px;">
-            <div id="piutang-list-container" class="history-list" style="max-height:350px; overflow-y:auto; background:#f9f9f9;"></div>
-            <button onclick="document.getElementById('buku-piutang-modal').classList.add('hidden')" style="width:100%; padding:15px; margin-top:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Tutup Buku Piutang</button>
-        </div>
-    </div>
+    <!-- Modal Piutang Lama Sudah Dipindah ke Tab -->
 
     <div id="piutang-modal" class="modal-overlay hidden">
         <div class="modal-content" style="max-width: 400px;">
