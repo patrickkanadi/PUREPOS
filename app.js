@@ -154,10 +154,10 @@ window.forceCloseShift = async function(shift) {
             // NEW: Look up the original cashier's name using their stored PIN
             const staffList = await window.getStaffFromDB();
             const staffMatch = staffList.find(s => s.pin === shift.pin);
-            const actualCashier = staffMatch ? staffMatch.name : "Unknown Cashier";
+            const actualCashier = (staffMatch ? staffMatch.name : "Unknown Cashier") + " (Auto-Close)";
             
             const shiftPayload = {
-                shiftId: shift.shiftId, timestamp: window.getWibDate(), cashier: actualCashier, loginTime: shift.loginTime, logoutTime: window.getWibDate(), 
+                shiftId: shift.shiftId, timestamp: window.getWibDate(), cashier: actualCashier, loginTime: shift.loginTime, logoutTime: window.getWibDate(),
                 totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree,
                 totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, meterWater: 0, outlet: shift.outlet, syncStatus: "Pending",
                 piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, autoClosed: true
