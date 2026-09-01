@@ -538,18 +538,19 @@ window.clearCart = function() { window.lockMenu(); }
 window.reviewOrder = function() {
     if (window.currentCart.length === 0) return alert("Keranjang masih kosong!");
     
-    // --- NEW: FORCE CUSTOMER INFO FOR DELIVERY ---
+    // --- NEW: SMART INTERCEPT FOR DELIVERY INFO ---
     let isDelivery = window.currentCart.some(i => i.name.toLowerCase().includes("ongkos kirim") || (i.category && i.category.toLowerCase().includes("ongkos kirim")));
     if (isDelivery) {
         let custPhoneRaw = document.getElementById("cust-phone") ? document.getElementById("cust-phone").value.trim() : "";
         let custNameRaw = document.getElementById("cust-name") ? document.getElementById("cust-name").value.trim() : "";
         let custAddressRaw = document.getElementById("cust-address") ? document.getElementById("cust-address").value.trim() : "";
         
-        if (!custNameRaw || custNameRaw.toLowerCase() === "walk-in") return alert("⚠️ PESANAN PENGIRIMAN:\nHarap lengkapi NAMA Pelanggan sebelum menekan tombol Checkout.");
-        if (custPhoneRaw.length < 5 || custPhoneRaw === "-") return alert("⚠️ PESANAN PENGIRIMAN:\nHarap lengkapi Nomor WHATSAPP Pelanggan sebelum menekan tombol Checkout.");
-        if (!custAddressRaw || custAddressRaw === "-") return alert("⚠️ PESANAN PENGIRIMAN:\nHarap lengkapi ALAMAT Pengiriman Pelanggan sebelum menekan tombol Checkout.");
+        if (!custNameRaw || custNameRaw.toLowerCase() === "walk-in" || custPhoneRaw.length < 5 || custPhoneRaw === "-" || !custAddressRaw || custAddressRaw === "-") {
+            alert("⚠️ Data Pengiriman Belum Lengkap.\nSilakan lengkapi Nama, WhatsApp, dan Alamat pelanggan di menu berikutnya.");
+            return window.openEditCustomer(true); // Open edit modal and pause checkout
+        }
     }
-    // ---------------------------------------------
+    // ----------------------------------------------
 
     window.cartGrandTotal = window.cartSubtotal;
     const redeemContainer = document.getElementById("redemption-items"); redeemContainer.innerHTML = ""; 
@@ -2043,6 +2044,49 @@ window.clockOutStaff = function(logId, manualTime = null) {
         if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: log }) });
         window.renderAbsensi(); window.runBackgroundSync();
     };
+}
+
+window.openEditCustomer = function(isCheckoutIntercept = false) {
+    document.getElementById("edit-cust-phone").value = document.getElementById("cust-phone").value || (window.activeCustomerProfile ? window.activeCustomerProfile.phone : "") || "";
+    document.getElementById("edit-cust-name").value = document.getElementById("cust-name").value || (window.activeCustomerProfile ? window.activeCustomerProfile.name : "") || "";
+    document.getElementById("edit-cust-address").value = document.getElementById("cust-address") ? document.getElementById("cust-address").value : (window.activeCustomerProfile ? window.activeCustomerProfile.address : "") || "";
+    
+    window.isCheckoutIntercept = isCheckoutIntercept;
+    document.getElementById("edit-customer-modal").classList.remove("hidden");
+}
+
+window.saveEditedCustomer = function() {
+    let phone = document.getElementById("edit-cust-phone").value.trim();
+    let name = document.getElementById("edit-cust-name").value.trim();
+    let address = document.getElementById("edit-cust-address").value.trim();
+    
+    if (phone.startsWith('62')) phone = '0' + phone.substring(2);
+    if (!name || name.toLowerCase() === "walk-in") name = "Walk-in";
+    
+    // 1. Update Hidden Form Inputs
+    document.getElementById("cust-phone").value = phone;
+    document.getElementById("cust-name").value = name;
+    if(document.getElementById("cust-address")) document.getElementById("cust-address").value = address;
+    
+    // 2. Safely Update Profile & Session state
+    if (!window.activeCustomerProfile) {
+        window.activeCustomerProfile = { phone: phone, name: name, address: address, wallet: {}, bottlesBorrowed: 0, piutang: 0, firstOutlet: window.currentOutlet, recentOutlets: window.currentOutlet };
+    } else {
+        window.activeCustomerProfile.phone = phone;
+        window.activeCustomerProfile.name = name;
+        window.activeCustomerProfile.address = address;
+    }
+    window.posSessions[window.activeSessionIndex].customer = window.activeCustomerProfile;
+    
+    // 3. Refresh Active Banner UI
+    document.getElementById("active-cust-name").innerText = name; 
+    document.getElementById("active-cust-phone").innerText = phone && phone !== "-" ? `(${phone})` : "";
+    document.getElementById("edit-customer-modal").classList.add("hidden");
+    
+    // 4. Resume Checkout if Intercepted!
+    if (window.isCheckoutIntercept) {
+        window.reviewOrder();
+    }
 }
 
 window.onload = async () => { 
