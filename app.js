@@ -150,15 +150,20 @@ window.forceCloseShift = async function(shift) {
     // --------------------------------
     
     let liveDrawer = window.outletStocks && window.outletStocks[shift.outlet] && window.outletStocks[shift.outlet]["Saldo_Laci"] ? window.outletStocks[shift.outlet]["Saldo_Laci"] : (tCash + tPiutangPaidCash - tExpense);
-    
-    const shiftPayload = {
-        shiftId: shift.shiftId, timestamp: window.getWibDate(), cashier: "SYSTEM (Auto-Close)", loginTime: shift.loginTime, logoutTime: window.getWibDate(), 
-        totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree,
-        totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, meterWater: 0, outlet: shift.outlet, syncStatus: "Pending",
-        piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, autoClosed: true
-    };
+            
+            // NEW: Look up the original cashier's name using their stored PIN
+            const staffList = await window.getStaffFromDB();
+            const staffMatch = staffList.find(s => s.pin === shift.pin);
+            const actualCashier = staffMatch ? staffMatch.name : "Unknown Cashier";
+            
+            const shiftPayload = {
+                shiftId: shift.shiftId, timestamp: window.getWibDate(), cashier: actualCashier, loginTime: shift.loginTime, logoutTime: window.getWibDate(), 
+                totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree,
+                totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, meterWater: 0, outlet: shift.outlet, syncStatus: "Pending",
+                piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, autoClosed: true
+            };
 
-    const txWrite = window.db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
+            const txWrite = window.db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
     txWrite.objectStore("local_shift_history").add(shiftPayload);
     txWrite.objectStore("shift_reports").add(shiftPayload);
     txWrite.objectStore("active_shifts").delete(shift.pin);
@@ -1967,14 +1972,19 @@ window.submitDeliveryDone = function() {
     let tx = window.db.transaction(["orders"], "readwrite");
     tx.objectStore("orders").get(orderId).onsuccess = (e) => {
         let order = e.target.result;
-        order.deliveryStatus = "Terkirim";
-        order.courier = courier; // Save courier locally
+        
+        // NEW: Grab the current time and append it to the status
+        let doneTime = window.getWibDate(); 
+        let statusText = "Terkirim (" + doneTime + ")";
+        
+        order.deliveryStatus = statusText;
+        order.courier = courier; 
         tx.objectStore("orders").put(order);
         
         if (navigator.onLine) {
             fetch(API_URL, { 
                 method: "POST", 
-                body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: "Terkirim", courier: courier }) 
+                body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: statusText, courier: courier }) 
             });
         }
         
