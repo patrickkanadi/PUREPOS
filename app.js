@@ -537,6 +537,20 @@ window.clearCart = function() { window.lockMenu(); }
 
 window.reviewOrder = function() {
     if (window.currentCart.length === 0) return alert("Keranjang masih kosong!");
+    
+    // --- NEW: FORCE CUSTOMER INFO FOR DELIVERY ---
+    let isDelivery = window.currentCart.some(i => i.name.toLowerCase().includes("ongkos kirim") || (i.category && i.category.toLowerCase().includes("ongkos kirim")));
+    if (isDelivery) {
+        let custPhoneRaw = document.getElementById("cust-phone") ? document.getElementById("cust-phone").value.trim() : "";
+        let custNameRaw = document.getElementById("cust-name") ? document.getElementById("cust-name").value.trim() : "";
+        let custAddressRaw = document.getElementById("cust-address") ? document.getElementById("cust-address").value.trim() : "";
+        
+        if (!custNameRaw || custNameRaw.toLowerCase() === "walk-in") return alert("⚠️ PESANAN PENGIRIMAN:\nHarap lengkapi NAMA Pelanggan sebelum menekan tombol Checkout.");
+        if (custPhoneRaw.length < 5 || custPhoneRaw === "-") return alert("⚠️ PESANAN PENGIRIMAN:\nHarap lengkapi Nomor WHATSAPP Pelanggan sebelum menekan tombol Checkout.");
+        if (!custAddressRaw || custAddressRaw === "-") return alert("⚠️ PESANAN PENGIRIMAN:\nHarap lengkapi ALAMAT Pengiriman Pelanggan sebelum menekan tombol Checkout.");
+    }
+    // ---------------------------------------------
+
     window.cartGrandTotal = window.cartSubtotal;
     const redeemContainer = document.getElementById("redemption-items"); redeemContainer.innerHTML = ""; 
     let hasRedeemable = false;
