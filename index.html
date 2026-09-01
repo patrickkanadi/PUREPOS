@@ -429,5 +429,19 @@
             </div>
         </div>
     </div>
+
+    <div id="kurir-modal" class="modal-overlay hidden" style="z-index: 10030;">
+        <div class="modal-content" style="max-width: 400px;">
+            <h2 style="margin-top:0; color:#27ae60;">🚚 Selesai Diantar</h2>
+            <p style="color:#7f8c8d; font-size:14px;">Pilih staff yang mengantar pesanan ini:</p>
+            <div class="form-box">
+                <select id="kurir-select" style="font-size:16px; padding:12px;"></select>
+            </div>
+            <div style="display:flex; gap:10px; margin-top:20px;">
+                <button onclick="document.getElementById('kurir-modal').classList.add('hidden')" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Batal</button>
+                <button onclick="window.submitDeliveryDone()" style="flex:2; padding:15px; background:#27ae60; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Simpan ✅</button>
+            </div>
+        </div>
+    </div>
         
     <script src="app.js?v=5"></script></body></html>
