@@ -1160,6 +1160,9 @@ window.buildEscPosReceipt = async function(orderId, order, deposit, debt, payMet
     const f1 = settings["Footer_1"] || "TERIMA KASIH"; 
     const f2 = settings["Footer_2"] || ""; 
     let f3 = settings["Footer_3"] || ""; if (settings["Footer_3_" + order.outlet]) f3 = settings["Footer_3_" + order.outlet]; 
+    
+    // NEW: Pull Footer 4 (Supports outlet-specific overrides just like Footer 3)
+    let f4 = settings["Footer_4"] || ""; if (settings["Footer_4_" + order.outlet]) f4 = settings["Footer_4_" + order.outlet]; 
 
     const dateStr = window.formatDateReadable(order.timestamp);
     let receipt = "";
@@ -1202,60 +1205,20 @@ window.buildEscPosReceipt = async function(orderId, order, deposit, debt, payMet
     
     if (window.loyaltyEnabled && order.customerPhone && order.customerPhone !== "-") {
         receipt += "\n" + centerAlign + "-- INFO POIN --\n" + leftAlign;
-        
-        // 1. Filter menu strictly by the outlet of this specific order
-        let availableMenu = window.globalMenuData.filter(m => {
-            const avail = (m.availableAt || "ALL").toUpperCase();
-            return avail === "ALL" || avail.includes(String(order.outlet).toUpperCase());
-        });
-
-        // 2. Print Basic Loyalty Items relevant to this outlet
-        let loyaltyItems = availableMenu.filter(m => m.loyaltyThreshold > 0);
-        let hasPoints = false;
-
+        let loyaltyItems = window.globalMenuData.filter(m => m.loyaltyThreshold > 0);
         loyaltyItems.forEach(item => { 
-            let data = updatedWallet[item.name]; 
-            if (data && typeof data === 'object') {
-                receipt += window.formatLine(item.name, `Poin:${data.points}/${item.loyaltyThreshold} | Free:${data.free}`, false);
-                hasPoints = true;
-            } else {
-                receipt += window.formatLine(item.name, `Poin:0/${item.loyaltyThreshold} | Free:0`, false);
-                hasPoints = true;
-            }
+            let data = updatedWallet[item.name] || {points: 0, free: 0}; 
+            receipt += window.formatLine(item.name, `Poin:${data.points} | Free:${data.free}`, false); 
         });
-
-        // 3. Print Active Promos & Stamps relevant to this outlet
-        for (let key in updatedWallet) {
-            let val = updatedWallet[key];
-            if (typeof val === 'number' && val > 0) {
-                let baseName = key.replace("_prog_", "").replace("_stamp_", "");
-                let isAvail = availableMenu.find(m => m.name === baseName);
-                if (isAvail) {
-                    if (key.startsWith("_prog_")) {
-                        let target = 0;
-                        for (let pk in window.promoRules) {
-                            if (baseName.toUpperCase().replace(/\s+/g, '').includes(pk)) { target = window.promoRules[pk]; break; }
-                        }
-                        if (target > 0) { receipt += window.formatLine(`Prog ${baseName}`, `${val}/${target}`, false); hasPoints = true; }
-                    } else if (key.startsWith("_stamp_")) {
-                        let target = 0;
-                        for (let sk in window.promoStampRules) {
-                            if (window.promoStampRules[sk].originalName === baseName) { target = window.promoStampRules[sk].target; break; }
-                        }
-                        receipt += window.formatLine(`Stamp ${baseName}`, `${val}${target > 0 ? '/'+target : ''}`, false); hasPoints = true;
-                    } else {
-                        receipt += window.formatLine(`Gratis ${baseName}`, `${val} Siap!`, false); hasPoints = true;
-                    }
-                }
-            }
-        }
-        
-        if (!hasPoints) receipt += centerAlign + "Belum ada poin aktif\n" + leftAlign;
     }
 
     receipt += "\n" + centerAlign + boldOn + f1 + "\n" + normalText + boldOff;
     if(f2) receipt += f2 + "\n";
     if(f3) receipt += f3 + "\n";
+    
+    // NEW: Append Footer 4
+    if(f4) receipt += f4 + "\n";
+    
     receipt += "\n\n\n\n\n"; 
 
     return new TextEncoder().encode(receipt);
