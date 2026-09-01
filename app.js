@@ -1940,22 +1940,47 @@ window.renderPengiriman = function() {
     };
 }
 
-window.markDeliveryDone = function(orderId) {
-    if (!confirm("Konfirmasi: Apakah pesanan ini sudah selesai diantar?")) return;
+window.pendingDeliveryOrderId = null;
+
+window.markDeliveryDone = async function(orderId) {
+    window.pendingDeliveryOrderId = orderId;
+    
+    // Tarik daftar staff dari outlet ini
+    const staffList = await window.getStaffFromDB();
+    let outletStaff = staffList.filter(s => s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'admin' || s.role.toLowerCase() === 'manager');
+    
+    let select = document.getElementById("kurir-select");
+    select.innerHTML = "";
+    outletStaff.forEach(s => {
+        select.innerHTML += `<option value="${s.name}">${s.name}</option>`;
+    });
+    if (outletStaff.length === 0) select.innerHTML = `<option value="${window.currentCashier}">${window.currentCashier}</option>`;
+    
+    document.getElementById("kurir-modal").classList.remove("hidden");
+}
+
+window.submitDeliveryDone = function() {
+    let courier = document.getElementById("kurir-select").value;
+    let orderId = window.pendingDeliveryOrderId;
+    if (!orderId || !courier) return;
+
     let tx = window.db.transaction(["orders"], "readwrite");
     tx.objectStore("orders").get(orderId).onsuccess = (e) => {
         let order = e.target.result;
-        let finishTime = window.getWibDate(); // Get the exact current time
-        
-        order.deliveryStatus = "Selesai: " + finishTime;
-        order.orderStatus = "Completed"; // Officially mark as Complete!
+        order.deliveryStatus = "Terkirim";
+        order.courier = courier; // Save courier locally
         tx.objectStore("orders").put(order);
         
-        // Send the exact finish time to the Google Sheet instead of "Terkirim"
-        if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: "Selesai: " + finishTime, orderStatus: "Completed" }) });
+        if (navigator.onLine) {
+            fetch(API_URL, { 
+                method: "POST", 
+                body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: "Terkirim", courier: courier }) 
+            });
+        }
         
+        document.getElementById("kurir-modal").classList.add("hidden");
         window.renderPengiriman();
-        if(window.updateLeftBadges) window.updateLeftBadges();
+        if (window.updatePengirimanBadge) window.updatePengirimanBadge();
     };
 }
 
