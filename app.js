@@ -863,41 +863,12 @@ window.unlockMenu = function() {
         return alert("⚠️ Format Nama Salah:\nKolom Nama harus diisi dengan huruf (alfabet), tidak boleh menggunakan angka atau simbol.");
     }
 
-    // (The rest of your unlockMenu function continues normally below this...)
-        let confirmGuest = confirm("Data pelanggan tidak diisi atau tidak lengkap.\n\nLanjutkan transaksi sebagai Tamu / Walk-in?");
-        if (!confirmGuest) return; // Cashier clicked Cancel, stop here.
-        
-        // Proceed as Walk-in
-        document.getElementById("cust-phone").value = ""; 
-        document.getElementById("cust-name").value = "Walk-in"; 
-        if (document.getElementById("cust-address")) document.getElementById("cust-address").value = ""; 
-        
-        window.activeCustomerProfile = null; 
-        document.getElementById("active-cust-name").innerText = "Walk-in"; 
-        document.getElementById("active-cust-phone").innerText = "";
-        
-        document.getElementById("customer-input-section").classList.add("hidden"); 
-        document.getElementById("active-customer-banner").classList.remove("hidden");
-        
-        if(promoBanner) promoBanner.classList.add("hidden"); 
-        if(piutangBanner) piutangBanner.classList.add("hidden");
-        if(outletDisplay) outletDisplay.innerHTML = "";
-        
-        window.isMenuLocked = false; 
-        document.getElementById("glass-overlay").style.opacity = "0"; 
-        setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
-        return;
-    }
-
     // === REGULAR MEMBER CHECK ===
     let phone = phoneRaw;
     let name = nameRaw || "Pelanggan";
     let searchPhone = phone.replace(/\D/g, ''); 
     if (searchPhone.startsWith('62')) searchPhone = '0' + searchPhone.substring(2);
     if (searchPhone.length > 0 && !searchPhone.startsWith('0')) searchPhone = '0' + searchPhone;
-
-    let lockedQueue = window.isCustomerLocked(searchPhone);
-    if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan pesanan di sana terlebih dahulu.`); }
 
     const tx = window.db.transaction(["members"], "readonly");
     tx.objectStore("members").get(searchPhone).onsuccess = (ev) => {
