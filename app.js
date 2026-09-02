@@ -817,7 +817,42 @@ window.unlockMenu = function() {
     const outletDisplay = document.getElementById("active-cust-outlets");
 
     // === GUEST / WALK-IN CHECK ===
-    if (phoneRaw.length < 5) {
+    if (phoneRaw.length < 5 && (!nameRaw || nameRaw.toLowerCase() === "walk-in")) {
+        let confirmGuest = confirm("Data pelanggan tidak diisi atau tidak lengkap.\n\nLanjutkan transaksi sebagai Tamu / Walk-in?");
+        if (!confirmGuest) return;
+        
+        document.getElementById("cust-phone").value = ""; 
+        document.getElementById("cust-name").value = "Walk-in"; 
+        if (document.getElementById("cust-address")) document.getElementById("cust-address").value = ""; 
+        
+        window.activeCustomerProfile = null; 
+        document.getElementById("active-cust-name").innerText = "Walk-in"; 
+        document.getElementById("active-cust-phone").innerText = "";
+        
+        document.getElementById("customer-input-section").classList.add("hidden"); 
+        document.getElementById("active-customer-banner").classList.remove("hidden");
+        
+        if(promoBanner) promoBanner.classList.add("hidden"); 
+        if(piutangBanner) piutangBanner.classList.add("hidden");
+        if(outletDisplay) outletDisplay.innerHTML = "";
+        
+        window.isMenuLocked = false; 
+        document.getElementById("glass-overlay").style.opacity = "0"; 
+        setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
+        return;
+    }
+
+    // === NEW VALIDATION RULES ===
+    // 1. WhatsApp must contain numbers only (ignoring optional leading +)
+    let cleanedPhone = phoneRaw.replace(/\D/g, '');
+    if (phoneRaw !== "" && (cleanedPhone.length < 8 || !/^\d+$/.test(cleanedPhone))) {
+        return alert("⚠️ Format WhatsApp Salah:\nKolom WhatsApp harus diisi dengan nomor telepon yang valid (angka saja).");
+    }
+
+    // 2. Name must contain alphabets (letters and spaces only, not just numbers)
+    if (nameRaw !== "" && !/^[a-zA-Z\s]+$/.test(nameRaw)) {
+        return alert("⚠️ Format Nama Salah:\nKolom Nama harus diisi dengan huruf (alfabet), tidak boleh menggunakan angka atau simbol.");
+    }
         let confirmGuest = confirm("Data pelanggan tidak diisi atau tidak lengkap.\n\nLanjutkan transaksi sebagai Tamu / Walk-in?");
         if (!confirmGuest) return; // Cashier clicked Cancel, stop here.
         
@@ -2058,6 +2093,15 @@ window.saveEditedCustomer = function() {
     let name = document.getElementById("edit-cust-name").value.trim();
     let address = document.getElementById("edit-cust-address").value.trim();
     
+    let cleanedPhone = phone.replace(/\D/g, '');
+    if (phone !== "" && (cleanedPhone.length < 8 || !/^\d+$/.test(cleanedPhone))) {
+        return alert("⚠️ Format WhatsApp Salah:\nKolom WhatsApp harus diisi dengan nomor telepon yang valid (angka saja).");
+    }
+
+    if (name !== "" && !/^[a-zA-Z\s]+$/.test(name)) {
+        return alert("⚠️ Format Nama Salah:\nKolom Nama harus diisi dengan huruf (alfabet), tidak boleh menggunakan angka atau simbol.");
+    }
+
     if (phone.startsWith('62')) phone = '0' + phone.substring(2);
     if (!name || name.toLowerCase() === "walk-in") name = "Walk-in";
     
