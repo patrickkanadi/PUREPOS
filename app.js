@@ -224,6 +224,17 @@ window.attemptLogin = async function() {
                 document.getElementById("login-screen").classList.add("hidden"); document.getElementById("pos-screen").classList.remove("hidden");
                 document.getElementById("display-cashier").innerText = window.currentCashier; document.getElementById("display-outlet").innerText = window.currentOutlet;
                 
+                // === NEW: AUTO CLOCK-IN FOR CASHIER ===
+                const today = window.getWibDate().split(" ")[0];
+                const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
+                const alreadyClockedIn = attendances.some(a => a.date === today && a.staffName === window.currentCashier && !a.clockOut);
+                
+                if (!alreadyClockedIn) {
+                    let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", syncStatus: "Pending" };
+                    window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
+                }
+                // ======================================
+
                 await window.checkAutoCloseShifts();
                 if (navigator.onLine) { window.syncMasterData(); }
                 window.lockMenu(); 
@@ -1930,8 +1941,8 @@ window.showPiutangTab = function() {
 window.updateLeftBadges = function() {
     if (!window.db) return;
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        let count = e.target.result.filter(o => o.isDelivery && o.deliveryStatus === "Pending" && o.outlet === window.currentOutlet).length;
-        let tabBtn = document.getElementById("tab-left-pengiriman");
+        // NEW: Filter out Voided and Void Pending orders
+        let count = e.target.result.filter(o => o.isDelivery && o.deliveryStatus === "Pending" && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && o.outlet === window.currentOutlet).length;
         if (tabBtn) { tabBtn.innerText = count > 0 ? `🚚 Pengiriman (${count})` : `🚚 Pengiriman`; }
     };
     window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
@@ -1949,8 +1960,8 @@ window.openAbsensiModal = function() {
 window.renderPengiriman = function() {
     const container = document.getElementById("pengiriman-list"); container.innerHTML = "";
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        let deliveries = e.target.result.filter(o => o.isDelivery && o.deliveryStatus === "Pending" && o.outlet === window.currentOutlet);
-         // Sync badge
+        // NEW: Filter out Voided and Void Pending orders
+        let deliveries = e.target.result.filter(o => o.isDelivery && o.deliveryStatus === "Pending" && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && o.outlet === window.currentOutlet);
 
         if (deliveries.length === 0) return container.innerHTML = `<div style="padding:20px; color:#7f8c8d; text-align:center;">Tidak ada pengiriman tertunda.</div>`;
         
