@@ -290,9 +290,23 @@ window.syncMasterData = async function() {
         
         if (authResult.status === "Success") {
             // Note: We added "members" to the local transaction
-            const tx = window.db.transaction(["staff", "settings", "menu", "members"], "readwrite");
+            // Added "orders" to transaction so we can inject global tasks
+            const tx = window.db.transaction(["staff", "settings", "menu", "members", "orders"], "readwrite");
             
             const staffStore = tx.objectStore("staff"); staffStore.clear(); authResult.data.staff.forEach(s => staffStore.put(s));
+            
+            // Sync Active Orders (Piutang & Pengiriman) globally
+            if (authResult.data.activeOrders) {
+                const ordStore = tx.objectStore("orders");
+                authResult.data.activeOrders.forEach(o => {
+                    let req = ordStore.get(o.orderId);
+                    req.onsuccess = (e) => {
+                        let existing = e.target.result;
+                        // Only overwrite if it isn't currently uploading a new change from this device
+                        if (!existing || existing.syncStatus !== "Pending") { ordStore.put(o); }
+                    };
+                });
+            }
             const menuStore = tx.objectStore("menu"); menuStore.clear(); authResult.data.menu.forEach(m => menuStore.put(m));
             const settingsStore = tx.objectStore("settings"); settingsStore.clear(); 
             
@@ -350,9 +364,22 @@ window.syncMasterData = async function() {
             .then(fullResult => {
                 if (fullResult.status === "Success") {
                     window.outletStocks = fullResult.data.outletStocks; 
-                    const tx2 = window.db.transaction(["members", "expense_categories"], "readwrite");
+                    // Added "orders" to transaction
+                    const tx2 = window.db.transaction(["members", "expense_categories", "orders"], "readwrite");
                     
                     const memStore = tx2.objectStore("members"); memStore.clear(); fullResult.data.members.forEach(m => memStore.put(m));
+                    
+                    // Sync Active Orders (Piutang & Pengiriman) globally
+                    if (fullResult.data.activeOrders) {
+                        const ordStore = tx2.objectStore("orders");
+                        fullResult.data.activeOrders.forEach(o => {
+                            let req = ordStore.get(o.orderId);
+                            req.onsuccess = (e) => {
+                                let existing = e.target.result;
+                                if (!existing || existing.syncStatus !== "Pending") { ordStore.put(o); }
+                            };
+                        });
+                    }
                     const expCatStore = tx2.objectStore("expense_categories"); expCatStore.clear(); 
                     if(fullResult.data.expenseCategories) fullResult.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
                     
