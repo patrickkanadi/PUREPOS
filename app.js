@@ -1685,7 +1685,8 @@ window.openCurrentShiftReport = function() {
     
     // 1. Check Attendance First
     window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (ev) => {
-        let pendingOuts = ev.target.result.filter(l => l.date === today && !l.clockOut);
+        // NEW: Ignore the current cashier in this warning, because they will auto-clock-out during End Shift
+        let pendingOuts = ev.target.result.filter(l => l.date === today && !l.clockOut && l.staffName !== window.currentCashier);
         let currentHour = new Date(window.getWibDate().replace(' ', 'T')).getHours();
         
         if (pendingOuts.length > 0) {
