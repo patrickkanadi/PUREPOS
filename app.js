@@ -1789,6 +1789,23 @@ window.executeFinalLogout = async function(netCash) {
     window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").add(shiftPayload);
     window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(window.currentPin); 
     
+    // === NEW: AUTO CLOCK-OUT ON SHIFT END ===
+    const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
+    // Find the active log for this cashier regardless of the date (in case they crossed midnight)
+    const activeLog = attendances.find(a => a.staffName === window.currentCashier && !a.clockOut);
+    
+    if (activeLog) {
+        activeLog.clockOut = window.getWibDate();
+        activeLog.syncStatus = "OutPending";
+        window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(activeLog);
+        
+        // Push the clock-out immediately if online
+        if (navigator.onLine) {
+            fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) }).catch(()=>{});
+        }
+    }
+    // ========================================
+
     if (navigator.onLine) {
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = `Mengirim Laporan Shift...`;
         try {
