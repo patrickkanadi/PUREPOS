@@ -812,6 +812,18 @@ window.unlockMenu = function() {
     let nameRaw = document.getElementById("cust-name").value.trim();
     let addressRaw = document.getElementById("cust-address") ? document.getElementById("cust-address").value.trim() : "";
     
+    let cleanedPhone = phoneRaw.replace(/\D/g, '');
+    if (phoneRaw.startsWith('62')) cleanedPhone = '0' + cleanedPhone.substring(2);
+
+    // === QUEUE LOCK CHECK ===
+    let lockedQueue = null;
+    window.posSessions.forEach((session, index) => {
+        if (index !== window.activeSessionIndex && session.customer && session.customer.phone === cleanedPhone && cleanedPhone.length > 5) {
+            lockedQueue = index + 1;
+        }
+    });
+    if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan pesanan di sana terlebih dahulu.`); }
+
     const promoBanner = document.getElementById("promo-indicator-banner"); 
     const piutangBanner = document.getElementById("piutang-indicator-banner"); 
     const outletDisplay = document.getElementById("active-cust-outlets");
@@ -842,17 +854,16 @@ window.unlockMenu = function() {
         return;
     }
 
-    // === NEW VALIDATION RULES ===
-    // 1. WhatsApp must contain numbers only (ignoring optional leading +)
-    let cleanedPhone = phoneRaw.replace(/\D/g, '');
+    // === STRICT VALIDATION RULES ===
     if (phoneRaw !== "" && (cleanedPhone.length < 8 || !/^\d+$/.test(cleanedPhone))) {
         return alert("⚠️ Format WhatsApp Salah:\nKolom WhatsApp harus diisi dengan nomor telepon yang valid (angka saja).");
     }
 
-    // 2. Name must contain alphabets (letters and spaces only, not just numbers)
     if (nameRaw !== "" && !/^[a-zA-Z\s]+$/.test(nameRaw)) {
         return alert("⚠️ Format Nama Salah:\nKolom Nama harus diisi dengan huruf (alfabet), tidak boleh menggunakan angka atau simbol.");
     }
+
+    // (The rest of your unlockMenu function continues normally below this...)
         let confirmGuest = confirm("Data pelanggan tidak diisi atau tidak lengkap.\n\nLanjutkan transaksi sebagai Tamu / Walk-in?");
         if (!confirmGuest) return; // Cashier clicked Cancel, stop here.
         
