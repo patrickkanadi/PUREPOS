@@ -224,12 +224,15 @@ window.attemptLogin = async function() {
                 document.getElementById("login-screen").classList.add("hidden"); document.getElementById("pos-screen").classList.remove("hidden");
                 document.getElementById("display-cashier").innerText = window.currentCashier; document.getElementById("display-outlet").innerText = window.currentOutlet;
                 
-                // === NEW: AUTO CLOCK-IN FOR CASHIER ===
+                // === NEW: AUTO CLOCK-IN FOR CASHIER (FIRST LOGIN ONLY) ===
                 const today = window.getWibDate().split(" ")[0];
                 const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
-                const alreadyClockedIn = attendances.some(a => a.date === today && a.staffName === window.currentCashier && !a.clockOut);
                 
-                if (!alreadyClockedIn) {
+                // Cek apakah sudah pernah clock-in hari ini (meskipun sudah clock-out)
+                const hasClockedInToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier);
+                
+                // Hanya auto clock-in jika belum pernah clock-in SAMA SEKALI hari ini
+                if (!hasClockedInToday) {
                     let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", syncStatus: "Pending" };
                     window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
                 }
