@@ -2016,25 +2016,29 @@ window.submitDeliveryDone = function() {
     let tx = window.db.transaction(["orders"], "readwrite");
     tx.objectStore("orders").get(orderId).onsuccess = (e) => {
         let order = e.target.result;
+        if (!order) return;
         
-        // NEW: Grab the current time and append it to the status
         let doneTime = window.getWibDate(); 
         let statusText = "Terkirim (" + doneTime + ")";
         
         order.deliveryStatus = statusText;
+        order.orderStatus = "Completed"; // NEW: Update main order status
         order.courier = courier; 
         tx.objectStore("orders").put(order);
         
         if (navigator.onLine) {
             fetch(API_URL, { 
                 method: "POST", 
-                body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: statusText, courier: courier }) 
+                // NEW: Send orderStatus to update the Google Sheet too
+                body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: statusText, courier: courier, orderStatus: "Completed" }) 
             });
         }
-        
+    };
+
+    tx.oncomplete = () => {
         document.getElementById("kurir-modal").classList.add("hidden");
         window.renderPengiriman();
-        if (window.updatePengirimanBadge) window.updatePengirimanBadge();
+        if (window.updateLeftBadges) window.updateLeftBadges(); 
     };
 }
 
