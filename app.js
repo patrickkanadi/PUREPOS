@@ -1796,7 +1796,7 @@ window.runBackgroundSync = async function() {
         await window.checkAutoCloseShifts();
         
         // 1. READ EVERYTHING INTO MEMORY FIRST (Prevents database timeout)
-        let tx = window.db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah", "bayar_piutang"], "readonly");
+        let tx = window.db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah", "bayar_piutang", "attendance"], "readonly");
         
         let orders = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
         let piutangs = await new Promise(res => tx.objectStore("bayar_piutang").getAll().onsuccess = e => res(e.target.result));
@@ -1808,6 +1808,7 @@ window.runBackgroundSync = async function() {
         let inbounds = await new Promise(res => tx.objectStore("stock_inbound").getAll().onsuccess = e => res(e.target.result));
         let cuciLogs = await new Promise(res => tx.objectStore("cuci_tandon").getAll().onsuccess = e => res(e.target.result));
         let laporLogs = await new Promise(res => tx.objectStore("lapor_masalah").getAll().onsuccess = e => res(e.target.result));
+        let attendances = await new Promise(res => tx.objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
 
         // 2. THEN DO THE INTERNET FETCHES
         for (const order of orders) {
@@ -1845,6 +1846,26 @@ window.runBackgroundSync = async function() {
         }
         for (const log of laporLogs) {
             if (log.syncStatus === "Pending") { try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncLaporMasalah", data: log }) }); if ((await r.json()).status === "Success") { window.db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").delete(log.logId); } } catch(e) {} }
+        }
+        
+        // --- NEW: UPLOAD ABSENSI KE GOOGLE SHEETS ---
+        for (const att of attendances) {
+            if (att.syncStatus === "Pending") { 
+                try { 
+                    let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncAttendance", data: att }) }); 
+                    if ((await r.json()).status === "Success") { 
+                        att.syncStatus = "Synced"; window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(att); 
+                    } 
+                } catch(e) {} 
+            }
+            else if (att.syncStatus === "OutPending") { 
+                try { 
+                    let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: att }) }); 
+                    if ((await r.json()).status === "Success") { 
+                        att.syncStatus = "Synced"; window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(att); 
+                    } 
+                } catch(e) {} 
+            }
         }
 
     } catch (e) {
@@ -1957,16 +1978,32 @@ window.pendingDeliveryOrderId = null;
 window.markDeliveryDone = async function(orderId) {
     window.pendingDeliveryOrderId = orderId;
     
-    // Tarik daftar staff dari outlet ini
+    // 1. Tarik daftar staff & absensi dari lokal memori
     const staffList = await window.getStaffFromDB();
-    let outletStaff = staffList.filter(s => s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'admin' || s.role.toLowerCase() === 'manager');
+    const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
+    
+    const today = window.getWibDate().split(" ")[0];
+    
+    // 2. Cari siapa saja yang sudah Clock-In hari ini dan belum Clock-Out
+    const activeClockIns = attendances.filter(a => a.date === today && !a.clockOut).map(a => a.staffName);
+    
+    // 3. Filter dropdown HANYA untuk yang sudah Clock-In
+    let outletStaff = staffList.filter(s => 
+        (s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'admin' || s.role.toLowerCase() === 'manager') &&
+        activeClockIns.includes(s.name) // WAJIB CLOCK-IN
+    );
     
     let select = document.getElementById("kurir-select");
     select.innerHTML = "";
-    outletStaff.forEach(s => {
-        select.innerHTML += `<option value="${s.name}">${s.name}</option>`;
-    });
-    if (outletStaff.length === 0) select.innerHTML = `<option value="${window.currentCashier}">${window.currentCashier}</option>`;
+    
+    if (outletStaff.length > 0) {
+        outletStaff.forEach(s => {
+            select.innerHTML += `<option value="${s.name}">${s.name}</option>`;
+        });
+    } else {
+        // Fallback jika lupa clock-in sama sekali, otomatis memakai nama kasir yang login
+        select.innerHTML = `<option value="${window.currentCashier}">${window.currentCashier} (Kasir Aktif)</option>`;
+    }
     
     document.getElementById("kurir-modal").classList.remove("hidden");
 }
