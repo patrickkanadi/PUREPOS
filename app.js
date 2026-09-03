@@ -669,8 +669,28 @@ window.reviewOrder = function() {
     document.getElementById("pay-qris").value = 0; document.getElementById("pay-transfer").value = 0; document.getElementById("pay-free").value = 0; document.getElementById("pay-piutang").value = 0;
     let bottleRentBox = document.getElementById("rent-bottle-qty"); if(bottleRentBox) bottleRentBox.value = 0;
     
-    document.getElementById("review-subtotal").innerText = `Rp ${window.cartSubtotal.toLocaleString('id-ID')}`; document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
-    document.getElementById("pay-cash").value = window.cartGrandTotal; window.calculateRemaining(); document.getElementById("review-modal").classList.remove("hidden");
+    document.getElementById("review-subtotal").innerText = `Rp ${window.cartSubtotal.toLocaleString('id-ID')}`; 
+    document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
+    
+    // === NEW: DISABLE CASH FOR DELIVERY ===
+    let isDeliveryFinal = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
+    let inputCash = document.getElementById("pay-cash");
+    
+    if (isDeliveryFinal) {
+        inputCash.value = 0;
+        inputCash.disabled = true;
+        inputCash.style.background = "#ecf0f1"; // Make it look greyed out
+        document.getElementById("pay-piutang").value = window.cartGrandTotal; // Default to Piutang
+    } else {
+        inputCash.value = window.cartGrandTotal;
+        inputCash.disabled = false;
+        inputCash.style.background = "";
+        document.getElementById("pay-piutang").value = 0;
+    }
+    // ======================================
+
+    window.calculateRemaining(); 
+    document.getElementById("review-modal").classList.remove("hidden");
 }
 
 window.recalcRedemptions = function() {
@@ -690,6 +710,13 @@ window.autoBalancePiutang = function() {
 }
 
 window.autoBalanceCash = function() {
+    let isDelivery = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
+    if (isDelivery) {
+        document.getElementById("pay-cash").value = 0;
+        window.autoBalancePiutang();
+        return;
+    }
+    
     const q = Number(document.getElementById("pay-qris").value) || 0; const t = Number(document.getElementById("pay-transfer").value) || 0; const f = Number(document.getElementById("pay-free").value) || 0; const p = Number(document.getElementById("pay-piutang").value) || 0;
     const totalAccounted = q + t + f + p; const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     document.getElementById("pay-cash").value = remaining; window.calculateRemaining();
@@ -1068,6 +1095,11 @@ window.finalizeOrder = async function(shouldPrint) {
     let custPhoneRaw = document.getElementById("cust-phone").value.trim(); let custPhone = custPhoneRaw || "-";
     const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
     const custAddress = document.getElementById("cust-address").value.trim() || "";
+
+    // === NEW: STRICT DELIVERY PAYMENT CHECK ===
+    let isDeliveryFinal = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
+    if (isDeliveryFinal && cash > 0) return alert("⚠️ PEMBAYARAN DITOLAK:\nPesanan Pengiriman tidak dapat dibayar menggunakan Tunai/Cash di awal.\n\nSilakan gunakan QRIS, Transfer, atau masukkan ke Piutang (agar ditagih oleh kurir).");
+    // ==========================================
 
     if (remaining !== 0) return alert("⚠️ PEMBAYARAN DITOLAK:\nTotal pembayaran (termasuk hutang) harus persis sama dengan Total Akhir.");
     if (debtAmount > 0 && (!custPhone || custPhone === "-")) return alert("⚠️ TRANSAKSI DITOLAK:\nAnda WAJIB memasukkan nomor WhatsApp pelanggan untuk mencatat Piutang.");
@@ -2008,6 +2040,22 @@ window.renderPengiriman = function() {
 window.pendingDeliveryOrderId = null;
 
 window.markDeliveryDone = async function(orderId) {
+    // === NEW: PIUTANG CHECK & SMART REDIRECT ===
+    const order = await new Promise(res => {
+        window.db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = e => res(e.target.result);
+    });
+    
+    if (order && (order.debtAmount || 0) > 0) {
+        let payNow = confirm(`⚠️ PENGIRIMAN TERTAHAN:\nNota ini masih memiliki Piutang sebesar Rp ${order.debtAmount.toLocaleString('id-ID')}.\n\nApakah Anda ingin melunasi Piutang ini sekarang sebelum menyelesaikan pengiriman?`);
+        
+        if (payNow) {
+            // Langsung buka modal pelunasan piutang untuk customer ini
+            window.triggerBayarPiutang(order.customerPhone);
+        }
+        return; // Hentikan proses pilih kurir sampai piutang dilunasi
+    }
+    // ==========================
+
     window.pendingDeliveryOrderId = orderId;
     
     // 1. Tarik daftar staff & absensi dari lokal memori
