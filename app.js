@@ -135,7 +135,12 @@ window.forceCloseShift = async function(shift) {
         tOrders++; if(o.customerPhone && o.customerPhone !== "-") tCust++;
         tOmset += o.grandTotal; tCash += (o.cashAmount || 0); tQris += (o.qrisAmount || 0); tTransfer += (o.transferAmount || 0); tFree += (o.freeAmount || 0);
         tPiutangGiven += (o.debtAmount || 0);
-        if (o.items) o.items.forEach(i => { foodSummary[i.name] = (foodSummary[i.name] || 0) + i.qty; });
+        if (o.items) o.items.forEach(i => { 
+            let key = i.itemId || i.name;
+            if(!foodSummary[key]) foodSummary[key] = { name: i.name, qty: 0, nominal: 0 }; 
+            foodSummary[key].qty += i.qty; 
+            foodSummary[key].nominal += (i.qty * (i.price || i.originalPrice || 0)); 
+        });
     });
     
     expenses.filter(ex => ex.shiftId === shift.shiftId && ex.status === "Active").forEach(ex => { tExpense += (ex.amount || 0); });
@@ -1361,7 +1366,10 @@ window.buildEscPosShiftReport = async function(data) {
     receipt += "-".repeat(32) + "\n";
     
     receipt += boldOn + "ITEM TERJUAL\n" + boldOff;
-    for (const [name, qty] of Object.entries(data.foodSummary)) {
+    // FIX: Safely extract object quantities for printer
+    for (const [key, val] of Object.entries(data.foodSummary || {})) {
+        let qty = typeof val === 'object' ? val.qty : val;
+        let name = typeof val === 'object' && val.name ? val.name : key;
         receipt += window.formatLine(name, String(qty), false);
     }
     
@@ -1477,7 +1485,13 @@ window.viewHistoricalShift = function(shiftId) {
         document.getElementById("sr-piutang-given").innerText = `Rp ${(data.piutangGiven||0).toLocaleString('id-ID')}`; document.getElementById("sr-piutang-paid").innerText = `Rp ${(data.piutangPaid||0).toLocaleString('id-ID')}`;
         document.getElementById("sr-net").innerText = `Rp ${data.netCash.toLocaleString('id-ID')}`; 
         
-        let itemsHtml = ""; for (const [name, qty] of Object.entries(data.foodSummary||{})) { itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; }
+        let itemsHtml = ""; 
+        // FIX: Added 'data.' to foodSummary
+        for (const [key, val] of Object.entries(data.foodSummary || {})) { 
+            let qty = typeof val === 'object' ? val.qty : val;
+            let name = typeof val === 'object' && val.name ? val.name : key;
+            itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; 
+        }
         let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual.</div>";
         
         let meterContainer = document.getElementById("meter-water-container"); if(meterContainer) meterContainer.classList.add("hidden");
@@ -1759,7 +1773,12 @@ window.openCurrentShiftReport = function() {
                     tOrders++; if(o.customerPhone && o.customerPhone !== "-") tCust++; tOmset += o.grandTotal;
                     tCash += (o.cashAmount || 0); tQris += (o.qrisAmount || 0); tTransfer += (o.transferAmount || 0); tFree += (o.freeAmount || 0); 
                     tPiutangGiven += (o.debtAmount || 0);
-                    if (o.items) o.items.forEach(i => { if(!foodSummary[i.name]) foodSummary[i.name] = 0; foodSummary[i.name] += i.qty; });
+                    if (o.items) o.items.forEach(i => { 
+                        let key = i.itemId || i.name;
+                        if(!foodSummary[key]) foodSummary[key] = { name: i.name, qty: 0, nominal: 0 }; 
+                        foodSummary[key].qty += i.qty;
+                        foodSummary[key].nominal += (i.qty * (i.price || i.originalPrice || 0)); 
+                    });
                 });
                 
                 window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (ex) => {
@@ -1775,7 +1794,12 @@ window.openCurrentShiftReport = function() {
                             document.getElementById("sr-piutang-given").innerText = `Rp ${tPiutangGiven.toLocaleString('id-ID')}`; document.getElementById("sr-piutang-paid").innerText = `Rp ${tPiutangPaidCash.toLocaleString('id-ID')}`;
                             document.getElementById("sr-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`; 
                             
-                            let itemsHtml = ""; for (const [name, qty] of Object.entries(foodSummary)) { itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; }
+                            let itemsHtml = ""; 
+                                for (const [key, val] of Object.entries(foodSummary)) { 
+                                    let qty = typeof val === 'object' ? val.qty : val;
+                                    let name = typeof val === 'object' && val.name ? val.name : key;
+                                    itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; 
+                                }
                             let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual.</div>";
                             
                             document.getElementById("shift-report-modal").classList.remove("hidden");
@@ -1994,14 +2018,20 @@ window.showPiutangTab = function() {
 window.updateLeftBadges = function() {
     if (!window.db) return;
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        // NEW: Filter out Voided and Void Pending orders
-        let count = e.target.result.filter(o => o.isDelivery && o.deliveryStatus === "Pending" && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && o.outlet === window.currentOutlet).length;
-        if (tabBtn) { tabBtn.innerText = count > 0 ? `🚚 Pengiriman (${count})` : `🚚 Pengiriman`; }
+        let count = 0;
+        e.target.result.forEach(o => {
+            if (o.isDelivery && o.deliveryStatus === "Pending" && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && o.outlet === window.currentOutlet) count++;
+        });
+        let tabBtn = document.getElementById("tab-left-pengiriman");
+        if (tabBtn) { tabBtn.innerText = count > 0 ? "🚚 Pengiriman (" + count + ")" : "🚚 Pengiriman"; }
     };
     window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
-        let pCount = e.target.result.filter(m => m.piutang > 0).length;
+        let pCount = 0;
+        e.target.result.forEach(m => {
+            if (m.piutang > 0) pCount++;
+        });
         let pBtn = document.getElementById("tab-left-piutang");
-        if (pBtn) { pBtn.innerText = pCount > 0 ? `📒 Piutang (${pCount})` : `📒 Piutang`; }
+        if (pBtn) { pBtn.innerText = pCount > 0 ? "📒 Piutang (" + pCount + ")" : "📒 Piutang"; }
     };
 }
 
