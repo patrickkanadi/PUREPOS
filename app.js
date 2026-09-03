@@ -1900,8 +1900,14 @@ window.runBackgroundSync = async function() {
         // 2. THEN DO THE INTERNET FETCHES
         for (const order of orders) {
             if (order.syncStatus === "Pending") {
-                order.syncStatus = "Syncing"; window.db.transaction(["orders"], "readwrite").objectStore("orders").put(order);
-                try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncOrder", data: order }) }); if ((await r.json()).status === "Success") { order.syncStatus = "Synced"; window.db.transaction(["orders"], "readwrite").objectStore("orders").put(order); } else { order.syncStatus = "Pending"; window.db.transaction(["orders"], "readwrite").objectStore("orders").put(order); } } catch(e) { order.syncStatus = "Pending"; window.db.transaction(["orders"], "readwrite").objectStore("orders").put(order); }
+                await new Promise(res => { let tx = window.db.transaction(["orders"], "readwrite"); let st = tx.objectStore("orders"); st.get(order.orderId).onsuccess = e => { let o = e.target.result; if(o){ o.syncStatus = "Syncing"; st.put(o); } res(); }; });
+                try { 
+                    let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncOrder", data: order }) }); 
+                    let isSuccess = (await r.json()).status === "Success";
+                    await new Promise(res => { let tx = window.db.transaction(["orders"], "readwrite"); let st = tx.objectStore("orders"); st.get(order.orderId).onsuccess = e => { let o = e.target.result; if(o && o.syncStatus === "Syncing"){ o.syncStatus = isSuccess ? "Synced" : "Pending"; st.put(o); } res(); }; });
+                } catch(e) { 
+                    await new Promise(res => { let tx = window.db.transaction(["orders"], "readwrite"); let st = tx.objectStore("orders"); st.get(order.orderId).onsuccess = e => { let o = e.target.result; if(o && o.syncStatus === "Syncing"){ o.syncStatus = "Pending"; st.put(o); } res(); }; });
+                }
             }
         }
         for (const bp of piutangs) {
@@ -2131,23 +2137,17 @@ window.submitDeliveryDone = function() {
         let statusText = "Terkirim (" + doneTime + ")";
         
         order.deliveryStatus = statusText;
-        order.orderStatus = "Completed"; // NEW: Update main order status
+        order.orderStatus = "Completed"; 
         order.courier = courier; 
+        order.syncStatus = "Pending"; // Force robust row update
         tx.objectStore("orders").put(order);
-        
-        if (navigator.onLine) {
-            fetch(API_URL, { 
-                method: "POST", 
-                // NEW: Send orderStatus to update the Google Sheet too
-                body: JSON.stringify({ action: "updateDeliveryStatus", orderId: orderId, status: statusText, courier: courier, orderStatus: "Completed" }) 
-            });
-        }
     };
 
     tx.oncomplete = () => {
         document.getElementById("kurir-modal").classList.add("hidden");
         window.renderPengiriman();
         if (window.updateLeftBadges) window.updateLeftBadges(); 
+        window.runBackgroundSync(); // Safely trigger sync
     };
 }
 
