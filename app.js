@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbwLOC0uTUDLIK7gpFLV0pcxUEgepmjZQhIAe0AHUBADpkqA7oHfAVx0WHauE_TfyRA/exec"; 
+const API_URL = "https://script.google.com/macros/s/AKfycbw7rCCSEaa_jVBWQ0hTB6qQ2xZdX2gO1d2wOVvTdER6nxVkaE8T9li2_ZYWoaj_720A/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 15; 
 window.db = null;
