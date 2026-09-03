@@ -1366,7 +1366,6 @@ window.buildEscPosShiftReport = async function(data) {
     receipt += "-".repeat(32) + "\n";
     
     receipt += boldOn + "ITEM TERJUAL\n" + boldOff;
-    // FIX: Safely extract object quantities for printer
     for (const [key, val] of Object.entries(data.foodSummary || {})) {
         let qty = typeof val === 'object' ? val.qty : val;
         let name = typeof val === 'object' && val.name ? val.name : key;
@@ -1486,7 +1485,6 @@ window.viewHistoricalShift = function(shiftId) {
         document.getElementById("sr-net").innerText = `Rp ${data.netCash.toLocaleString('id-ID')}`; 
         
         let itemsHtml = ""; 
-        // FIX: Added 'data.' to foodSummary
         for (const [key, val] of Object.entries(data.foodSummary || {})) { 
             let qty = typeof val === 'object' ? val.qty : val;
             let name = typeof val === 'object' && val.name ? val.name : key;
@@ -1795,11 +1793,12 @@ window.openCurrentShiftReport = function() {
                             document.getElementById("sr-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`; 
                             
                             let itemsHtml = ""; 
-                                for (const [key, val] of Object.entries(foodSummary)) { 
-                                    let qty = typeof val === 'object' ? val.qty : val;
-                                    let name = typeof val === 'object' && val.name ? val.name : key;
-                                    itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; 
-                                }
+                            // Added safety fallback (foodSummary || {})
+                            for (const [key, val] of Object.entries(foodSummary || {})) { 
+                                let qty = typeof val === 'object' ? val.qty : val;
+                                let name = typeof val === 'object' && val.name ? val.name : key;
+                                itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; 
+                            }
                             let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual.</div>";
                             
                             document.getElementById("shift-report-modal").classList.remove("hidden");
