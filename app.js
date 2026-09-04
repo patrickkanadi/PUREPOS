@@ -997,19 +997,19 @@ window.renderPiutangList = function() {
     };
 }
 
-window.triggerBayarPiutang = function(phone) {
+window.triggerBayarPiutang = function(phone, linkedOrderId = null) {
     window.db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
         let m = e.target.result; 
         if (m) {
-            window.openPiutangModal(m);
+            window.openPiutangModal(m, linkedOrderId);
         } else {
-            // FALLBACK: If member isn't synced yet, build a temporary profile from their active order
+            // FALLBACK: If member isn't synced yet, build a temporary profile
             window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e2) => {
                 let orders = e2.target.result.filter(o => o.customerPhone === phone && (o.debtAmount || 0) > 0);
                 if (orders.length > 0) {
                     let totalDebt = orders.reduce((sum, o) => sum + (o.debtAmount || 0), 0);
                     let fallbackMember = { phone: phone, name: orders[0].customerName, piutang: totalDebt };
-                    window.openPiutangModal(fallbackMember);
+                    window.openPiutangModal(fallbackMember, linkedOrderId);
                 } else {
                     alert("Data pelanggan belum tersinkronisasi atau tidak memiliki piutang aktif.");
                 }
@@ -1018,24 +1018,39 @@ window.triggerBayarPiutang = function(phone) {
     };
 }
 
-window.openPiutangModal = function(memberOverride) {
+window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
     window.piutangTargetMember = memberOverride || window.activeCustomerProfile;
     if(!window.piutangTargetMember || window.piutangTargetMember.piutang <= 0) return;
+    
+    window.piutangFromDeliveryOrderId = linkedOrderId;
     
     document.getElementById("piutang-target-name").innerText = window.piutangTargetMember.name;
     document.getElementById("piutang-target-amount").innerText = "Rp " + window.piutangTargetMember.piutang.toLocaleString('id-ID');
     
-        // FIX: DO NOT AUTO-FILL. Force cashier to type manually.
+    // NEW: Dynamically inject the "Tetap Piutang" input so the cashier sees the remaining debt!
+    let qrisInput = document.getElementById("piutang-pay-qris");
+    if (qrisInput && !document.getElementById("piutang-pay-piutang")) {
+        let container = qrisInput.parentElement.parentElement;
+        let piutangDiv = document.createElement("div");
+        piutangDiv.style.marginBottom = "15px";
+        piutangDiv.innerHTML = `<label style="display:block; font-weight:bold; margin-bottom:5px; color:#c0392b;">Sisa Tetap di Piutang (Belum Bayar)</label>
+                                <input type="number" id="piutang-pay-piutang" readonly style="width:100%; padding:10px; border:1px solid #ccc; border-radius:4px; font-size:16px; background:#ecf0f1; font-weight:bold; color:#c0392b;">`;
+        container.insertBefore(piutangDiv, container.lastElementChild);
+    }
+    
+    // Default to BLANK so cashier must type manually
     document.getElementById("piutang-pay-cash").value = "";
     document.getElementById("piutang-pay-qris").value = "";
     document.getElementById("piutang-pay-transfer").value = "";
-    window.autoBalancePiutangPay();
     
     const orderSelect = document.getElementById("piutang-target-order"); orderSelect.innerHTML = `<option value="">-- Lunasi Saldo Global --</option>`;
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
         const memberOrders = e.target.result.filter(o => o.customerPhone === window.piutangTargetMember.phone && o.debtAmount > 0 && String(o.paymentMethod).includes("Piutang"));
         memberOrders.forEach(o => { orderSelect.innerHTML += `<option value="${o.orderId}">Nota: ${o.orderId} (Hutang Rp ${o.debtAmount.toLocaleString('id-ID')})</option>`; });
         
+        if (linkedOrderId) orderSelect.value = linkedOrderId;
+        
+        window.autoBalancePiutangPay();
         let oldModal = document.getElementById('buku-piutang-modal'); if (oldModal) oldModal.classList.add('hidden');
         document.getElementById("piutang-modal").classList.remove("hidden");
     };
@@ -1047,6 +1062,11 @@ window.autoBalancePiutangPay = function() {
     const t = Number(document.getElementById("piutang-pay-transfer").value) || 0;
     const total = c + q + t;
     document.getElementById("piutang-total-dibayar").innerText = `Rp ${total.toLocaleString('id-ID')}`;
+
+    // NEW: Calculate and display the remaining debt automatically
+    let sisa = window.piutangTargetMember.piutang - total;
+    let sisaInput = document.getElementById("piutang-pay-piutang");
+    if (sisaInput) sisaInput.value = Math.max(0, sisa);
 }
 
 window.submitPiutang = function() {
@@ -1056,9 +1076,24 @@ window.submitPiutang = function() {
     let payAmount = c + q + t;
     let targetOrderId = document.getElementById("piutang-target-order").value;
     
-    if(payAmount <= 0) return alert("Jumlah bayar tidak valid"); 
+    if(payAmount < 0) return alert("Jumlah bayar tidak valid"); 
     if(payAmount > window.piutangTargetMember.piutang) return alert("Jumlah yang dimasukkan melebihi total piutang pelanggan!");
     
+    // === NEW: ZERO PAYMENT BYPASS ===
+    if (payAmount === 0) {
+        let confirmZero = confirm("Tercatat tidak ada pembayaran yang dimasukkan (Rp 0).\n\nApakah pelanggan benar-benar belum membayar dan nota ini dibiarkan tetap berada di tab Piutang?");
+        if (!confirmZero) return;
+
+        document.getElementById("piutang-modal").classList.add("hidden");
+        // Jika dari pengiriman, lanjutkan ke pemilihan kurir
+        if (window.piutangFromDeliveryOrderId) {
+            window.proceedToCourierSelection(window.piutangFromDeliveryOrderId);
+            window.piutangFromDeliveryOrderId = null;
+        }
+        return;
+    }
+    // ================================
+
     let payMethods = [];
     if(c > 0) payMethods.push("Tunai");
     if(q > 0) payMethods.push("QRIS");
@@ -1099,9 +1134,18 @@ window.submitPiutang = function() {
             o.syncStatus = "Pending"; 
             store2.put(o);
         }
+        tx2.oncomplete = () => {
+            document.getElementById("piutang-modal").classList.add("hidden"); 
+            alert("Pembayaran Piutang Berhasil Dicatat!"); 
+            window.runBackgroundSync();
+            
+            // Lanjutkan ke pemilihan kurir jika dipanggil dari Pengiriman
+            if (window.piutangFromDeliveryOrderId) {
+                window.proceedToCourierSelection(window.piutangFromDeliveryOrderId);
+                window.piutangFromDeliveryOrderId = null;
+            }
+        };
     };
-
-    document.getElementById("piutang-modal").classList.add("hidden"); alert("Pembayaran Piutang Berhasil Dicatat!"); window.runBackgroundSync();
 }
 
 window.finalizeOrder = async function(shouldPrint) {
@@ -2096,55 +2140,42 @@ window.renderPengiriman = function() {
 
 window.pendingDeliveryOrderId = null;
 
+window.proceedToCourierSelection = async function(orderId) {
+    window.pendingDeliveryOrderId = orderId;
+    const staffList = await window.getStaffFromDB();
+    const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
+    const today = window.getWibDate().split(" ")[0];
+    const activeClockIns = attendances.filter(a => a.date === today && !a.clockOut).map(a => a.staffName);
+
+    let outletStaff = staffList.filter(s => 
+        (s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'admin' || s.role.toLowerCase() === 'manager') &&
+        activeClockIns.includes(s.name)
+    );
+    
+    let select = document.getElementById("kurir-select");
+    select.innerHTML = "";
+    if (outletStaff.length > 0) {
+        outletStaff.forEach(s => { select.innerHTML += `<option value="${s.name}">${s.name}</option>`; });
+    } else {
+        select.innerHTML = `<option value="${window.currentCashier}">${window.currentCashier} (Kasir Aktif)</option>`;
+    }
+    document.getElementById("kurir-modal").classList.remove("hidden");
+}
+
 window.markDeliveryDone = async function(orderId) {
-    // === NEW: PIUTANG CHECK & SMART REDIRECT ===
     const order = await new Promise(res => {
         window.db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = e => res(e.target.result);
     });
     
     if (order && (order.debtAmount || 0) > 0) {
-        let payNow = confirm(`⚠️ NOTA INI MEMILIKI PIUTANG (Rp ${order.debtAmount.toLocaleString('id-ID')})\n\nApakah kurir membawa uang pembayaran dan Anda ingin melunasinya SEKARANG?`);
-        
-        if (payNow) {
-            window.triggerBayarPiutang(order.customerPhone);
-            return; // Hentikan proses pilih kurir sampai pelunasan selesai
-        } else {
-            let doubleCheck = confirm(`KONFIRMASI:\nPelanggan benar-benar belum membayar dan nota akan dibiarkan tetap berada di tab "Piutang".\n\nLanjutkan penyelesaian status pengiriman?`);
-            if (!doubleCheck) return; // Batal jika ragu
-        }
+        // Tag this order so the Piutang Modal knows where to return!
+        window.piutangFromDeliveryOrderId = orderId;
+        window.triggerBayarPiutang(order.customerPhone, orderId);
+        return; 
     }
-    // ==========================
 
-    window.pendingDeliveryOrderId = orderId;
-    
-    // 1. Tarik daftar staff & absensi dari lokal memori
-    const staffList = await window.getStaffFromDB();
-    const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
-    
-    const today = window.getWibDate().split(" ")[0];
-    
-    // 2. Cari siapa saja yang sudah Clock-In hari ini dan belum Clock-Out
-    const activeClockIns = attendances.filter(a => a.date === today && !a.clockOut).map(a => a.staffName);
-    
-    // 3. Filter dropdown HANYA untuk yang sudah Clock-In
-    let outletStaff = staffList.filter(s => 
-        (s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'admin' || s.role.toLowerCase() === 'manager') &&
-        activeClockIns.includes(s.name) // WAJIB CLOCK-IN
-    );
-    
-    let select = document.getElementById("kurir-select");
-    select.innerHTML = "";
-    
-    if (outletStaff.length > 0) {
-        outletStaff.forEach(s => {
-            select.innerHTML += `<option value="${s.name}">${s.name}</option>`;
-        });
-    } else {
-        // Fallback jika lupa clock-in sama sekali, otomatis memakai nama kasir yang login
-        select.innerHTML = `<option value="${window.currentCashier}">${window.currentCashier} (Kasir Aktif)</option>`;
-    }
-    
-    document.getElementById("kurir-modal").classList.remove("hidden");
+    window.piutangFromDeliveryOrderId = null;
+    window.proceedToCourierSelection(orderId);
 }
 
 window.submitDeliveryDone = function() {
