@@ -999,7 +999,22 @@ window.renderPiutangList = function() {
 
 window.triggerBayarPiutang = function(phone) {
     window.db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
-        const m = e.target.result; if(m) window.openPiutangModal(m);
+        let m = e.target.result; 
+        if (m) {
+            window.openPiutangModal(m);
+        } else {
+            // FALLBACK: If member isn't synced yet, build a temporary profile from their active order
+            window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e2) => {
+                let orders = e2.target.result.filter(o => o.customerPhone === phone && (o.debtAmount || 0) > 0);
+                if (orders.length > 0) {
+                    let totalDebt = orders.reduce((sum, o) => sum + (o.debtAmount || 0), 0);
+                    let fallbackMember = { phone: phone, name: orders[0].customerName, piutang: totalDebt };
+                    window.openPiutangModal(fallbackMember);
+                } else {
+                    alert("Data pelanggan belum tersinkronisasi atau tidak memiliki piutang aktif.");
+                }
+            };
+        }
     };
 }
 
@@ -1010,10 +1025,10 @@ window.openPiutangModal = function(memberOverride) {
     document.getElementById("piutang-target-name").innerText = window.piutangTargetMember.name;
     document.getElementById("piutang-target-amount").innerText = "Rp " + window.piutangTargetMember.piutang.toLocaleString('id-ID');
     
-    // Auto fill cash as default
-    document.getElementById("piutang-pay-cash").value = window.piutangTargetMember.piutang;
-    document.getElementById("piutang-pay-qris").value = 0;
-    document.getElementById("piutang-pay-transfer").value = 0;
+        // FIX: DO NOT AUTO-FILL. Force cashier to type manually.
+    document.getElementById("piutang-pay-cash").value = "";
+    document.getElementById("piutang-pay-qris").value = "";
+    document.getElementById("piutang-pay-transfer").value = "";
     window.autoBalancePiutangPay();
     
     const orderSelect = document.getElementById("piutang-target-order"); orderSelect.innerHTML = `<option value="">-- Lunasi Saldo Global --</option>`;
@@ -1827,6 +1842,13 @@ window.initiateLogoutSequence = function() {
     }
     // --------------------------------
 
+    // === NEW: PIUTANG SAFETY WARNING ===
+    if (data.piutangGiven > 0) {
+        let piutangConfirm = confirm(`⚠️ PERINGATAN PIUTANG\n\nSelama shift ini, tercatat ada total Piutang (Hutang) sebesar Rp ${data.piutangGiven.toLocaleString('id-ID')}.\n\nApakah Anda yakin nominal piutang ini sudah benar dan tidak ada uang pembayaran yang dibawa kembali oleh kurir?\n\n(Klik OK jika benar, Batal jika ingin mengecek kembali)`);
+        if (!piutangConfirm) return; // Halt logout so they can fix it
+    }
+    // ===================================
+
     const meterW = document.getElementById("meter-water").value;
     if (meterW === "") return alert("⚠️ ERROR: Wajib mengisi Angka Meteran Air sebelum mengakhiri Shift.");
     window.currentShiftData.meterWater = Number(meterW);
@@ -2081,13 +2103,15 @@ window.markDeliveryDone = async function(orderId) {
     });
     
     if (order && (order.debtAmount || 0) > 0) {
-        let payNow = confirm(`⚠️ PENGIRIMAN TERTAHAN:\nNota ini masih memiliki Piutang sebesar Rp ${order.debtAmount.toLocaleString('id-ID')}.\n\nApakah Anda ingin melunasi Piutang ini sekarang sebelum menyelesaikan pengiriman?`);
+        let payNow = confirm(`⚠️ NOTA INI MEMILIKI PIUTANG (Rp ${order.debtAmount.toLocaleString('id-ID')})\n\nApakah kurir membawa uang pembayaran dan Anda ingin melunasinya SEKARANG?`);
         
         if (payNow) {
-            // Langsung buka modal pelunasan piutang untuk customer ini
             window.triggerBayarPiutang(order.customerPhone);
+            return; // Hentikan proses pilih kurir sampai pelunasan selesai
+        } else {
+            let doubleCheck = confirm(`KONFIRMASI:\nPelanggan benar-benar belum membayar dan nota akan dibiarkan tetap berada di tab "Piutang".\n\nLanjutkan penyelesaian status pengiriman?`);
+            if (!doubleCheck) return; // Batal jika ragu
         }
-        return; // Hentikan proses pilih kurir sampai piutang dilunasi
     }
     // ==========================
 
