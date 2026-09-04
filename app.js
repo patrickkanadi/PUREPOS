@@ -76,8 +76,7 @@ window.hashPIN = async function(pin) {
 window.getWibDate = function() {
     const d = new Date(); const utc = d.getTime() + (d.getTimezoneOffset() * 60000); const nd = new Date(utc + (3600000 * 7)); 
     const pad = n => n < 10 ? '0' + n : n;
-    // USA Format: MM/DD/YYYY
-    return `${pad(nd.getMonth()+1)}/${pad(nd.getDate())}/${nd.getFullYear()} ${pad(nd.getHours())}:${pad(nd.getMinutes())}:${pad(nd.getSeconds())}`;
+    return `${nd.getFullYear()}-${pad(nd.getMonth()+1)}-${pad(nd.getDate())} ${pad(nd.getHours())}:${pad(nd.getMinutes())}:${pad(nd.getSeconds())}`;
 }
 
 window.addEventListener('beforeinstallprompt', (e) => {
