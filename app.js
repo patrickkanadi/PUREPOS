@@ -187,6 +187,7 @@ window.attemptLogin = async function() {
         let staffList = await window.getStaffFromDB();
         let staff = staffList.find(s => s.pin === hashedPinInput);
 
+        // Only block login to download data if the tablet has literally ZERO staff data
         if (!staff) {
             loginBtn.innerText = "Sinkronisasi...";
             await window.syncMasterData();
@@ -210,7 +211,6 @@ window.attemptLogin = async function() {
                     if (dropdownSelection === "AUTO") { window.currentOutlet = staffDefault; } 
                     else { window.currentOutlet = dropdownSelection; }
                 } else {
-                    // Blokir jika staff biasa mencoba ganti cabang di luar defaultOutlet-nya
                     if (dropdownSelection !== "AUTO" && dropdownSelection !== staffDefault) {
                         alert(`⚠️ Akses Ditolak!\nStaff biasa hanya dapat login ke cabang asal (${staffDefault}).`);
                         document.getElementById("login-outlet").value = "AUTO"; 
@@ -227,28 +227,24 @@ window.attemptLogin = async function() {
                     window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({ pin: staff.pin, shiftId: window.currentShiftId, loginTime: window.currentLoginTime, outlet: window.currentOutlet });
                 }
                 
-                // 🔥 FIX: FORCE THE APP TO WAIT FOR THE BRANCH-SPECIFIC SYNC BEFORE OPENING!
-                loginBtn.innerText = "Menarik Data Cabang...";
+                // 🔥 THE SPEED FIX: Do not wait for Google Sheets! Open the app instantly.
                 await window.checkAutoCloseShifts();
-                if (navigator.onLine) { await window.syncMasterData(); } 
-                // =========================================================================
+                if (navigator.onLine) { 
+                    window.syncMasterData(); // Runs silently in the background
+                } 
 
-                document.getElementById("login-screen").classList.add("hidden"); document.getElementById("pos-screen").classList.remove("hidden");
-                document.getElementById("display-cashier").innerText = window.currentCashier; document.getElementById("display-outlet").innerText = window.currentOutlet;
+                document.getElementById("login-screen").classList.add("hidden"); 
+                document.getElementById("pos-screen").classList.remove("hidden");
+                document.getElementById("display-cashier").innerText = window.currentCashier; 
+                document.getElementById("display-outlet").innerText = window.currentOutlet;
                 
-                // === NEW: AUTO CLOCK-IN FOR CASHIER (FIRST LOGIN ONLY) ===
                 const today = window.getWibDate().split(" ")[0];
                 const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
-                
-                // Cek apakah sudah pernah clock-in hari ini (meskipun sudah clock-out)
                 const hasClockedInToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier);
-                
-                // Hanya auto clock-in jika belum pernah clock-in SAMA SEKALI hari ini
                 if (!hasClockedInToday) {
                     let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", syncStatus: "Pending" };
                     window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
                 }
-                // ======================================
 
                 window.lockMenu(); 
             };
@@ -459,7 +455,10 @@ window.handleAutocomplete = function(e) {
                 let safePhone = String(m.phone || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let safeAddress = String(m.address || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 
-                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${m.piutang || 0}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')">
+                // 🔥 FRONTEND FILTER: Ensure customer selection uses strict branch Piutang
+                let localPiutang = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : (m.piutang || 0);
+                
+                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div class="autocomplete-name">${m.name} <span style="font-size:11px; background:#ecf0f1; padding:2px 6px; border-radius:4px; margin-left:6px;">📍 Awal: ${fOut !== "Unknown" ? fOut : "-"} | Akhir: ${lOut}</span></div>
                         <div class="autocomplete-phone" style="font-size:14px; color:#7f8c8d;">${m.phone}</div>
@@ -519,8 +518,19 @@ window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rO
     if(!phone || phone === "-") return; 
     window.db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
         let mem = e.target.result || { phone: phone, name: name, wallet: {}, spent: 0, bottlesBorrowed: 0, piutang: 0, firstOutlet: fOut || window.currentOutlet, recentOutlets: rOut || window.currentOutlet }; 
-        mem.name = name; if(wallet !== undefined) mem.wallet = wallet; if(bottles !== undefined) mem.bottlesBorrowed = bottles; if(piutang !== undefined) mem.piutang = piutang; 
-        if(fOut !== undefined) mem.firstOutlet = fOut; if(rOut !== undefined) mem.recentOutlets = rOut;
+        mem.name = name; 
+        if(wallet !== undefined) mem.wallet = wallet; 
+        if(bottles !== undefined) mem.bottlesBorrowed = bottles; 
+        if(fOut !== undefined) mem.firstOutlet = fOut; 
+        if(rOut !== undefined) mem.recentOutlets = rOut;
+        
+        if(piutang !== undefined) {
+            mem.piutang = piutang; 
+            // 🔥 ENSURE LOCAL TRANSACTIONS STAY ISOLATED IN MEMORY
+            if (!mem.piutangBreakdown) mem.piutangBreakdown = {};
+            mem.piutangBreakdown[window.currentOutlet] = piutang; 
+        }
+
         window.db.transaction(["members"], "readwrite").objectStore("members").put(mem);
         window.db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").put(mem);
     };
@@ -990,11 +1000,15 @@ window.renderPiutangList = function() {
     const container = document.getElementById("piutang-list-container"); container.innerHTML = "";
     
     window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
-        let members = e.target.result.filter(m => m.piutang > 0);
-        if(window.updateLeftBadges) window.updateLeftBadges(); // Sync badge
-        
+        // 🔥 FRONTEND FILTER: Calculate exact branch Piutang instantly
+        let members = e.target.result.filter(m => {
+            let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : m.piutang;
+            m._tempBranchPiutang = localP; 
+            return localP > 0;
+        });
+
+        if(window.updateLeftBadges) window.updateLeftBadges(); 
         if (filter) members = members.filter(m => String(m.name).toLowerCase().includes(filter) || String(m.phone).includes(filter));
-        
         if (members.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Tidak ada data piutang ditemukan.</div>`; return; }
         
         members.forEach(m => {
@@ -1002,7 +1016,7 @@ window.renderPiutangList = function() {
                 <div style="border:1px solid #bdc3c7; border-left:5px solid #d35400; padding:15px; border-radius:6px; background:#fdf2e9; display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
                     <div>
                         <strong style="color:#2c3e50; font-size:16px;">${m.name}</strong> <span style="font-size:14px; color:#7f8c8d;">(${m.phone})</span><br>
-                        💰 <strong style="color:#c0392b; font-size:18px;">Rp ${m.piutang.toLocaleString('id-ID')}</strong>
+                        💰 <strong style="color:#c0392b; font-size:18px;">Rp ${m._tempBranchPiutang.toLocaleString('id-ID')}</strong>
                     </div>
                     <div>
                         <button onclick="window.triggerBayarPiutang('${m.phone}')" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Lunasi Piutang</button>
@@ -2114,7 +2128,9 @@ window.updateLeftBadges = function() {
     window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
         let pCount = 0;
         e.target.result.forEach(m => {
-            if (m.piutang > 0) pCount++;
+            // 🔥 FRONTEND FILTER: Only count Piutang that belongs to this branch
+            let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : m.piutang;
+            if (localP > 0) pCount++;
         });
         let pBtn = document.getElementById("tab-left-piutang");
         if (pBtn) { pBtn.innerText = pCount > 0 ? "📒 Piutang (" + pCount + ")" : "📒 Piutang"; }
