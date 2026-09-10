@@ -304,12 +304,14 @@ window.syncMasterData = async function() {
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron Cepat (Menu & Kasir)...";
         if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
 
-        const authResponse = await fetch(API_URL + "?type=fast", { mode: 'cors', redirect: 'follow' });
+        // 🔥 NEW: Dynamically attach the outlet to the Fast Sync URL
+        let fastUrl = API_URL + "?type=fast";
+        if (window.currentOutlet) fastUrl += "&outlet=" + encodeURIComponent(window.currentOutlet);
+
+        const authResponse = await fetch(fastUrl, { mode: 'cors', redirect: 'follow' });
         const authResult = await authResponse.json();
         
         if (authResult.status === "Success") {
-            // Note: We added "members" to the local transaction
-            // Added "orders" to transaction so we can inject global tasks
             const tx = window.db.transaction(["staff", "settings", "menu", "members", "orders"], "readwrite");
             
             const staffStore = tx.objectStore("staff"); staffStore.clear(); authResult.data.staff.forEach(s => staffStore.put(s));
@@ -321,7 +323,6 @@ window.syncMasterData = async function() {
                     let req = ordStore.get(o.orderId);
                     req.onsuccess = (e) => {
                         let existing = e.target.result;
-                        // Only overwrite if it isn't currently uploading a new change from this device
                         if (!existing || existing.syncStatus !== "Pending") { ordStore.put(o); }
                     };
                 });
@@ -329,7 +330,7 @@ window.syncMasterData = async function() {
             const menuStore = tx.objectStore("menu"); menuStore.clear(); authResult.data.menu.forEach(m => menuStore.put(m));
             const settingsStore = tx.objectStore("settings"); settingsStore.clear(); 
             
-            // --- NEW: Process Members, Stocks, and Voids instantly ---
+            // --- Process Members, Stocks, and Voids instantly ---
             if (authResult.data.members) {
                 const memStore = tx.objectStore("members"); memStore.clear();
                 authResult.data.members.forEach(m => memStore.put(m));
@@ -378,17 +379,19 @@ window.syncMasterData = async function() {
 
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Download Data Pelanggan...";
         
-        fetch(API_URL, { mode: 'cors', redirect: 'follow' })
+        // 🔥 NEW: Dynamically attach the outlet to the Full Sync URL
+        let fullUrl = API_URL + "?type=full";
+        if (window.currentOutlet) fullUrl += "&outlet=" + encodeURIComponent(window.currentOutlet);
+
+        fetch(fullUrl, { mode: 'cors', redirect: 'follow' })
             .then(res => res.json())
             .then(fullResult => {
                 if (fullResult.status === "Success") {
                     window.outletStocks = fullResult.data.outletStocks; 
-                    // Added "orders" to transaction
                     const tx2 = window.db.transaction(["members", "expense_categories", "orders"], "readwrite");
                     
                     const memStore = tx2.objectStore("members"); memStore.clear(); fullResult.data.members.forEach(m => memStore.put(m));
                     
-                    // Sync Active Orders (Piutang & Pengiriman) globally
                     if (fullResult.data.activeOrders) {
                         const ordStore = tx2.objectStore("orders");
                         fullResult.data.activeOrders.forEach(o => {
@@ -403,6 +406,13 @@ window.syncMasterData = async function() {
                     if(fullResult.data.expenseCategories) fullResult.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
                     
                     if (fullResult.data.authStatuses) window.processServerUpdates(fullResult.data.authStatuses);
+
+                    // 🔥 NEW: Process incoming Shift Reports from the backend
+                    if (fullResult.data.shiftReports) {
+                        const srStore = window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports");
+                        srStore.clear();
+                        fullResult.data.shiftReports.forEach(sr => srStore.put(sr));
+                    }
 
                     if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
                     if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
