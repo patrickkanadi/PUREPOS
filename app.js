@@ -226,6 +226,13 @@ window.attemptLogin = async function() {
                     window.currentShiftId = "SHF-" + Date.now(); window.currentLoginTime = window.getWibDate();
                     window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({ pin: staff.pin, shiftId: window.currentShiftId, loginTime: window.currentLoginTime, outlet: window.currentOutlet });
                 }
+                
+                // 🔥 FIX: FORCE THE APP TO WAIT FOR THE BRANCH-SPECIFIC SYNC BEFORE OPENING!
+                loginBtn.innerText = "Menarik Data Cabang...";
+                await window.checkAutoCloseShifts();
+                if (navigator.onLine) { await window.syncMasterData(); } 
+                // =========================================================================
+
                 document.getElementById("login-screen").classList.add("hidden"); document.getElementById("pos-screen").classList.remove("hidden");
                 document.getElementById("display-cashier").innerText = window.currentCashier; document.getElementById("display-outlet").innerText = window.currentOutlet;
                 
@@ -243,8 +250,6 @@ window.attemptLogin = async function() {
                 }
                 // ======================================
 
-                await window.checkAutoCloseShifts();
-                if (navigator.onLine) { window.syncMasterData(); }
                 window.lockMenu(); 
             };
         } else { alert("PIN Salah atau Data Kasir Tidak Ditemukan."); }
