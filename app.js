@@ -174,85 +174,6 @@ window.forceCloseShift = async function(shift) {
     txWrite.objectStore("active_shifts").delete(shift.pin);
 }
 
-window.attemptLogin = async function() {
-    const pinInput = document.getElementById("cashier-pin").value.trim();
-    if (!pinInput) return alert("Masukkan PIN!");
-    if (!window.db) return alert("Database sedang memuat, harap tunggu...");
-
-    const loginBtn = document.getElementById("login-btn");
-    loginBtn.disabled = true; loginBtn.innerText = "Memverifikasi...";
-
-    try {
-        const hashedPinInput = await window.hashPIN(pinInput);
-        let staffList = await window.getStaffFromDB();
-        let staff = staffList.find(s => s.pin === hashedPinInput);
-
-        // Only block login to download data if the tablet has literally ZERO staff data
-        if (!staff) {
-            loginBtn.innerText = "Sinkronisasi...";
-            await window.syncMasterData();
-            staffList = await window.getStaffFromDB();
-            staff = staffList.find(s => s.pin === hashedPinInput);
-        }
-
-        if (staff) {
-            window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staff.pin).onsuccess = async (shiftReq) => {
-                const activeShift = shiftReq.target.result;
-                window.currentCashier = staff.name; window.currentPin = staff.pin; 
-                
-                const dropdownSelection = document.getElementById("login-outlet").value;
-                const role = String(staff.role).toLowerCase().trim();
-                const isManagerOrAdmin = (role === 'manager' || role === 'admin');
-                const fallbackOutlet = document.getElementById("login-outlet").options.length > 1 ? document.getElementById("login-outlet").options[1].value : "Pusat";
-                const staffDefault = staff.defaultOutlet || fallbackOutlet;
-
-                // === ROLE-BASED OUTLET CHECK ===
-                if (isManagerOrAdmin) {
-                    if (dropdownSelection === "AUTO") { window.currentOutlet = staffDefault; } 
-                    else { window.currentOutlet = dropdownSelection; }
-                } else {
-                    if (dropdownSelection !== "AUTO" && dropdownSelection !== staffDefault) {
-                        alert(`⚠️ Akses Ditolak!\nStaff biasa hanya dapat login ke cabang asal (${staffDefault}).`);
-                        document.getElementById("login-outlet").value = "AUTO"; 
-                        loginBtn.disabled = false; loginBtn.innerText = "Masuk / Buka Shift";
-                        return; // Stop login
-                    }
-                    window.currentOutlet = staffDefault;
-                }
-
-                if (activeShift) { 
-                    window.currentShiftId = activeShift.shiftId; window.currentLoginTime = activeShift.loginTime; window.currentOutlet = activeShift.outlet || window.currentOutlet; 
-                } else {
-                    window.currentShiftId = "SHF-" + Date.now(); window.currentLoginTime = window.getWibDate();
-                    window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({ pin: staff.pin, shiftId: window.currentShiftId, loginTime: window.currentLoginTime, outlet: window.currentOutlet });
-                }
-                
-                // 🔥 THE SPEED FIX: Do not wait for Google Sheets! Open the app instantly.
-                await window.checkAutoCloseShifts();
-                if (navigator.onLine) { 
-                    window.syncMasterData(); // Runs silently in the background
-                } 
-
-                document.getElementById("login-screen").classList.add("hidden"); 
-                document.getElementById("pos-screen").classList.remove("hidden");
-                document.getElementById("display-cashier").innerText = window.currentCashier; 
-                document.getElementById("display-outlet").innerText = window.currentOutlet;
-                
-                const today = window.getWibDate().split(" ")[0];
-                const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
-                const hasClockedInToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier);
-                if (!hasClockedInToday) {
-                    let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", syncStatus: "Pending" };
-                    window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
-                }
-
-                window.lockMenu(); 
-            };
-        } else { alert("PIN Salah atau Data Kasir Tidak Ditemukan."); }
-    } catch (err) { alert("Terjadi kesalahan sistem saat login.");
-    } finally { loginBtn.disabled = false; loginBtn.innerText = "Masuk / Buka Shift"; }
-}
-
 window.connectBluetoothPrinter = async function() {
     try {
         window.bluetoothDevice = await navigator.bluetooth.requestDevice({ filters: [{ services: [0x18F0] }], optionalServices: [0x18F0] });
@@ -292,6 +213,106 @@ window.manualPushSync = async function() {
     alert("Sinkronisasi Database Berhasil!");
 }
 
+window.syncCriticalData = async function() {
+    if (!navigator.onLine) return;
+    let url = API_URL + "?type=critical";
+    if (window.currentOutlet) url += "&outlet=" + encodeURIComponent(window.currentOutlet);
+
+    try {
+        const res = await fetch(url, { mode: 'cors' });
+        const result = await res.json();
+        if (result.status === "Success") {
+            const tx = window.db.transaction(["staff", "settings", "menu", "members"], "readwrite");
+            
+            if (result.data.staff) {
+                const st = tx.objectStore("staff"); st.clear();
+                result.data.staff.forEach(s => st.put(s));
+            }
+            if (result.data.menu) {
+                const mt = tx.objectStore("menu"); mt.clear();
+                result.data.menu.forEach(m => mt.put(m));
+                window.globalMenuData = result.data.menu;
+            }
+            if (result.data.settings) {
+                const setT = tx.objectStore("settings"); setT.clear();
+                for (const [k, v] of Object.entries(result.data.settings)) { 
+                    setT.put({ key: k, value: v }); 
+                    let upperKey = String(k).toUpperCase().replace(/\s+/g, '');
+                    if (upperKey.includes("PROMO")) {
+                        let valStr = String(v || "");
+                        if (valStr.includes(":")) {
+                            valStr.split(",").forEach(p => {
+                                let parts = p.split(":");
+                                if (parts.length === 2) {
+                                    let itemName = parts[0].trim().toUpperCase().replace(/\s+/g, '');
+                                    let reqQty = Number(parts[1].trim());
+                                    if (itemName && !isNaN(reqQty)) window.promoRules[itemName] = reqQty;
+                                } else if (parts.length === 4) {
+                                    let itemName = parts[0].trim().toUpperCase().replace(/\s+/g, '');
+                                    let minQty = Number(parts[1].trim());
+                                    let target = Number(parts[2].trim());
+                                    let rewardQty = Number(parts[3].trim());
+                                    if (itemName && !isNaN(target)) window.promoStampRules[itemName] = { target, minQty, rewardQty, originalName: parts[0].trim() };
+                                }
+                            });
+                        }
+                    }
+                }
+                window.loyaltyEnabled = String(result.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
+                
+                const rawOutlets = result.data.settings["Outlet_List"] || "Pusat"; 
+                const outletArray = rawOutlets.split(",").map(s => s.trim()); 
+                const selectBox = document.getElementById("login-outlet");
+                if(selectBox) { selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); }
+            }
+            if (result.data.members) {
+                const memT = tx.objectStore("members"); memT.clear();
+                result.data.members.forEach(m => memT.put(m));
+            }
+        }
+    } catch(e) { console.error("Critical Sync Error:", e); }
+};
+
+window.syncBackgroundData = async function() {
+    if (!navigator.onLine) return;
+    let url = API_URL + "?type=background";
+    if (window.currentOutlet) url += "&outlet=" + encodeURIComponent(window.currentOutlet);
+
+    try {
+        const res = await fetch(url, { mode: 'cors' });
+        const result = await res.json();
+        if (result.status === "Success") {
+            const tx = window.db.transaction(["orders", "expense_categories", "shift_reports", "expenses"], "readwrite");
+            
+            if (result.data.outletStocks) window.outletStocks = result.data.outletStocks;
+            
+            if (result.data.activeOrders) {
+                const ordStore = tx.objectStore("orders");
+                result.data.activeOrders.forEach(o => {
+                    let req = ordStore.get(o.orderId);
+                    req.onsuccess = (e) => {
+                        let existing = e.target.result;
+                        if (!existing || existing.syncStatus !== "Pending") { ordStore.put(o); }
+                    };
+                });
+            }
+            
+            if(result.data.expenseCategories) {
+                const expCatStore = tx.objectStore("expense_categories"); expCatStore.clear(); 
+                result.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
+            }
+            
+            if (result.data.shiftReports) {
+                const srStore = tx.objectStore("shift_reports"); srStore.clear();
+                result.data.shiftReports.forEach(sr => srStore.put(sr));
+            }
+
+            if (result.data.authStatuses) window.processServerUpdates(result.data.authStatuses);
+            if (window.updateLeftBadges) window.updateLeftBadges();
+        }
+    } catch(e) { console.error("Background Sync Error:", e); }
+};
+
 window.syncMasterData = async function() {
     if (!navigator.onLine) {
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Mode Offline";
@@ -302,133 +323,106 @@ window.syncMasterData = async function() {
     try {
         if (!window.db) { await window.initDB(); }
         
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron Cepat (Menu & Kasir)...";
+        // Priority 1: Critical Wait
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron Menu & Pelanggan...";
         if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
 
-        // 🔥 NEW: Dynamically attach the outlet to the Fast Sync URL
-        let fastUrl = API_URL + "?type=fast";
-        if (window.currentOutlet) fastUrl += "&outlet=" + encodeURIComponent(window.currentOutlet);
+        await window.syncCriticalData();
+        if (!document.getElementById("pos-screen").classList.contains("hidden")) { window.loadMenuUI(); }
 
-        const authResponse = await fetch(fastUrl, { mode: 'cors', redirect: 'follow' });
-        const authResult = await authResponse.json();
-        
-        if (authResult.status === "Success") {
-            const tx = window.db.transaction(["staff", "settings", "menu", "members", "orders"], "readwrite");
-            
-            const staffStore = tx.objectStore("staff"); staffStore.clear(); authResult.data.staff.forEach(s => staffStore.put(s));
-            
-            // Sync Active Orders (Piutang & Pengiriman) globally
-            if (authResult.data.activeOrders) {
-                const ordStore = tx.objectStore("orders");
-                authResult.data.activeOrders.forEach(o => {
-                    let req = ordStore.get(o.orderId);
-                    req.onsuccess = (e) => {
-                        let existing = e.target.result;
-                        if (!existing || existing.syncStatus !== "Pending") { ordStore.put(o); }
-                    };
-                });
-            }
-            const menuStore = tx.objectStore("menu"); menuStore.clear(); authResult.data.menu.forEach(m => menuStore.put(m));
-            const settingsStore = tx.objectStore("settings"); settingsStore.clear(); 
-            
-            // --- Process Members, Stocks, and Voids instantly ---
-            if (authResult.data.members) {
-                const memStore = tx.objectStore("members"); memStore.clear();
-                authResult.data.members.forEach(m => memStore.put(m));
-            }
-            if (authResult.data.outletStocks) {
-                window.outletStocks = authResult.data.outletStocks;
-            }
-            if (authResult.data.authStatuses) {
-                window.processServerUpdates(authResult.data.authStatuses);
-            }
-            // ---------------------------------------------------------
-            
-            for (const [k, v] of Object.entries(authResult.data.settings)) { 
-                settingsStore.put({ key: k, value: v }); 
-                
-                let upperKey = String(k).toUpperCase().replace(/\s+/g, '');
-                if (upperKey.includes("PROMO")) {
-                    let valStr = String(v || "");
-                    if (valStr.includes(":")) {
-                        valStr.split(",").forEach(p => {
-                            let parts = p.split(":");
-                            if (parts.length === 2) {
-                                let itemName = parts[0].trim().toUpperCase().replace(/\s+/g, '');
-                                let reqQty = Number(parts[1].trim());
-                                if (itemName && !isNaN(reqQty)) window.promoRules[itemName] = reqQty;
-                            } else if (parts.length === 4) {
-                                let itemName = parts[0].trim().toUpperCase().replace(/\s+/g, '');
-                                let minQty = Number(parts[1].trim());
-                                let target = Number(parts[2].trim());
-                                let rewardQty = Number(parts[3].trim());
-                                if (itemName && !isNaN(target)) window.promoStampRules[itemName] = { target, minQty, rewardQty, originalName: parts[0].trim() };
-                            }
-                        });
-                    }
-                }
-            }
-            
-            const rawOutlets = authResult.data.settings["Outlet_List"] || "Pusat"; const outletArray = rawOutlets.split(",").map(s => s.trim()); const selectBox = document.getElementById("login-outlet");
-            if(selectBox) { selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); }
-            
-            window.globalMenuData = authResult.data.menu; 
-            window.loyaltyEnabled = String(authResult.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
+        // Priority 2: Background execution
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron Transaksi Cabang...";
+        await window.syncBackgroundData();
 
-            if (!document.getElementById("pos-screen").classList.contains("hidden")) { window.loadMenuUI(); }
-        }
-
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Download Data Pelanggan...";
-        
-        // 🔥 NEW: Dynamically attach the outlet to the Full Sync URL
-        let fullUrl = API_URL + "?type=full";
-        if (window.currentOutlet) fullUrl += "&outlet=" + encodeURIComponent(window.currentOutlet);
-
-        fetch(fullUrl, { mode: 'cors', redirect: 'follow' })
-            .then(res => res.json())
-            .then(fullResult => {
-                if (fullResult.status === "Success") {
-                    window.outletStocks = fullResult.data.outletStocks; 
-                    const tx2 = window.db.transaction(["members", "expense_categories", "orders"], "readwrite");
-                    
-                    const memStore = tx2.objectStore("members"); memStore.clear(); fullResult.data.members.forEach(m => memStore.put(m));
-                    
-                    if (fullResult.data.activeOrders) {
-                        const ordStore = tx2.objectStore("orders");
-                        fullResult.data.activeOrders.forEach(o => {
-                            let req = ordStore.get(o.orderId);
-                            req.onsuccess = (e) => {
-                                let existing = e.target.result;
-                                if (!existing || existing.syncStatus !== "Pending") { ordStore.put(o); }
-                            };
-                        });
-                    }
-                    const expCatStore = tx2.objectStore("expense_categories"); expCatStore.clear(); 
-                    if(fullResult.data.expenseCategories) fullResult.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
-                    
-                    if (fullResult.data.authStatuses) window.processServerUpdates(fullResult.data.authStatuses);
-
-                    // 🔥 NEW: Process incoming Shift Reports from the backend
-                    if (fullResult.data.shiftReports) {
-                        const srStore = window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports");
-                        srStore.clear();
-                        fullResult.data.shiftReports.forEach(sr => srStore.put(sr));
-                    }
-
-                    if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
-                    if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
-                }
-            })
-            .catch(err => {
-                console.error("Background Fetch Error:", err);
-                if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Gagal Download Member";
-            });
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
+        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
 
     } catch (e) { 
-        console.error("Fast Sync Error:", e);
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Gagal Sinkron"; 
         if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c";
         if (e.name === 'InvalidStateError' || e.message.includes("closing")) { await window.initDB(); }
+    }
+}
+
+window.attemptLogin = async function() {
+    const pinInput = document.getElementById("cashier-pin").value.trim();
+    if (!pinInput) return alert("Masukkan PIN!");
+    if (!window.db) return alert("Database sedang memuat, harap tunggu...");
+
+    const loginBtn = document.getElementById("login-btn");
+    loginBtn.disabled = true; 
+
+    try {
+        const hashedPinInput = await window.hashPIN(pinInput);
+        
+        // SEQUENCE 1: Fetch Critical Data (Menu, Customers, Staff, Settings) ALWAYS to ensure fresh login [WAITS HERE]
+        if (navigator.onLine) {
+            loginBtn.innerText = "Sinkron Menu & Pelanggan...";
+            await window.syncCriticalData();
+        }
+        
+        let staffList = await window.getStaffFromDB();
+        let staff = staffList.find(s => s.pin === hashedPinInput);
+
+        if (staff) {
+            window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staff.pin).onsuccess = async (shiftReq) => {
+                const activeShift = shiftReq.target.result;
+                window.currentCashier = staff.name; window.currentPin = staff.pin; 
+                
+                const dropdownSelection = document.getElementById("login-outlet").value;
+                const role = String(staff.role).toLowerCase().trim();
+                const isManagerOrAdmin = (role === 'manager' || role === 'admin');
+                const fallbackOutlet = document.getElementById("login-outlet").options.length > 1 ? document.getElementById("login-outlet").options[1].value : "Pusat";
+                const staffDefault = staff.defaultOutlet || fallbackOutlet;
+
+                if (isManagerOrAdmin) {
+                    window.currentOutlet = dropdownSelection === "AUTO" ? staffDefault : dropdownSelection;
+                } else {
+                    if (dropdownSelection !== "AUTO" && dropdownSelection !== staffDefault) {
+                        alert(`⚠️ Akses Ditolak!\nStaff biasa hanya dapat login ke cabang asal (${staffDefault}).`);
+                        document.getElementById("login-outlet").value = "AUTO"; 
+                        loginBtn.disabled = false; loginBtn.innerText = "Masuk / Buka Shift";
+                        return; 
+                    }
+                    window.currentOutlet = staffDefault;
+                }
+
+                if (activeShift) { 
+                    window.currentShiftId = activeShift.shiftId; window.currentLoginTime = activeShift.loginTime; window.currentOutlet = activeShift.outlet || window.currentOutlet; 
+                } else {
+                    window.currentShiftId = "SHF-" + Date.now(); window.currentLoginTime = window.getWibDate();
+                    window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({ pin: staff.pin, shiftId: window.currentShiftId, loginTime: window.currentLoginTime, outlet: window.currentOutlet });
+                }
+                
+                await window.checkAutoCloseShifts();
+
+                // Open POS Screen immediately since Critical Data is ready
+                document.getElementById("login-screen").classList.add("hidden"); 
+                document.getElementById("pos-screen").classList.remove("hidden");
+                document.getElementById("display-cashier").innerText = window.currentCashier; 
+                document.getElementById("display-outlet").innerText = window.currentOutlet;
+                
+                window.loadMenuUI();
+                window.lockMenu(); 
+                
+                // SEQUENCE 2: Fetch Background Data silently [DOES NOT WAIT]
+                if (navigator.onLine) { 
+                    window.syncBackgroundData(); 
+                } 
+                
+                const today = window.getWibDate().split(" ")[0];
+                const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
+                const hasClockedInToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier);
+                if (!hasClockedInToday) {
+                    let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", syncStatus: "Pending" };
+                    window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
+                }
+            };
+        } else { alert("PIN Salah atau Data Kasir Tidak Ditemukan."); }
+    } catch (err) { 
+        alert("Terjadi kesalahan sistem saat login.");
+    } finally { 
+        loginBtn.disabled = false; loginBtn.innerText = "Masuk / Buka Shift"; 
     }
 }
 
