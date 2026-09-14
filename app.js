@@ -358,10 +358,10 @@ window.attemptLogin = async function() {
         let staffList = await window.getStaffFromDB();
         let staff = staffList.find(s => s.pin === hashedPinInput);
 
-        // FALLBACK: If staff is literally not found locally, do a generic sync to get their PIN
+        // FALLBACK: If staff is missing from local tablet, run a quiet generic sync to get their PIN
         if (!staff && navigator.onLine) {
             loginBtn.innerText = "Mencari Data Kasir...";
-            await window.syncCriticalData();
+            await window.syncCriticalData(); 
             staffList = await window.getStaffFromDB();
             staff = staffList.find(s => s.pin === hashedPinInput);
         }
@@ -398,7 +398,7 @@ window.attemptLogin = async function() {
                 
                 await window.checkAutoCloseShifts();
 
-                // 🔥 THE FIX: Now that we know the branch, run the Critical Sync strictly for this Outlet!
+                // 🔥 CRITICAL SYNC: With the branch known, pull the correct isolated Piutang!
                 if (navigator.onLine) {
                     loginBtn.innerText = "Sinkron Data Cabang...";
                     await window.syncCriticalData();
@@ -412,7 +412,7 @@ window.attemptLogin = async function() {
                 window.loadMenuUI();
                 window.lockMenu(); 
                 
-                // Fetch Background Data silently 
+                // Pull background Deliveries and Shifts silently while they work
                 if (navigator.onLine) { 
                     window.syncBackgroundData(); 
                 } 
