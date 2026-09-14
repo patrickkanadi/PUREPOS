@@ -355,14 +355,16 @@ window.attemptLogin = async function() {
     try {
         const hashedPinInput = await window.hashPIN(pinInput);
         
-        // SEQUENCE 1: Fetch Critical Data (Menu, Customers, Staff, Settings) ALWAYS to ensure fresh login [WAITS HERE]
-        if (navigator.onLine) {
-            loginBtn.innerText = "Sinkron Menu & Pelanggan...";
-            await window.syncCriticalData();
-        }
-        
         let staffList = await window.getStaffFromDB();
         let staff = staffList.find(s => s.pin === hashedPinInput);
+
+        // FALLBACK: If staff is literally not found locally, do a generic sync to get their PIN
+        if (!staff && navigator.onLine) {
+            loginBtn.innerText = "Mencari Data Kasir...";
+            await window.syncCriticalData();
+            staffList = await window.getStaffFromDB();
+            staff = staffList.find(s => s.pin === hashedPinInput);
+        }
 
         if (staff) {
             window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staff.pin).onsuccess = async (shiftReq) => {
@@ -396,7 +398,12 @@ window.attemptLogin = async function() {
                 
                 await window.checkAutoCloseShifts();
 
-                // Open POS Screen immediately since Critical Data is ready
+                // 🔥 THE FIX: Now that we know the branch, run the Critical Sync strictly for this Outlet!
+                if (navigator.onLine) {
+                    loginBtn.innerText = "Sinkron Data Cabang...";
+                    await window.syncCriticalData();
+                }
+
                 document.getElementById("login-screen").classList.add("hidden"); 
                 document.getElementById("pos-screen").classList.remove("hidden");
                 document.getElementById("display-cashier").innerText = window.currentCashier; 
@@ -405,7 +412,7 @@ window.attemptLogin = async function() {
                 window.loadMenuUI();
                 window.lockMenu(); 
                 
-                // SEQUENCE 2: Fetch Background Data silently [DOES NOT WAIT]
+                // Fetch Background Data silently 
                 if (navigator.onLine) { 
                     window.syncBackgroundData(); 
                 } 
