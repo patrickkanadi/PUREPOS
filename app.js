@@ -16,7 +16,7 @@ window.globalMenuData = []; window.currentCategory = "";
 window.outletStocks = {}; window.isLoggingOut = false; window.currentVoidTarget = { type: null, id: null };
 window.isMenuLocked = true; window.isSyncing = false; window.loyaltyEnabled = false; 
 
-// Advanced Promos (From Laundry POS)
+// Advanced Promos
 window.promoRules = {};
 window.promoStampRules = {};
 
@@ -107,7 +107,6 @@ window.checkAutoCloseShifts = async function() {
     const nowTime = now.getTime();
     
     for (let shift of shifts) {
-        // Safe date parsing across devices
         const loginDate = new Date(String(shift.loginTime).replace(/-/g, '/')); 
         let loginTime = loginDate.getTime();
         if (isNaN(loginTime)) {
@@ -115,7 +114,6 @@ window.checkAutoCloseShifts = async function() {
             loginTime = fallbackDate.getTime();
         }
         
-        // Auto-close if > 12 hours OR if it's no longer the same calendar day (midnight crossed)
         if (nowTime - loginTime > 12 * 60 * 60 * 1000 || now.getDate() !== (isNaN(loginTime) ? now.getDate() : loginDate.getDate())) { 
             await window.forceCloseShift(shift); 
         }
@@ -146,71 +144,29 @@ window.forceCloseShift = async function(shift) {
     expenses.filter(ex => ex.shiftId === shift.shiftId && ex.status === "Active").forEach(ex => { tExpense += (ex.amount || 0); });
     piutangs.filter(bp => bp.shiftId === shift.shiftId).forEach(bp => { tPiutangPaidCash += (bp.cashAmount || 0); });
     
-    // --- NEW: IGNORE EMPTY SHIFTS ---
     const hasActivity = tOrders > 0 || tExpense > 0 || tPiutangGiven > 0 || tPiutangPaidCash > 0;
     if (!hasActivity) {
         window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(shift.pin);
-        return; // Stop here, do not create a shift report
+        return; 
     }
-    // --------------------------------
     
     let liveDrawer = window.outletStocks && window.outletStocks[shift.outlet] && window.outletStocks[shift.outlet]["Saldo_Laci"] ? window.outletStocks[shift.outlet]["Saldo_Laci"] : (tCash + tPiutangPaidCash - tExpense);
             
-            // NEW: Look up the original cashier's name using their stored PIN
-            const staffList = await window.getStaffFromDB();
-            const staffMatch = staffList.find(s => s.pin === shift.pin);
-            const actualCashier = (staffMatch ? staffMatch.name : "Unknown Cashier") + " (Auto-Close)";
-            
-            const shiftPayload = {
-                shiftId: shift.shiftId, timestamp: window.getWibDate(), cashier: actualCashier, loginTime: shift.loginTime, logoutTime: window.getWibDate(),
-                totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree,
-                totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, meterWater: 0, outlet: shift.outlet, syncStatus: "Pending",
-                piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, autoClosed: true
-            };
+    const staffList = await window.getStaffFromDB();
+    const staffMatch = staffList.find(s => s.pin === shift.pin);
+    const actualCashier = (staffMatch ? staffMatch.name : "Unknown Cashier") + " (Auto-Close)";
+    
+    const shiftPayload = {
+        shiftId: shift.shiftId, timestamp: window.getWibDate(), cashier: actualCashier, loginTime: shift.loginTime, logoutTime: window.getWibDate(),
+        totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree,
+        totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, meterWater: 0, outlet: shift.outlet, syncStatus: "Pending",
+        piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, autoClosed: true
+    };
 
-            const txWrite = window.db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
+    const txWrite = window.db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
     txWrite.objectStore("local_shift_history").add(shiftPayload);
     txWrite.objectStore("shift_reports").add(shiftPayload);
     txWrite.objectStore("active_shifts").delete(shift.pin);
-}
-
-window.connectBluetoothPrinter = async function() {
-    try {
-        window.bluetoothDevice = await navigator.bluetooth.requestDevice({ filters: [{ services: [0x18F0] }], optionalServices: [0x18F0] });
-        const server = await window.bluetoothDevice.gatt.connect(); const service = await server.getPrimaryService(0x18F0);
-        window.printerCharacteristic = await service.getCharacteristic(0x2AF1);
-        
-        alert("Printer Thermal Berhasil Terhubung!");
-        document.getElementById("btn-connect-printer").innerText = "🖨️ Printer Aktif"; document.getElementById("btn-connect-printer").style.background = "#27ae60"; document.getElementById("btn-connect-printer").style.borderColor = "#27ae60";
-        
-        window.bluetoothDevice.addEventListener('gattserverdisconnected', () => {
-            alert("Koneksi Printer Terputus!");
-            document.getElementById("btn-connect-printer").innerText = "🖨️ Printer"; document.getElementById("btn-connect-printer").style.background = "#f39c12"; document.getElementById("btn-connect-printer").style.borderColor = "#f39c12";
-            window.printerCharacteristic = null;
-        });
-    } catch (error) { console.error(error); alert("Gagal koneksi printer: " + error.message); }
-}
-
-window.printViaBluetooth = async function(payloadUint8Array) {
-    if (!window.printerCharacteristic) { alert("Printer belum terhubung! Silakan hubungkan dulu dengan tombol 'Printer'."); return false; }
-    try {
-        const CHUNK_SIZE = 20; 
-        for (let i = 0; i < payloadUint8Array.length; i += CHUNK_SIZE) {
-            const chunk = payloadUint8Array.slice(i, i + CHUNK_SIZE);
-            await window.printerCharacteristic.writeValue(chunk);
-            await new Promise(r => setTimeout(r, 10)); 
-        }
-        return true;
-    } catch (error) { console.error("Print Error:", error); alert("Print Gagal: " + error.message); return false; }
-}
-
-window.manualPushSync = async function() {
-    if (!navigator.onLine) return alert("Anda sedang offline!");
-    document.getElementById("network-text").innerText = "Mengirim Data..."; document.getElementById("network-dot").style.backgroundColor = "#f39c12";
-    await window.runBackgroundSync(); 
-    document.getElementById("network-text").innerText = "Menarik Data..."; 
-    await window.syncMasterData(); 
-    alert("Sinkronisasi Database Berhasil!");
 }
 
 window.syncCriticalData = async function() {
@@ -323,14 +279,12 @@ window.syncMasterData = async function() {
     try {
         if (!window.db) { await window.initDB(); }
         
-        // Priority 1: Critical Wait
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron Menu & Pelanggan...";
         if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#f39c12";
 
         await window.syncCriticalData();
         if (!document.getElementById("pos-screen").classList.contains("hidden")) { window.loadMenuUI(); }
 
-        // Priority 2: Background execution
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron Transaksi Cabang...";
         await window.syncBackgroundData();
 
@@ -358,7 +312,7 @@ window.attemptLogin = async function() {
         let staffList = await window.getStaffFromDB();
         let staff = staffList.find(s => s.pin === hashedPinInput);
 
-        // FALLBACK: If staff is missing from local tablet, run a quiet generic sync to get their PIN
+        // FALLBACK: If staff is missing locally, do a quiet sync to verify PIN
         if (!staff && navigator.onLine) {
             loginBtn.innerText = "Mencari Data Kasir...";
             await window.syncCriticalData(); 
@@ -372,21 +326,14 @@ window.attemptLogin = async function() {
                 window.currentCashier = staff.name; window.currentPin = staff.pin; 
                 
                 const dropdownSelection = document.getElementById("login-outlet").value;
-                const role = String(staff.role).toLowerCase().trim();
-                const isManagerOrAdmin = (role === 'manager' || role === 'admin');
                 const fallbackOutlet = document.getElementById("login-outlet").options.length > 1 ? document.getElementById("login-outlet").options[1].value : "Pusat";
                 const staffDefault = staff.defaultOutlet || fallbackOutlet;
 
-                if (isManagerOrAdmin) {
-                    window.currentOutlet = dropdownSelection === "AUTO" ? staffDefault : dropdownSelection;
-                } else {
-                    if (dropdownSelection !== "AUTO" && dropdownSelection !== staffDefault) {
-                        alert(`⚠️ Akses Ditolak!\nStaff biasa hanya dapat login ke cabang asal (${staffDefault}).`);
-                        document.getElementById("login-outlet").value = "AUTO"; 
-                        loginBtn.disabled = false; loginBtn.innerText = "Masuk / Buka Shift";
-                        return; 
-                    }
+                // EVERYONE CAN FREELY SWITCH OUTLETS NOW
+                if (dropdownSelection === "AUTO") {
                     window.currentOutlet = staffDefault;
+                } else {
+                    window.currentOutlet = dropdownSelection;
                 }
 
                 if (activeShift) { 
@@ -398,7 +345,7 @@ window.attemptLogin = async function() {
                 
                 await window.checkAutoCloseShifts();
 
-                // 🔥 CRITICAL SYNC: With the branch known, pull the correct isolated Piutang!
+                // CRITICAL SYNC: Pull isolated Piutang & Deliveries for this exact branch before opening!
                 if (navigator.onLine) {
                     loginBtn.innerText = "Sinkron Data Cabang...";
                     await window.syncCriticalData();
@@ -412,7 +359,7 @@ window.attemptLogin = async function() {
                 window.loadMenuUI();
                 window.lockMenu(); 
                 
-                // Pull background Deliveries and Shifts silently while they work
+                // Pull background Deliveries and Shifts silently
                 if (navigator.onLine) { 
                     window.syncBackgroundData(); 
                 } 
@@ -456,7 +403,7 @@ window.handleAutocomplete = function(e) {
                 let safePhone = String(m.phone || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let safeAddress = String(m.address || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 
-                // 🔥 FRONTEND FILTER: Ensure customer selection uses strict branch Piutang
+                // ISOLATED PIUTANG CALCULATION
                 let localPiutang = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : (m.piutang || 0);
                 
                 return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')">
@@ -482,7 +429,6 @@ window.handleCategoryAutocomplete = function() {
     
     window.db.transaction(["expense_categories"], "readonly").objectStore("expense_categories").getAll().onsuccess = (ev) => {
         let categories = ev.target.result.map(c => c.name);
-
         let matches = categories;
         if (val.length > 0) { matches = categories.filter(c => c.toLowerCase().includes(val)); }
 
@@ -527,7 +473,6 @@ window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rO
         
         if(piutang !== undefined) {
             mem.piutang = piutang; 
-            // 🔥 ENSURE LOCAL TRANSACTIONS STAY ISOLATED IN MEMORY
             if (!mem.piutangBreakdown) mem.piutangBreakdown = {};
             mem.piutangBreakdown[window.currentOutlet] = piutang; 
         }
@@ -615,7 +560,6 @@ window.clearCart = function() { window.lockMenu(); }
 window.reviewOrder = function() {
     if (window.currentCart.length === 0) return alert("Keranjang masih kosong!");
     
-    // --- NEW: SMART INTERCEPT FOR DELIVERY INFO ---
     let isDelivery = window.currentCart.some(i => i.name.toLowerCase().includes("ongkos kirim") || (i.category && i.category.toLowerCase().includes("ongkos kirim")));
     if (isDelivery) {
         let custPhoneRaw = document.getElementById("cust-phone") ? document.getElementById("cust-phone").value.trim() : "";
@@ -624,10 +568,9 @@ window.reviewOrder = function() {
         
         if (!custNameRaw || custNameRaw.toLowerCase() === "walk-in" || custPhoneRaw.length < 5 || custPhoneRaw === "-" || !custAddressRaw || custAddressRaw === "-") {
             alert("⚠️ Data Pengiriman Belum Lengkap.\nSilakan lengkapi Nama, WhatsApp, dan Alamat pelanggan di menu berikutnya.");
-            return window.openEditCustomer(true); // Open edit modal and pause checkout
+            return window.openEditCustomer(true);
         }
     }
-    // ----------------------------------------------
 
     window.cartGrandTotal = window.cartSubtotal;
     const redeemContainer = document.getElementById("redemption-items"); redeemContainer.innerHTML = ""; 
@@ -642,7 +585,6 @@ window.reviewOrder = function() {
             cartAgg[nameKey] = { qty: (cartAgg[nameKey]?.qty || 0) + item.qty, price: item.price, originalName: item.name, itemId: item.itemId };
         });
 
-        // 1. Loyalty Points
         window.currentCart.forEach(item => {
             if (item.loyaltyThreshold > 0) {
                 let existingFree = wallet[item.name] ? wallet[item.name].free : 0;
@@ -666,7 +608,6 @@ window.reviewOrder = function() {
             }
         });
 
-        // 2. Buy X Get 1 Promos
         for (let itemName in cartAgg) {
             let cartQty = cartAgg[itemName].qty;
             let ruleKey = itemName;
@@ -703,22 +644,20 @@ window.reviewOrder = function() {
     document.getElementById("review-subtotal").innerText = `Rp ${window.cartSubtotal.toLocaleString('id-ID')}`; 
     document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
     
-    // === NEW: DISABLE CASH FOR DELIVERY ===
     let isDeliveryFinal = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
     let inputCash = document.getElementById("pay-cash");
     
     if (isDeliveryFinal) {
         inputCash.value = 0;
         inputCash.disabled = true;
-        inputCash.style.background = "#ecf0f1"; // Make it look greyed out
-        document.getElementById("pay-piutang").value = window.cartGrandTotal; // Default to Piutang
+        inputCash.style.background = "#ecf0f1"; 
+        document.getElementById("pay-piutang").value = window.cartGrandTotal;
     } else {
         inputCash.value = window.cartGrandTotal;
         inputCash.disabled = false;
         inputCash.style.background = "";
         document.getElementById("pay-piutang").value = 0;
     }
-    // ======================================
 
     window.calculateRemaining(); 
     document.getElementById("review-modal").classList.remove("hidden");
@@ -762,7 +701,7 @@ window.calculateRemaining = function() {
 window.closeReview = function() { document.getElementById("review-modal").classList.add("hidden"); }
 
 window.switchCart = function(index) {
-    window.showNewOrder(); // Ensure it forces the POS view open
+    window.showNewOrder(); 
     
     window.posSessions[window.activeSessionIndex].customer = window.activeCustomerProfile; window.activeSessionIndex = index; window.currentCart = window.posSessions[window.activeSessionIndex].cart; window.activeCustomerProfile = window.posSessions[window.activeSessionIndex].customer;
     
@@ -914,7 +853,6 @@ window.unlockMenu = function() {
     let cleanedPhone = phoneRaw.replace(/\D/g, '');
     if (phoneRaw.startsWith('62')) cleanedPhone = '0' + cleanedPhone.substring(2);
 
-    // === QUEUE LOCK CHECK ===
     let lockedQueue = null;
     window.posSessions.forEach((session, index) => {
         if (index !== window.activeSessionIndex && session.customer && session.customer.phone === cleanedPhone && cleanedPhone.length > 5) {
@@ -927,7 +865,6 @@ window.unlockMenu = function() {
     const piutangBanner = document.getElementById("piutang-indicator-banner"); 
     const outletDisplay = document.getElementById("active-cust-outlets");
 
-    // === GUEST / WALK-IN CHECK ===
     if (phoneRaw.length < 5 && (!nameRaw || nameRaw.toLowerCase() === "walk-in")) {
         let confirmGuest = confirm("Data pelanggan tidak diisi atau tidak lengkap.\n\nLanjutkan transaksi sebagai Tamu / Walk-in?");
         if (!confirmGuest) return;
@@ -953,7 +890,6 @@ window.unlockMenu = function() {
         return;
     }
 
-    // === STRICT VALIDATION RULES ===
     if (phoneRaw !== "" && (cleanedPhone.length < 8 || !/^\d+$/.test(cleanedPhone))) {
         return alert("⚠️ Format WhatsApp Salah:\nKolom WhatsApp harus diisi dengan nomor telepon yang valid (angka saja).");
     }
@@ -962,7 +898,6 @@ window.unlockMenu = function() {
         return alert("⚠️ Format Nama Salah:\nKolom Nama harus diisi dengan huruf (alfabet), tidak boleh menggunakan angka atau simbol.");
     }
 
-    // === REGULAR MEMBER CHECK ===
     let phone = phoneRaw;
     let name = nameRaw || "Pelanggan";
     let searchPhone = phone.replace(/\D/g, ''); 
@@ -1001,7 +936,6 @@ window.renderPiutangList = function() {
     const container = document.getElementById("piutang-list-container"); container.innerHTML = "";
     
     window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
-        // 🔥 FRONTEND FILTER: Calculate exact branch Piutang instantly
         let members = e.target.result.filter(m => {
             let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : m.piutang;
             m._tempBranchPiutang = localP; 
@@ -1033,7 +967,6 @@ window.triggerBayarPiutang = function(phone, linkedOrderId = null) {
         if (m) {
             window.openPiutangModal(m, linkedOrderId);
         } else {
-            // FALLBACK: If member isn't synced yet, build a temporary profile
             window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e2) => {
                 let orders = e2.target.result.filter(o => o.customerPhone === phone && (o.debtAmount || 0) > 0);
                 if (orders.length > 0) {
@@ -1057,7 +990,6 @@ window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
     document.getElementById("piutang-target-name").innerText = window.piutangTargetMember.name;
     document.getElementById("piutang-target-amount").innerText = "Rp " + window.piutangTargetMember.piutang.toLocaleString('id-ID');
     
-    // NEW: Dynamically inject the "Tetap Piutang" input so the cashier sees the remaining debt!
     let qrisInput = document.getElementById("piutang-pay-qris");
     if (qrisInput && !document.getElementById("piutang-pay-piutang")) {
         let container = qrisInput.parentElement.parentElement;
@@ -1068,7 +1000,6 @@ window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
         container.insertBefore(piutangDiv, container.lastElementChild);
     }
     
-    // Default to BLANK so cashier must type manually
     document.getElementById("piutang-pay-cash").value = "";
     document.getElementById("piutang-pay-qris").value = "";
     document.getElementById("piutang-pay-transfer").value = "";
@@ -1093,7 +1024,6 @@ window.autoBalancePiutangPay = function() {
     const total = c + q + t;
     document.getElementById("piutang-total-dibayar").innerText = `Rp ${total.toLocaleString('id-ID')}`;
 
-    // NEW: Calculate and display the remaining debt automatically
     let sisa = window.piutangTargetMember.piutang - total;
     let sisaInput = document.getElementById("piutang-pay-piutang");
     if (sisaInput) sisaInput.value = Math.max(0, sisa);
@@ -1109,20 +1039,17 @@ window.submitPiutang = function() {
     if(payAmount < 0) return alert("Jumlah bayar tidak valid"); 
     if(payAmount > window.piutangTargetMember.piutang) return alert("Jumlah yang dimasukkan melebihi total piutang pelanggan!");
     
-    // === NEW: ZERO PAYMENT BYPASS ===
     if (payAmount === 0) {
         let confirmZero = confirm("Tercatat tidak ada pembayaran yang dimasukkan (Rp 0).\n\nApakah pelanggan benar-benar belum membayar dan nota ini dibiarkan tetap berada di tab Piutang?");
         if (!confirmZero) return;
 
         document.getElementById("piutang-modal").classList.add("hidden");
-        // Jika dari pengiriman, lanjutkan ke pemilihan kurir
         if (window.piutangFromDeliveryOrderId) {
             window.proceedToCourierSelection(window.piutangFromDeliveryOrderId);
             window.piutangFromDeliveryOrderId = null;
         }
         return;
     }
-    // ================================
 
     let payMethods = [];
     if(c > 0) payMethods.push("Tunai");
@@ -1169,7 +1096,6 @@ window.submitPiutang = function() {
             alert("Pembayaran Piutang Berhasil Dicatat!"); 
             window.runBackgroundSync();
             
-            // Lanjutkan ke pemilihan kurir jika dipanggil dari Pengiriman
             if (window.piutangFromDeliveryOrderId) {
                 window.proceedToCourierSelection(window.piutangFromDeliveryOrderId);
                 window.piutangFromDeliveryOrderId = null;
@@ -1190,10 +1116,8 @@ window.finalizeOrder = async function(shouldPrint) {
     const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
     const custAddress = document.getElementById("cust-address").value.trim() || "";
 
-    // === NEW: STRICT DELIVERY PAYMENT CHECK ===
     let isDeliveryFinal = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
     if (isDeliveryFinal && cash > 0) return alert("⚠️ PEMBAYARAN DITOLAK:\nPesanan Pengiriman tidak dapat dibayar menggunakan Tunai/Cash di awal.\n\nSilakan gunakan QRIS, Transfer, atau masukkan ke Piutang (agar ditagih oleh kurir).");
-    // ==========================================
 
     if (remaining !== 0) return alert("⚠️ PEMBAYARAN DITOLAK:\nTotal pembayaran (termasuk hutang) harus persis sama dengan Total Akhir.");
     if (debtAmount > 0 && (!custPhone || custPhone === "-")) return alert("⚠️ TRANSAKSI DITOLAK:\nAnda WAJIB memasukkan nomor WhatsApp pelanggan untuk mencatat Piutang.");
@@ -1294,9 +1218,8 @@ window.finalizeOrder = async function(shouldPrint) {
         window.saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount, fOut, rOut);
     }
 
-    // FIX: Catch any word containing "Kirim" in Name, Category, or SubCategory
     let isDelivery = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
-    let finalStatus = isDelivery ? "Proses Kirim" : "Completed"; // Keep it pending until delivered!
+    let finalStatus = isDelivery ? "Proses Kirim" : "Completed";
 
     const orderPayload = {
         orderId: "ORD-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId,
@@ -1319,7 +1242,7 @@ window.finalizeOrder = async function(shouldPrint) {
     }
     
     window.closeReview(); window.lockMenu(); window.renderProductGrid(); window.runBackgroundSync();
-    if(window.updateLeftBadges) window.updateLeftBadges(); // Force update badge instantly
+    if(window.updateLeftBadges) window.updateLeftBadges(); 
 }
 
 window.getDynamicSettings = async function() { return new Promise(res => { let req = window.db.transaction(["settings"], "readonly").objectStore("settings").getAll(); req.onsuccess = e => { let s = {}; e.target.result.forEach(row => s[row.key] = row.value); res(s); }; }); }
@@ -1344,8 +1267,6 @@ window.buildEscPosReceipt = async function(orderId, order, deposit, debt, payMet
     const f1 = settings["Footer_1"] || "TERIMA KASIH"; 
     const f2 = settings["Footer_2"] || ""; 
     let f3 = settings["Footer_3"] || ""; if (settings["Footer_3_" + order.outlet]) f3 = settings["Footer_3_" + order.outlet]; 
-    
-    // NEW: Pull Footer 4 (Supports outlet-specific overrides just like Footer 3)
     let f4 = settings["Footer_4"] || ""; if (settings["Footer_4_" + order.outlet]) f4 = settings["Footer_4_" + order.outlet]; 
 
     const dateStr = window.formatDateReadable(order.timestamp);
@@ -1399,10 +1320,7 @@ window.buildEscPosReceipt = async function(orderId, order, deposit, debt, payMet
     receipt += "\n" + centerAlign + boldOn + f1 + "\n" + normalText + boldOff;
     if(f2) receipt += f2 + "\n";
     if(f3) receipt += f3 + "\n";
-    
-    // NEW: Append Footer 4
     if(f4) receipt += f4 + "\n";
-    
     receipt += "\n\n\n\n\n"; 
 
     return new TextEncoder().encode(receipt);
@@ -1652,7 +1570,7 @@ window.confirmAdminVoid = async function() {
                     if (type === 'orders') { 
                         item.orderStatus = "Voided"; item.voidAuth = authName; 
                         if(item.items) item.items.forEach(i => i.qty = Number(i.qty)); 
-                        window.applyLocalVoidAftermath(item); // UPDATED TO LOCAL ONLY
+                        window.applyLocalVoidAftermath(item); 
                     } 
                     else { item.status = "Voided"; item.voidAuth = authName; }
                     item.syncStatus = "Pending"; window.db.transaction([storeName], "readwrite").objectStore(storeName).put(item); window.renderHistoryList(type);
@@ -1719,7 +1637,6 @@ window.applyLocalVoidAftermath = function(order) {
                 mem.bottlesBorrowed = Math.max(0, (mem.bottlesBorrowed || 0) - (order.rentBottleQty || 0));
                 mem.piutang = Math.max(0, (mem.piutang || 0) - (order.debtAmount || 0));
                 
-                // Revert Wallet Points & Free Items locally instantly
                 let currentWallet = typeof mem.wallet === 'object' ? mem.wallet : {};
                 if (order.loyaltyChanges) {
                     for (let itemName in order.loyaltyChanges) {
@@ -1733,7 +1650,6 @@ window.applyLocalVoidAftermath = function(order) {
                     }
                 }
                 
-                // Revert Advanced Stamp Promos locally instantly
                 if (order.newEarnedRewards) {
                     order.newEarnedRewards.forEach(r => {
                         if (typeof currentWallet[r.item] === 'number') {
@@ -1816,9 +1732,7 @@ window.submitCashDrop = function() {
 window.openCurrentShiftReport = function() {
     const today = window.getWibDate().split(" ")[0];
     
-    // 1. Check Attendance First
     window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (ev) => {
-        // NEW: Ignore the current cashier in this warning, because they will auto-clock-out during End Shift
         let pendingOuts = ev.target.result.filter(l => l.date === today && !l.clockOut && l.staffName !== window.currentCashier);
         let currentHour = new Date(window.getWibDate().replace(' ', 'T')).getHours();
         
@@ -1838,7 +1752,6 @@ window.openCurrentShiftReport = function() {
             }
         }
 
-        // 2. Delay slightly to allow database to save clock-outs, then generate the actual Shift Report
         setTimeout(() => {
             let tCust = 0; let tOrders = 0; let tOmset = 0; let tCash = 0; let tQris = 0; let tTransfer = 0; let tFree = 0; let tExpense = 0; let tPiutangGiven = 0; let tPiutangPaidCash = 0; let foodSummary = {};
             document.getElementById("meter-water").value = "";
@@ -1882,7 +1795,6 @@ window.openCurrentShiftReport = function() {
                             document.getElementById("sr-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`; 
                             
                             let itemsHtml = ""; 
-                            // Added safety fallback (foodSummary || {})
                             for (const [key, val] of Object.entries(foodSummary || {})) { 
                                 let qty = typeof val === 'object' ? val.qty : val;
                                 let name = typeof val === 'object' && val.name ? val.name : key;
@@ -1897,7 +1809,7 @@ window.openCurrentShiftReport = function() {
                     };
                 };
             };
-        }, 300); // 300ms delay to finish logging out staff
+        }, 300);
     };
 }
 
@@ -1906,7 +1818,6 @@ window.openShiftReport = window.openCurrentShiftReport;
 window.initiateLogoutSequence = function() { 
     const data = window.currentShiftData;
     
-    // --- NEW: IGNORE EMPTY SHIFTS ---
     const hasActivity = data.totalOrders > 0 || data.totalExpenses > 0 || data.piutangGiven > 0 || data.piutangPaid > 0;
     if (!hasActivity) {
         window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(window.currentPin); 
@@ -1914,14 +1825,11 @@ window.initiateLogoutSequence = function() {
         window.location.reload();
         return;
     }
-    // --------------------------------
 
-    // === NEW: PIUTANG SAFETY WARNING ===
     if (data.piutangGiven > 0) {
         let piutangConfirm = confirm(`⚠️ PERINGATAN PIUTANG\n\nSelama shift ini, tercatat ada total Piutang (Hutang) sebesar Rp ${data.piutangGiven.toLocaleString('id-ID')}.\n\nApakah Anda yakin nominal piutang ini sudah benar dan tidak ada uang pembayaran yang dibawa kembali oleh kurir?\n\n(Klik OK jika benar, Batal jika ingin mengecek kembali)`);
-        if (!piutangConfirm) return; // Halt logout so they can fix it
+        if (!piutangConfirm) return; 
     }
-    // ===================================
 
     const meterW = document.getElementById("meter-water").value;
     if (meterW === "") return alert("⚠️ ERROR: Wajib mengisi Angka Meteran Air sebelum mengakhiri Shift.");
@@ -1941,9 +1849,7 @@ window.executeFinalLogout = async function(netCash) {
     window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").add(shiftPayload);
     window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(window.currentPin); 
     
-    // === NEW: AUTO CLOCK-OUT ON SHIFT END ===
     const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
-    // Find the active log for this cashier regardless of the date (in case they crossed midnight)
     const activeLog = attendances.find(a => a.staffName === window.currentCashier && !a.clockOut);
     
     if (activeLog) {
@@ -1951,12 +1857,10 @@ window.executeFinalLogout = async function(netCash) {
         activeLog.syncStatus = "OutPending";
         window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(activeLog);
         
-        // Push the clock-out immediately if online
         if (navigator.onLine) {
             fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) }).catch(()=>{});
         }
     }
-    // ========================================
 
     if (navigator.onLine) {
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = `Mengirim Laporan Shift...`;
@@ -1970,7 +1874,6 @@ window.executeFinalLogout = async function(netCash) {
 
 window.lockScreen = function() { window.location.reload(); }
 
-
 window.runBackgroundSync = async function() {
     if (!navigator.onLine || window.isSyncing) return;
     window.isSyncing = true; 
@@ -1978,7 +1881,6 @@ window.runBackgroundSync = async function() {
         if (!window.db) { await window.initDB(); }
         await window.checkAutoCloseShifts();
         
-        // 1. READ EVERYTHING INTO MEMORY FIRST (Prevents database timeout)
         let tx = window.db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah", "bayar_piutang", "attendance"], "readonly");
         
         let orders = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
@@ -1993,7 +1895,6 @@ window.runBackgroundSync = async function() {
         let laporLogs = await new Promise(res => tx.objectStore("lapor_masalah").getAll().onsuccess = e => res(e.target.result));
         let attendances = await new Promise(res => tx.objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
 
-        // 2. THEN DO THE INTERNET FETCHES
         for (const order of orders) {
             if (order.syncStatus === "Pending") {
                 await new Promise(res => { let tx = window.db.transaction(["orders"], "readwrite"); let st = tx.objectStore("orders"); st.get(order.orderId).onsuccess = e => { let o = e.target.result; if(o){ o.syncStatus = "Syncing"; st.put(o); } res(); }; });
@@ -2036,8 +1937,6 @@ window.runBackgroundSync = async function() {
         for (const log of laporLogs) {
             if (log.syncStatus === "Pending") { try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncLaporMasalah", data: log }) }); if ((await r.json()).status === "Success") { window.db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").delete(log.logId); } } catch(e) {} }
         }
-        
-        // --- NEW: UPLOAD ABSENSI KE GOOGLE SHEETS ---
         for (const att of attendances) {
             if (att.syncStatus === "Pending") { 
                 try { 
@@ -2063,320 +1962,6 @@ window.runBackgroundSync = async function() {
     } finally { window.isSyncing = false; }
 }
 
-window.showNewOrder = function() {
-    document.getElementById("pengiriman-section").classList.add("hidden");
-    document.getElementById("piutang-section").classList.add("hidden");
-    document.getElementById("command-bar").classList.remove("hidden");
-    document.getElementById("category-container").classList.remove("hidden");
-    document.getElementById("product-grid").classList.remove("hidden");
-    document.getElementById("glass-overlay").style.display = window.isMenuLocked ? "flex" : "none"; // FIX OVERLAY BUG
-    
-    document.getElementById("tab-left-pengiriman").style.background = "transparent";
-    document.getElementById("tab-left-pengiriman").style.color = "#333";
-    document.getElementById("tab-left-piutang").style.background = "transparent";
-    document.getElementById("tab-left-piutang").style.color = "#333";
-    document.getElementById("tab-new-order").style.background = "#3498db";
-    document.getElementById("tab-new-order").style.color = "white";
-}
-
-window.showPengirimanTab = function() {
-    document.getElementById("command-bar").classList.add("hidden");
-    document.getElementById("category-container").classList.add("hidden");
-    document.getElementById("product-grid").classList.add("hidden");
-    document.getElementById("piutang-section").classList.add("hidden");
-    document.getElementById("pengiriman-section").classList.remove("hidden");
-    document.getElementById("glass-overlay").style.display = "none"; // FIX OVERLAY BUG
-    
-    document.getElementById("tab-new-order").style.background = "transparent";
-    document.getElementById("tab-new-order").style.color = "#333";
-    document.getElementById("tab-left-piutang").style.background = "transparent";
-    document.getElementById("tab-left-piutang").style.color = "#333";
-    document.getElementById("tab-left-pengiriman").style.background = "#8e44ad";
-    document.getElementById("tab-left-pengiriman").style.color = "white";
-    
-    window.renderPengiriman();
-}
-
-window.showPiutangTab = function() {
-    document.getElementById("command-bar").classList.add("hidden");
-    document.getElementById("category-container").classList.add("hidden");
-    document.getElementById("product-grid").classList.add("hidden");
-    document.getElementById("pengiriman-section").classList.add("hidden");
-    document.getElementById("piutang-section").classList.remove("hidden");
-    document.getElementById("glass-overlay").style.display = "none"; // FIX OVERLAY BUG
-    
-    document.getElementById("tab-new-order").style.background = "transparent";
-    document.getElementById("tab-new-order").style.color = "#333";
-    document.getElementById("tab-left-pengiriman").style.background = "transparent";
-    document.getElementById("tab-left-pengiriman").style.color = "#333";
-    document.getElementById("tab-left-piutang").style.background = "#d35400";
-    document.getElementById("tab-left-piutang").style.color = "white";
-    
-    window.renderPiutangList();
-    document.getElementById("search-piutang").value = "";
-}
-
-window.updateLeftBadges = function() {
-    if (!window.db) return;
-    window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        let count = 0;
-        e.target.result.forEach(o => {
-            if (o.isDelivery && o.deliveryStatus === "Pending" && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && o.outlet === window.currentOutlet) count++;
-        });
-        let tabBtn = document.getElementById("tab-left-pengiriman");
-        if (tabBtn) { tabBtn.innerText = count > 0 ? "🚚 Pengiriman (" + count + ")" : "🚚 Pengiriman"; }
-    };
-    window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
-        let pCount = 0;
-        e.target.result.forEach(m => {
-            // 🔥 FRONTEND FILTER: Only count Piutang that belongs to this branch
-            let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : m.piutang;
-            if (localP > 0) pCount++;
-        });
-        let pBtn = document.getElementById("tab-left-piutang");
-        if (pBtn) { pBtn.innerText = pCount > 0 ? "📒 Piutang (" + pCount + ")" : "📒 Piutang"; }
-    };
-}
-
-window.openAbsensiModal = function() {
-    document.getElementById('absensi-modal').classList.remove('hidden');
-    window.renderAbsensi();
-}
-
-window.renderPengiriman = function() {
-    const container = document.getElementById("pengiriman-list"); container.innerHTML = "";
-    window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        // NEW: Filter out Voided and Void Pending orders
-        let deliveries = e.target.result.filter(o => o.isDelivery && o.deliveryStatus === "Pending" && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && o.outlet === window.currentOutlet);
-
-        if (deliveries.length === 0) return container.innerHTML = `<div style="padding:20px; color:#7f8c8d; text-align:center;">Tidak ada pengiriman tertunda.</div>`;
-        
-        deliveries.forEach(o => {
-            let itemsStr = o.items.filter(i => !i.name.toLowerCase().includes("ongkos kirim")).map(i => `${i.qty}x ${i.name}`).join(", ");
-            container.innerHTML += `
-            <div style="border:1px solid #bdc3c7; border-left:5px solid #e67e22; padding:15px; border-radius:6px; background:#fef9e7; display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
-                <div>
-                    <strong>🕒 ${window.formatDateReadable(o.timestamp)}</strong> | 👤 <strong>${o.customerName}</strong> (${o.customerPhone})<br>
-                    📍 <span style="color:#c0392b;">${o.customerAddress || "ALAMAT KOSONG!"}</span><br>
-                    📦 <span style="color:#2980b9; font-weight:bold;">${itemsStr}</span><br>
-                    🏷️ Status: <strong style="color:#e67e22;">Menunggu Dikirim</strong>
-                </div>
-                <div style="display:flex; gap:10px;">
-                    <button onclick="window.showOrderDetail('${o.orderId}')" style="background:#f39c12; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">🔍 Cek</button>
-                    <button onclick="window.markDeliveryDone('${o.orderId}')" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">✅ Selesai</button>
-                </div>
-            </div>`;
-        });
-    };
-}
-
-window.pendingDeliveryOrderId = null;
-
-window.proceedToCourierSelection = async function(orderId) {
-    window.pendingDeliveryOrderId = orderId;
-    const staffList = await window.getStaffFromDB();
-    const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
-    const today = window.getWibDate().split(" ")[0];
-    const activeClockIns = attendances.filter(a => a.date === today && !a.clockOut).map(a => a.staffName);
-
-    let outletStaff = staffList.filter(s => 
-        (s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'admin' || s.role.toLowerCase() === 'manager') &&
-        activeClockIns.includes(s.name)
-    );
-    
-    let select = document.getElementById("kurir-select");
-    select.innerHTML = "";
-    if (outletStaff.length > 0) {
-        outletStaff.forEach(s => { select.innerHTML += `<option value="${s.name}">${s.name}</option>`; });
-    } else {
-        select.innerHTML = `<option value="${window.currentCashier}">${window.currentCashier} (Kasir Aktif)</option>`;
-    }
-    document.getElementById("kurir-modal").classList.remove("hidden");
-}
-
-window.markDeliveryDone = async function(orderId) {
-    const order = await new Promise(res => {
-        window.db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = e => res(e.target.result);
-    });
-    
-    if (order && (order.debtAmount || 0) > 0) {
-        // Tag this order so the Piutang Modal knows where to return!
-        window.piutangFromDeliveryOrderId = orderId;
-        window.triggerBayarPiutang(order.customerPhone, orderId);
-        return; 
-    }
-
-    window.piutangFromDeliveryOrderId = null;
-    window.proceedToCourierSelection(orderId);
-}
-
-window.submitDeliveryDone = function() {
-    let courier = document.getElementById("kurir-select").value;
-    let orderId = window.pendingDeliveryOrderId;
-    if (!orderId || !courier) return;
-
-    let tx = window.db.transaction(["orders"], "readwrite");
-    tx.objectStore("orders").get(orderId).onsuccess = (e) => {
-        let order = e.target.result;
-        if (!order) return;
-        
-        let doneTime = window.getWibDate(); 
-        let statusText = "Terkirim (" + doneTime + ")";
-        
-        order.deliveryStatus = statusText;
-        order.orderStatus = "Completed"; 
-        order.courier = courier; 
-        order.syncStatus = "Pending"; // Force robust row update
-        tx.objectStore("orders").put(order);
-    };
-
-    tx.oncomplete = () => {
-        document.getElementById("kurir-modal").classList.add("hidden");
-        window.renderPengiriman();
-        if (window.updateLeftBadges) window.updateLeftBadges(); 
-        window.runBackgroundSync(); // Safely trigger sync
-    };
-}
-
-window.renderAbsensi = async function() {
-    const container = document.getElementById("absensi-list"); container.innerHTML = "";
-    const staffList = await window.getStaffFromDB();
-    const today = window.getWibDate().split(" ")[0];
-    
-    window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (e) => {
-        let logs = e.target.result.filter(l => l.date === today);
-        let outletStaff = staffList.filter(s => s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'admin' || s.role.toLowerCase() === 'manager');
-
-        outletStaff.forEach(staff => {
-            let activeLog = logs.find(l => l.staffName === staff.name && !l.clockOut);
-            let statusBadge = activeLog ? `<span style="color:#27ae60; font-weight:bold;">🟢 Sedang Tugas (Masuk: ${activeLog.clockIn.split(" ")[1]})</span>` : `<span style="color:#7f8c8d; font-weight:bold;">⚪ Belum Clock-in</span>`;
-            
-            let btnAction = activeLog 
-                ? `<button onclick="window.clockOutStaff('${activeLog.logId}')" style="background:#e74c3c; color:white; border:none; padding:8px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Clock Out</button>`
-                : `<button onclick="window.clockInStaff('${staff.name}')" style="background:#3498db; color:white; border:none; padding:8px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Clock In</button>`;
-
-            container.innerHTML += `
-            <div style="border:1px solid #ecf0f1; padding:15px; border-radius:6px; background:#f9fcfc; display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
-                <div>👤 <strong style="font-size:16px;">${staff.name}</strong> (${staff.role})<br>${statusBadge}</div>
-                <div>${btnAction}</div>
-            </div>`;
-        });
-        
-        // --- NEW: TAMBAH STAFF CEPAT ---
-        container.innerHTML += `
-        <div style="margin-top: 15px; padding-top: 15px; border-top: 2px dashed #bdc3c7;">
-            <p style="margin-top:0; font-weight:bold; color:#2c3e50; font-size:14px;">➕ Tambah Staff Baru Cepat</p>
-            <div style="display:flex; gap:10px;">
-                <input type="text" id="new-staff-name" placeholder="Ketik Nama Staff..." style="flex:1; padding:10px; border:2px solid #bdc3c7; border-radius:6px; font-size:14px;" autocomplete="off">
-                <button onclick="window.submitNewStaff()" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Tambah</button>
-            </div>
-        </div>`;
-    };
-}
-
-window.submitNewStaff = async function() {
-    const nameInput = document.getElementById("new-staff-name");
-    const name = nameInput.value.trim();
-    if (!name) return alert("Harap masukkan nama staff!");
-    if (!navigator.onLine) return alert("Anda harus Online untuk menambah staff baru.");
-    
-    nameInput.disabled = true;
-    let btn = nameInput.nextElementSibling;
-    btn.innerText = "Loading...";
-    
-    try {
-        let res = await fetch(API_URL, {
-            method: "POST",
-            body: JSON.stringify({ action: "addStaff", staffName: name, outlet: window.currentOutlet, cashier: window.currentCashier })
-        });
-        let out = await res.json();
-        if (out.status === "Success") {
-            alert(`Staff "${name}" berhasil ditambahkan ke database!\n(Sistem otomatis membuat PIN sementara: ${out.pin})`);
-            await window.syncMasterData(); 
-            window.renderAbsensi(); 
-        } else {
-            alert("Gagal menambahkan staff.");
-            nameInput.disabled = false; btn.innerText = "Tambah";
-        }
-    } catch(e) {
-        alert("Terjadi kesalahan jaringan.");
-        nameInput.disabled = false; btn.innerText = "Tambah";
-    }
-}
-
-window.clockInStaff = function(staffName) {
-    if (!confirm(`Apakah Anda yakin ingin melakukan Clock-IN untuk ${staffName}?`)) return;
-    let payload = { logId: "ABS-" + Date.now(), date: window.getWibDate().split(" ")[0], staffName: staffName, clockIn: window.getWibDate(), clockOut: null, loggedBy: window.currentCashier, syncStatus: "Pending" };
-    window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
-    window.renderAbsensi(); window.runBackgroundSync();
-}
-
-window.clockOutStaff = function(logId, manualTime = null) {
-    if (!manualTime && !confirm(`Apakah Anda yakin ingin melakukan Clock-OUT sekarang?`)) return;
-    let tx = window.db.transaction(["attendance"], "readwrite");
-    tx.objectStore("attendance").get(logId).onsuccess = (e) => {
-        let log = e.target.result;
-        log.clockOut = manualTime || window.getWibDate();
-        log.syncStatus = "OutPending";
-        tx.objectStore("attendance").put(log);
-        
-        if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: log }) });
-        window.renderAbsensi(); window.runBackgroundSync();
-    };
-}
-
-window.openEditCustomer = function(isCheckoutIntercept = false) {
-    document.getElementById("edit-cust-phone").value = document.getElementById("cust-phone").value || (window.activeCustomerProfile ? window.activeCustomerProfile.phone : "") || "";
-    document.getElementById("edit-cust-name").value = document.getElementById("cust-name").value || (window.activeCustomerProfile ? window.activeCustomerProfile.name : "") || "";
-    document.getElementById("edit-cust-address").value = document.getElementById("cust-address") ? document.getElementById("cust-address").value : (window.activeCustomerProfile ? window.activeCustomerProfile.address : "") || "";
-    
-    window.isCheckoutIntercept = isCheckoutIntercept;
-    document.getElementById("edit-customer-modal").classList.remove("hidden");
-}
-
-window.saveEditedCustomer = function() {
-    let phone = document.getElementById("edit-cust-phone").value.trim();
-    let name = document.getElementById("edit-cust-name").value.trim();
-    let address = document.getElementById("edit-cust-address").value.trim();
-    
-    let cleanedPhone = phone.replace(/\D/g, '');
-    if (phone !== "" && (cleanedPhone.length < 8 || !/^\d+$/.test(cleanedPhone))) {
-        return alert("⚠️ Format WhatsApp Salah:\nKolom WhatsApp harus diisi dengan nomor telepon yang valid (angka saja).");
-    }
-
-    if (name !== "" && !/^[a-zA-Z\s]+$/.test(name)) {
-        return alert("⚠️ Format Nama Salah:\nKolom Nama harus diisi dengan huruf (alfabet), tidak boleh menggunakan angka atau simbol.");
-    }
-
-    if (phone.startsWith('62')) phone = '0' + phone.substring(2);
-    if (!name || name.toLowerCase() === "walk-in") name = "Walk-in";
-    
-    // 1. Update Hidden Form Inputs
-    document.getElementById("cust-phone").value = phone;
-    document.getElementById("cust-name").value = name;
-    if(document.getElementById("cust-address")) document.getElementById("cust-address").value = address;
-    
-    // 2. Safely Update Profile & Session state
-    if (!window.activeCustomerProfile) {
-        window.activeCustomerProfile = { phone: phone, name: name, address: address, wallet: {}, bottlesBorrowed: 0, piutang: 0, firstOutlet: window.currentOutlet, recentOutlets: window.currentOutlet };
-    } else {
-        window.activeCustomerProfile.phone = phone;
-        window.activeCustomerProfile.name = name;
-        window.activeCustomerProfile.address = address;
-    }
-    window.posSessions[window.activeSessionIndex].customer = window.activeCustomerProfile;
-    
-    // 3. Refresh Active Banner UI
-    document.getElementById("active-cust-name").innerText = name; 
-    document.getElementById("active-cust-phone").innerText = phone && phone !== "-" ? `(${phone})` : "";
-    document.getElementById("edit-customer-modal").classList.add("hidden");
-    
-    // 4. Resume Checkout if Intercepted!
-    if (window.isCheckoutIntercept) {
-        window.reviewOrder();
-    }
-}
-
 window.onload = async () => { 
     document.getElementById("cust-phone").addEventListener("input", window.handleAutocomplete);
     document.getElementById("cust-name").addEventListener("input", window.handleAutocomplete);
@@ -2398,11 +1983,13 @@ window.onload = async () => {
 
     await window.initDB(); 
     await window.checkAutoCloseShifts(); 
-    await window.syncMasterData(); 
+    
+    // Attempt background sync if already logged in
+    if (window.currentOutlet) window.syncBackgroundData();
+    
     window.setInterval(window.runBackgroundSync, 15000); 
     window.setInterval(window.checkAutoCloseShifts, 3600000); 
     
-    // NEW: Auto-update badges every 5 seconds
     if(window.updateLeftBadges) {
         window.setInterval(window.updateLeftBadges, 5000); 
         window.updateLeftBadges();
