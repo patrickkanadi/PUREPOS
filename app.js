@@ -1982,9 +1982,26 @@ window.onload = async () => {
     });
 
     await window.initDB(); 
+    
+    // 🔥 1. INSTANT LOAD: Tarik list Outlet dari memori tablet dalam 0.01 detik!
+    const settings = await window.getDynamicSettings();
+    if (settings["Outlet_List"]) {
+        const outletArray = String(settings["Outlet_List"]).split(",").map(s => s.trim()); 
+        const selectBox = document.getElementById("login-outlet");
+        if (selectBox) { 
+            selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); 
+        }
+        window.loyaltyEnabled = String(settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
+    }
+
     await window.checkAutoCloseShifts(); 
     
-    // Attempt background sync if already logged in
+    // 🔥 2. PRE-FETCH: Jalankan Critical Sync secara diam-diam selagi kasir mengetik PIN
+    if (navigator.onLine) {
+        window.syncCriticalData(); 
+    }
+    
+    // Attempt background sync if already logged in from a previous session
     if (window.currentOutlet) window.syncBackgroundData();
     
     window.setInterval(window.runBackgroundSync, 15000); 
