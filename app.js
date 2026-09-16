@@ -414,7 +414,7 @@ window.attemptLogin = async function() {
                 const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
                 const hasClockedInToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier);
                 if (!hasClockedInToday) {
-                    let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", syncStatus: "Pending" };
+                    let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", outlet: window.currentOutlet, syncStatus: "Pending" };
                     window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
                 }
             };
@@ -2299,7 +2299,9 @@ window.submitNewStaff = async function() {
 
 window.clockInStaff = function(staffName) {
     if (!confirm(`Apakah Anda yakin ingin melakukan Clock-IN untuk ${staffName}?`)) return;
-    let payload = { logId: "ABS-" + Date.now(), date: window.getWibDate().split(" ")[0], staffName: staffName, clockIn: window.getWibDate(), clockOut: null, loggedBy: window.currentCashier, syncStatus: "Pending" };
+    
+    let payload = { logId: "ABS-" + Date.now(), date: window.getWibDate().split(" ")[0], staffName: staffName, clockIn: window.getWibDate(), clockOut: null, loggedBy: window.currentCashier, outlet: window.currentOutlet, syncStatus: "Pending" };
+    
     window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
     window.renderAbsensi(); window.runBackgroundSync();
 }
