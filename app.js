@@ -146,29 +146,43 @@ window.forceCloseShift = async function(shift) {
     expenses.filter(ex => ex.shiftId === shift.shiftId && ex.status === "Active").forEach(ex => { tExpense += (ex.amount || 0); });
     piutangs.filter(bp => bp.shiftId === shift.shiftId).forEach(bp => { tPiutangPaidCash += (bp.cashAmount || 0); });
     
-    // --- NEW: IGNORE EMPTY SHIFTS ---
+    // --- NEW: IGNORE EMPTY SHIFTS AND AUTO CLOCK OUT ---
     const hasActivity = tOrders > 0 || tExpense > 0 || tPiutangGiven > 0 || tPiutangPaidCash > 0;
     if (!hasActivity) {
         window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(shift.pin);
+        
+        // 🔥 CLOCK OUT STAFF PROPERLY IF THEY AUTO-CLOSE WITH NO TRANSACTIONS
+        const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
+        const staffList = await window.getStaffFromDB();
+        const staffMatch = staffList.find(s => s.pin === shift.pin);
+        
+        if (staffMatch) {
+            const activeLog = attendances.find(a => a.staffName === staffMatch.name && !a.clockOut);
+            if (activeLog) {
+                activeLog.clockOut = window.getWibDate();
+                activeLog.syncStatus = "OutPending";
+                window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(activeLog);
+                if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) }).catch(()=>{});
+            }
+        }
         return; // Stop here, do not create a shift report
     }
     // --------------------------------
     
     let liveDrawer = window.outletStocks && window.outletStocks[shift.outlet] && window.outletStocks[shift.outlet]["Saldo_Laci"] ? window.outletStocks[shift.outlet]["Saldo_Laci"] : (tCash + tPiutangPaidCash - tExpense);
             
-            // NEW: Look up the original cashier's name using their stored PIN
-            const staffList = await window.getStaffFromDB();
-            const staffMatch = staffList.find(s => s.pin === shift.pin);
-            const actualCashier = (staffMatch ? staffMatch.name : "Unknown Cashier") + " (Auto-Close)";
-            
-            const shiftPayload = {
-                shiftId: shift.shiftId, timestamp: window.getWibDate(), cashier: actualCashier, loginTime: shift.loginTime, logoutTime: window.getWibDate(),
-                totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree,
-                totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, meterWater: 0, outlet: shift.outlet, syncStatus: "Pending",
-                piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, autoClosed: true
-            };
+    const staffList = await window.getStaffFromDB();
+    const staffMatch = staffList.find(s => s.pin === shift.pin);
+    const actualCashier = (staffMatch ? staffMatch.name : "Unknown Cashier") + " (Auto-Close)";
+    
+    const shiftPayload = {
+        shiftId: shift.shiftId, timestamp: window.getWibDate(), cashier: actualCashier, loginTime: shift.loginTime, logoutTime: window.getWibDate(),
+        totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree,
+        totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, meterWater: 0, outlet: shift.outlet, syncStatus: "Pending",
+        piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, autoClosed: true
+    };
 
-            const txWrite = window.db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
+    const txWrite = window.db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
     txWrite.objectStore("local_shift_history").add(shiftPayload);
     txWrite.objectStore("shift_reports").add(shiftPayload);
     txWrite.objectStore("active_shifts").delete(shift.pin);
@@ -1896,13 +1910,25 @@ window.openCurrentShiftReport = function() {
 
 window.openShiftReport = window.openCurrentShiftReport; 
 
-window.initiateLogoutSequence = function() { 
+window.initiateLogoutSequence = async function() { 
     const data = window.currentShiftData;
     
     // --- NEW: IGNORE EMPTY SHIFTS ---
     const hasActivity = data.totalOrders > 0 || data.totalExpenses > 0 || data.piutangGiven > 0 || data.piutangPaid > 0;
     if (!hasActivity) {
         window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(window.currentPin); 
+        
+        // 🔥 CLOCK OUT STAFF PROPERLY WHEN THEY BYPASS THE SHIFT REPORT
+        const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
+        const activeLog = attendances.find(a => a.staffName === window.currentCashier && !a.clockOut);
+        
+        if (activeLog) {
+            activeLog.clockOut = window.getWibDate();
+            activeLog.syncStatus = "OutPending";
+            window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(activeLog);
+            if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) }).catch(()=>{});
+        }
+
         alert("Shift kosong (tidak ada transaksi). Sesi diakhiri tanpa membuat laporan shift.");
         window.location.reload();
         return;
