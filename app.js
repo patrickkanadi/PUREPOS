@@ -372,21 +372,14 @@ window.attemptLogin = async function() {
                 window.currentCashier = staff.name; window.currentPin = staff.pin; 
                 
                 const dropdownSelection = document.getElementById("login-outlet").value;
-                const role = String(staff.role).toLowerCase().trim();
-                const isManagerOrAdmin = (role === 'manager' || role === 'admin');
                 const fallbackOutlet = document.getElementById("login-outlet").options.length > 1 ? document.getElementById("login-outlet").options[1].value : "Pusat";
                 const staffDefault = staff.defaultOutlet || fallbackOutlet;
 
-                if (isManagerOrAdmin) {
-                    window.currentOutlet = dropdownSelection === "AUTO" ? staffDefault : dropdownSelection;
+                // 🔥 THE FIX: Allow ALL staff to switch outlets freely
+                if (dropdownSelection === "AUTO") {
+                    window.currentOutlet = staffDefault; // Routes to their default DB outlet
                 } else {
-                    if (dropdownSelection !== "AUTO" && dropdownSelection !== staffDefault) {
-                        alert(`⚠️ Akses Ditolak!\nStaff biasa hanya dapat login ke cabang asal (${staffDefault}).`);
-                        document.getElementById("login-outlet").value = "AUTO"; 
-                        loginBtn.disabled = false; loginBtn.innerText = "Masuk / Buka Shift";
-                        return; 
-                    }
-                    window.currentOutlet = staffDefault;
+                    window.currentOutlet = dropdownSelection; // Routes to the manually selected outlet
                 }
 
                 if (activeShift) { 
@@ -398,7 +391,7 @@ window.attemptLogin = async function() {
                 
                 await window.checkAutoCloseShifts();
 
-                // 🔥 CRITICAL SYNC: With the branch known, pull the correct isolated Piutang!
+                // CRITICAL SYNC: With the branch known, pull the correct isolated Piutang!
                 if (navigator.onLine) {
                     loginBtn.innerText = "Sinkron Data Cabang...";
                     await window.syncCriticalData();
