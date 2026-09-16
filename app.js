@@ -2390,12 +2390,34 @@ window.onload = async () => {
     });
 
     await window.initDB(); 
+    
+    // 🔥 1. INSTANT LOAD: Tarik list Outlet dari memori offline dalam 0.01 detik!
+    const settings = await window.getDynamicSettings();
+    if (settings["Outlet_List"]) {
+        const outletArray = String(settings["Outlet_List"]).split(",").map(s => s.trim()); 
+        const selectBox = document.getElementById("login-outlet");
+        if (selectBox) { 
+            selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); 
+        }
+        window.loyaltyEnabled = String(settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
+    }
+
     await window.checkAutoCloseShifts(); 
-    await window.syncMasterData(); 
+    
+    // 🔥 2. PRE-FETCH: Jalankan Critical Sync secara diam-diam selagi kasir mengetik PIN.
+    // Kita TIDAK BOLEH memanggil syncMasterData() di sini karena akan menarik Global Piutang!
+    if (navigator.onLine) {
+        window.syncCriticalData(); 
+    }
+    
+    // Jika aplikasi di-refresh saat kasir sudah login, barulah tarik background datanya.
+    if (window.currentOutlet && navigator.onLine) {
+        window.syncBackgroundData();
+    }
+    
     window.setInterval(window.runBackgroundSync, 15000); 
     window.setInterval(window.checkAutoCloseShifts, 3600000); 
     
-    // NEW: Auto-update badges every 5 seconds
     if(window.updateLeftBadges) {
         window.setInterval(window.updateLeftBadges, 5000); 
         window.updateLeftBadges();
