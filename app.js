@@ -372,7 +372,6 @@ window.attemptLogin = async function() {
         let staffList = await window.getStaffFromDB();
         let staff = staffList.find(s => s.pin === hashedPinInput);
 
-        // FALLBACK: If staff is missing from local tablet, run a quiet generic sync to get their PIN
         if (!staff && navigator.onLine) {
             loginBtn.innerText = "Mencari Data Kasir...";
             await window.syncCriticalData(); 
@@ -389,11 +388,10 @@ window.attemptLogin = async function() {
                 const fallbackOutlet = document.getElementById("login-outlet").options.length > 1 ? document.getElementById("login-outlet").options[1].value : "Pusat";
                 const staffDefault = staff.defaultOutlet || fallbackOutlet;
 
-                // 🔥 THE FIX: Allow ALL staff to switch outlets freely
                 if (dropdownSelection === "AUTO") {
-                    window.currentOutlet = staffDefault; // Routes to their default DB outlet
+                    window.currentOutlet = staffDefault;
                 } else {
-                    window.currentOutlet = dropdownSelection; // Routes to the manually selected outlet
+                    window.currentOutlet = dropdownSelection;
                 }
 
                 if (activeShift) { 
@@ -403,9 +401,11 @@ window.attemptLogin = async function() {
                     window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({ pin: staff.pin, shiftId: window.currentShiftId, loginTime: window.currentLoginTime, outlet: window.currentOutlet });
                 }
                 
+                // 🔥 THE FIX: Save the sticky session!
+                localStorage.setItem("activePosPin", staff.pin);
+
                 await window.checkAutoCloseShifts();
 
-                // CRITICAL SYNC: With the branch known, pull the correct isolated Piutang!
                 if (navigator.onLine) {
                     loginBtn.innerText = "Sinkron Data Cabang...";
                     await window.syncCriticalData();
@@ -419,7 +419,6 @@ window.attemptLogin = async function() {
                 window.loadMenuUI();
                 window.lockMenu(); 
                 
-                // Pull background Deliveries and Shifts silently while they work
                 if (navigator.onLine) { 
                     window.syncBackgroundData(); 
                 } 
@@ -428,7 +427,7 @@ window.attemptLogin = async function() {
                 const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
                 const hasClockedInToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier);
                 if (!hasClockedInToday) {
-                    let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", outlet: window.currentOutlet, syncStatus: "Pending" };
+                    let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", syncStatus: "Pending" };
                     window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
                 }
             };
@@ -1913,12 +1912,13 @@ window.openShiftReport = window.openCurrentShiftReport;
 window.initiateLogoutSequence = async function() { 
     const data = window.currentShiftData;
     
-    // --- NEW: IGNORE EMPTY SHIFTS ---
     const hasActivity = data.totalOrders > 0 || data.totalExpenses > 0 || data.piutangGiven > 0 || data.piutangPaid > 0;
     if (!hasActivity) {
         window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(window.currentPin); 
         
-        // 🔥 CLOCK OUT STAFF PROPERLY WHEN THEY BYPASS THE SHIFT REPORT
+        // 🔥 Clear sticky login
+        localStorage.removeItem("activePosPin");
+
         const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
         const activeLog = attendances.find(a => a.staffName === window.currentCashier && !a.clockOut);
         
@@ -1933,14 +1933,11 @@ window.initiateLogoutSequence = async function() {
         window.location.reload();
         return;
     }
-    // --------------------------------
 
-    // === NEW: PIUTANG SAFETY WARNING ===
     if (data.piutangGiven > 0) {
         let piutangConfirm = confirm(`⚠️ PERINGATAN PIUTANG\n\nSelama shift ini, tercatat ada total Piutang (Hutang) sebesar Rp ${data.piutangGiven.toLocaleString('id-ID')}.\n\nApakah Anda yakin nominal piutang ini sudah benar dan tidak ada uang pembayaran yang dibawa kembali oleh kurir?\n\n(Klik OK jika benar, Batal jika ingin mengecek kembali)`);
-        if (!piutangConfirm) return; // Halt logout so they can fix it
+        if (!piutangConfirm) return; 
     }
-    // ===================================
 
     const meterW = document.getElementById("meter-water").value;
     if (meterW === "") return alert("⚠️ ERROR: Wajib mengisi Angka Meteran Air sebelum mengakhiri Shift.");
@@ -1960,9 +1957,10 @@ window.executeFinalLogout = async function(netCash) {
     window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").add(shiftPayload);
     window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(window.currentPin); 
     
-    // === NEW: AUTO CLOCK-OUT ON SHIFT END ===
+    // 🔥 Clear sticky login
+    localStorage.removeItem("activePosPin");
+
     const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
-    // Find the active log for this cashier regardless of the date (in case they crossed midnight)
     const activeLog = attendances.find(a => a.staffName === window.currentCashier && !a.clockOut);
     
     if (activeLog) {
@@ -1970,12 +1968,10 @@ window.executeFinalLogout = async function(netCash) {
         activeLog.syncStatus = "OutPending";
         window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(activeLog);
         
-        // Push the clock-out immediately if online
         if (navigator.onLine) {
             fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) }).catch(()=>{});
         }
     }
-    // ========================================
 
     if (navigator.onLine) {
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = `Mengirim Laporan Shift...`;
@@ -1987,7 +1983,10 @@ window.executeFinalLogout = async function(netCash) {
     window.location.reload(); 
 }
 
-window.lockScreen = function() { window.location.reload(); }
+window.lockScreen = function() { 
+    localStorage.removeItem("activePosPin"); 
+    window.location.reload(); 
+}
 
 
 window.runBackgroundSync = async function() {
@@ -2398,6 +2397,47 @@ window.saveEditedCustomer = function() {
     }
 }
 
+window.autoResumeSession = async function() {
+    const savedPin = localStorage.getItem("activePosPin");
+    if (!savedPin) return false; // No sticky session found
+
+    let staffList = await window.getStaffFromDB();
+    let staff = staffList.find(s => s.pin === savedPin);
+
+    if (staff) {
+        return new Promise(resolve => {
+            window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staff.pin).onsuccess = (shiftReq) => {
+                const activeShift = shiftReq.target.result;
+                if (activeShift) {
+                    // Restore the session context instantly
+                    window.currentCashier = staff.name;
+                    window.currentPin = staff.pin;
+                    window.currentShiftId = activeShift.shiftId;
+                    window.currentLoginTime = activeShift.loginTime;
+                    window.currentOutlet = activeShift.outlet;
+
+                    // Bypass login screen
+                    document.getElementById("login-screen").classList.add("hidden");
+                    document.getElementById("pos-screen").classList.remove("hidden");
+                    document.getElementById("display-cashier").innerText = window.currentCashier;
+                    document.getElementById("display-outlet").innerText = window.currentOutlet;
+
+                    window.loadMenuUI();
+                    window.lockMenu();
+                    resolve(true);
+                } else {
+                    // Shift was closed, clear the sticky login
+                    localStorage.removeItem("activePosPin");
+                    resolve(false);
+                }
+            };
+        });
+    } else {
+        localStorage.removeItem("activePosPin");
+        return false;
+    }
+};
+
 window.onload = async () => { 
     document.getElementById("cust-phone").addEventListener("input", window.handleAutocomplete);
     document.getElementById("cust-name").addEventListener("input", window.handleAutocomplete);
@@ -2419,7 +2459,6 @@ window.onload = async () => {
 
     await window.initDB(); 
     
-    // 🔥 1. INSTANT LOAD: Tarik list Outlet dari memori offline dalam 0.01 detik!
     const settings = await window.getDynamicSettings();
     if (settings["Outlet_List"]) {
         const outletArray = String(settings["Outlet_List"]).split(",").map(s => s.trim()); 
@@ -2432,14 +2471,15 @@ window.onload = async () => {
 
     await window.checkAutoCloseShifts(); 
     
-    // 🔥 2. PRE-FETCH: Jalankan Critical Sync secara diam-diam selagi kasir mengetik PIN.
-    // Kita TIDAK BOLEH memanggil syncMasterData() di sini karena akan menarik Global Piutang!
+    // 🔥 Check for Sticky Login instantly!
+    const isResumed = await window.autoResumeSession();
+    
     if (navigator.onLine) {
         window.syncCriticalData(); 
     }
     
-    // Jika aplikasi di-refresh saat kasir sudah login, barulah tarik background datanya.
-    if (window.currentOutlet && navigator.onLine) {
+    // Only fetch background data if they resumed a session or were already logged in
+    if ((isResumed || window.currentOutlet) && navigator.onLine) {
         window.syncBackgroundData();
     }
     
