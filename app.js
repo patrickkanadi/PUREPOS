@@ -1,6 +1,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycby1vEpawIrDgATXZUHsmmjpmUu3hvLrZPuram0_uandmWwmABr7BIDSOlA1ojrPcu_P/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 17; //
+const DB_VERSION = 18; //
 window.db = null;
 
 console.log("✅ PURE POS - Version 1.6 Active"); // You can see this in the browser console
@@ -2052,7 +2052,7 @@ window.runBackgroundSync = async function() {
         await window.checkAutoCloseShifts();
         
         // 1. READ EVERYTHING INTO MEMORY FIRST (Prevents database timeout)
-        let tx = window.db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah", "bayar_piutang", "attendance"], "readonly");
+        let tx = window.db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah", "bayar_piutang", "attendance", "kembali_galon"], "readonly");
         
         let orders = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
         let piutangs = await new Promise(res => tx.objectStore("bayar_piutang").getAll().onsuccess = e => res(e.target.result));
@@ -2276,56 +2276,80 @@ window.renderPeminjamList = function() {
     if(!container) return;
     container.innerHTML = "";
     
-    // Fetch orders to show context tags
-    window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (ordEv) => {
-        let allOrders = ordEv.target.result;
+    window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
+        let members = e.target.result.filter(m => m.rentalBreakdown && m.rentalBreakdown.length > 0);
         
-        window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
-            let members = e.target.result.filter(m => (m.bottlesBorrowed || 0) > 0);
-            
-            if (filter) members = members.filter(m => String(m.name).toLowerCase().includes(filter) || String(m.phone).includes(filter));
-            if (members.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Tidak ada data pelanggan yang meminjam galon saat ini.</div>`; return; }
-            
-            members.forEach(m => {
-                // Find all recent local orders where this customer borrowed bottles
-                let memOrders = allOrders.filter(o => o.customerPhone === m.phone && o.rentBottleQty > 0);
-                let orderTags = memOrders.map(o => `<span style="background:#ecf0f1; padding:3px 6px; border-radius:4px; font-size:11px; margin-right:5px; border:1px solid #bdc3c7;">Nota: ${o.orderId} (${o.rentBottleQty} Gln)</span>`).join("");
-                if (!orderTags) orderTags = `<span style="font-size:11px; color:#7f8c8d;">(Data nota peminjaman berada di arsip lama)</span>`;
+        if (filter) members = members.filter(m => String(m.name).toLowerCase().includes(filter) || String(m.phone).includes(filter));
+        if (members.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Tidak ada data peminjam galon saat ini.</div>`; return; }
+        
+        members.forEach(m => {
+            let totalBorrowed = m.rentalBreakdown.reduce((sum, r) => sum + r.sisa, 0);
 
-                container.innerHTML += `
-                    <div style="border:1px solid #bdc3c7; border-left:5px solid #2980b9; padding:15px; border-radius:6px; background:#ebf5fb; display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
+            // Build the expandable list of specific orders
+            let breakdownHtml = m.rentalBreakdown.map(r => {
+                return `
+                <div style="display:flex; justify-content:space-between; align-items:center; background:#fff; padding:10px; border-radius:4px; margin-top:8px; border:1px solid #d6eaf8;">
+                    <div style="font-size:13px; color:#34495e;">
+                        <strong>Nota: ${r.orderId}</strong><br>
+                        📅 ${window.formatDateReadable(r.date)}<br>
+                        📦 Sisa Pinjam: <strong style="color:#e74c3c;">${r.sisa} Galon</strong>
+                    </div>
+                    <div style="display:flex; gap:5px; align-items:center;">
+                        <input type="number" id="ret-qty-${r.logId}" placeholder="Jml" min="1" max="${r.sisa}" style="width:60px; padding:6px; border:1px solid #ccc; border-radius:4px; font-size:13px;">
+                        <button onclick="window.submitReturnGalon('${m.phone}', '${m.name}', '${r.logId}', '${r.orderId}', ${r.sisa})" style="background:#27ae60; color:white; border:none; padding:6px 10px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:12px;">Simpan</button>
+                    </div>
+                </div>
+                `;
+            }).join("");
+
+            container.innerHTML += `
+                <div style="border:1px solid #bdc3c7; border-left:5px solid #2980b9; padding:15px; border-radius:6px; background:#ebf5fb; margin-bottom:10px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="document.getElementById('brk-${m.phone}').classList.toggle('hidden')">
                         <div>
                             <strong style="color:#2c3e50; font-size:16px;">${m.name}</strong> <span style="font-size:14px; color:#7f8c8d;">(${m.phone})</span><br>
-                            📦 <strong style="color:#2980b9; font-size:16px;">Meminjam ${m.bottlesBorrowed} Galon</strong><br>
-                            <div style="margin-top:6px;">${orderTags}</div>
+                            📦 <strong style="color:#2980b9; font-size:15px;">Total Meminjam: ${totalBorrowed} Galon</strong>
                         </div>
-                        <div>
-                            <button onclick="window.returnGalon('${m.phone}', '${m.name}', ${m.bottlesBorrowed})" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">✅ Kembalikan</button>
-                        </div>
-                    </div>`;
-            });
-        };
+                        <div style="color:#2980b9; font-weight:bold;">Lihat Nota ⬇️</div>
+                    </div>
+                    <div id="brk-${m.phone}" class="hidden" style="margin-top:10px; border-top:1px dashed #bdc3c7; padding-top:10px;">
+                        ${breakdownHtml}
+                    </div>
+                </div>`;
+        });
     };
 }
 
-window.returnGalon = function(phone, name, currentBorrowed) {
-    let qtyStr = prompt(`Berapa galon yang dikembalikan oleh ${name}?\n(Maksimal: ${currentBorrowed} Galon)`);
-    if (!qtyStr) return;
-    let qty = Number(qtyStr);
-    if (isNaN(qty) || qty <= 0) return alert("Jumlah tidak valid.");
-    if (qty > currentBorrowed) return alert("Jumlah melebihi total galon yang dipinjam!");
-    
-    // Create the backend log payload
-    let payload = { logId: "KMB-" + Date.now(), timestamp: window.getWibDate(), customerName: name, customerPhone: phone, qtyReturn: qty, cashier: window.currentCashier, outlet: window.currentOutlet, syncStatus: "Pending" };
+window.submitReturnGalon = function(phone, name, targetLogId, targetOrderId, maxSisa) {
+    let inputEl = document.getElementById(`ret-qty-${targetLogId}`);
+    let qty = Number(inputEl.value);
+
+    if (!qty || isNaN(qty) || qty <= 0) return alert("Masukkan jumlah galon yang dikembalikan dengan benar!");
+    if (qty > maxSisa) return alert(`Jumlah melebihi sisa pinjaman pada nota ini! (Maks: ${maxSisa})`);
+
+    if(!confirm(`Kembalikan ${qty} galon untuk nota ${targetOrderId}?`)) return;
+
+    let payload = { logId: "KMB-" + Date.now(), timestamp: window.getWibDate(), customerName: name, customerPhone: phone, qtyReturn: qty, targetLogId: targetLogId, targetOrderId: targetOrderId, cashier: window.currentCashier, outlet: window.currentOutlet, syncStatus: "Pending" };
     window.db.transaction(["kembali_galon"], "readwrite").objectStore("kembali_galon").add(payload);
 
-    window.db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
+    window.db.transaction(["members"], "readwrite").objectStore("members").get(phone).onsuccess = (e) => {
         let mem = e.target.result;
         if (mem) {
-            mem.bottlesBorrowed -= qty;
-            window.db.transaction(["members"], "readwrite").objectStore("members").put(mem);
-            window.db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").put(mem);
-            alert(`${qty} Galon berhasil dikembalikan oleh ${name}.`);
+            mem.bottlesBorrowed = Math.max(0, mem.bottlesBorrowed - qty);
+            
+            // Instantly update the UI breakdown without waiting for server sync
+            if (mem.rentalBreakdown) {
+                let r = mem.rentalBreakdown.find(x => x.logId === targetLogId);
+                if (r) {
+                    r.sisa -= qty;
+                    if (r.sisa <= 0) mem.rentalBreakdown = mem.rentalBreakdown.filter(x => x.logId !== targetLogId);
+                }
+            }
+            
+            let tx2 = window.db.transaction(["members", "unsynced_members"], "readwrite");
+            tx2.objectStore("members").put(mem);
+            tx2.objectStore("unsynced_members").put(mem);
+
+            alert(`${qty} Galon berhasil dikembalikan dari nota ${targetOrderId}!`);
             window.renderPeminjamList();
             if (window.updateLeftBadges) window.updateLeftBadges();
             window.runBackgroundSync();
@@ -2349,7 +2373,7 @@ window.updateLeftBadges = function() {
         e.target.result.forEach(m => {
             let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : m.piutang;
             if (localP > 0) pCount++;
-            if ((m.bottlesBorrowed || 0) > 0) bCount++;
+            if (m.rentalBreakdown && m.rentalBreakdown.length > 0) bCount++;
         });
         let pBtn = document.getElementById("tab-left-piutang");
         if (pBtn) { pBtn.innerText = pCount > 0 ? "📒 Piutang (" + pCount + ")" : "📒 Piutang"; }
