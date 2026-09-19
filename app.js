@@ -1,7 +1,9 @@
 const API_URL = "https://script.google.com/macros/s/AKfycby1vEpawIrDgATXZUHsmmjpmUu3hvLrZPuram0_uandmWwmABr7BIDSOlA1ojrPcu_P/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 15; 
+const DB_VERSION = 16; // 🔥 BUMP TO 16 TO FORCE CACHE REFRESH
 window.db = null;
+
+console.log("✅ PURE POS - Version 1.6 Active"); // You can see this in the browser console
 
 // Core State
 window.posSessions = [{ cart: [], customer: null }, { cart: [], customer: null }, { cart: [], customer: null }];
@@ -1063,7 +1065,6 @@ window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
     document.getElementById("piutang-target-name").innerText = window.piutangTargetMember.name;
     document.getElementById("piutang-target-amount").innerText = "Rp " + window.piutangTargetMember.piutang.toLocaleString('id-ID');
     
-    // NEW: Dynamically inject the "Tetap Piutang" input so the cashier sees the remaining debt!
     let qrisInput = document.getElementById("piutang-pay-qris");
     if (qrisInput && !document.getElementById("piutang-pay-piutang")) {
         let container = qrisInput.parentElement.parentElement;
@@ -1074,7 +1075,6 @@ window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
         container.insertBefore(piutangDiv, container.lastElementChild);
     }
     
-    // Default to BLANK so cashier must type manually
     document.getElementById("piutang-pay-cash").value = "";
     document.getElementById("piutang-pay-qris").value = "";
     document.getElementById("piutang-pay-transfer").value = "";
@@ -1085,6 +1085,14 @@ window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
         memberOrders.forEach(o => { orderSelect.innerHTML += `<option value="${o.orderId}">Nota: ${o.orderId} (Hutang Rp ${o.debtAmount.toLocaleString('id-ID')})</option>`; });
         
         if (linkedOrderId) orderSelect.value = linkedOrderId;
+
+        // 🔥 DYNAMIC BUTTON TEXT
+        let buttons = document.querySelectorAll("#piutang-modal button");
+        buttons.forEach(b => {
+            if (b.innerText.toLowerCase().includes("lunas") || b.innerText.toLowerCase().includes("simpan") || b.innerText.toLowerCase().includes("selesai")) {
+                 b.innerText = linkedOrderId ? "✅ Kiriman Selesai (Simpan)" : "✅ Konfirmasi Lunas / Simpan";
+            }
+        });
         
         window.autoBalancePiutangPay();
         let oldModal = document.getElementById('buku-piutang-modal'); if (oldModal) oldModal.classList.add('hidden');
@@ -2162,22 +2170,38 @@ window.openAbsensiModal = function() {
 }
 
 window.renderPengiriman = function() {
+    // Enable the search filter
+    const filterInput = document.getElementById('search-pengiriman');
+    const filter = filterInput ? filterInput.value.toLowerCase().trim() : "";
     const container = document.getElementById("pengiriman-list"); container.innerHTML = "";
+    
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        // NEW: Filter out Voided and Void Pending orders
         let deliveries = e.target.result.filter(o => o.isDelivery && o.deliveryStatus === "Pending" && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && o.outlet === window.currentOutlet);
+
+        if (filter) {
+            deliveries = deliveries.filter(o => 
+                String(o.customerName).toLowerCase().includes(filter) || 
+                String(o.customerPhone).includes(filter) || 
+                String(o.orderId).toLowerCase().includes(filter) || 
+                String(o.customerAddress).toLowerCase().includes(filter)
+            );
+        }
 
         if (deliveries.length === 0) return container.innerHTML = `<div style="padding:20px; color:#7f8c8d; text-align:center;">Tidak ada pengiriman tertunda.</div>`;
         
         deliveries.forEach(o => {
             let itemsStr = o.items.filter(i => !i.name.toLowerCase().includes("ongkos kirim")).map(i => `${i.qty}x ${i.name}`).join(", ");
+            let debtInfo = (o.debtAmount > 0) 
+                ? `<br>⚠️ <strong style="color:#c0392b;">Belum Lunas (Rp ${o.debtAmount.toLocaleString('id-ID')})</strong>` 
+                : `<br>✅ <strong style="color:#27ae60;">Sudah Lunas</strong>`;
+
             container.innerHTML += `
             <div style="border:1px solid #bdc3c7; border-left:5px solid #e67e22; padding:15px; border-radius:6px; background:#fef9e7; display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
                 <div>
                     <strong>🕒 ${window.formatDateReadable(o.timestamp)}</strong> | 👤 <strong>${o.customerName}</strong> (${o.customerPhone})<br>
                     📍 <span style="color:#c0392b;">${o.customerAddress || "ALAMAT KOSONG!"}</span><br>
                     📦 <span style="color:#2980b9; font-weight:bold;">${itemsStr}</span><br>
-                    🏷️ Status: <strong style="color:#e67e22;">Menunggu Dikirim</strong>
+                    🏷️ Status: <strong style="color:#e67e22;">Menunggu Dikirim</strong> ${debtInfo}
                 </div>
                 <div style="display:flex; gap:10px;">
                     <button onclick="window.showOrderDetail('${o.orderId}')" style="background:#f39c12; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">🔍 Cek</button>
@@ -2218,9 +2242,15 @@ window.markDeliveryDone = async function(orderId) {
     });
     
     if (order && (order.debtAmount || 0) > 0) {
-        // Tag this order so the Piutang Modal knows where to return!
         window.piutangFromDeliveryOrderId = orderId;
-        window.triggerBayarPiutang(order.customerPhone, orderId);
+        // Even if local member sync failed, force the Piutang modal to open using the Order data
+        let fallbackMember = { phone: order.customerPhone, name: order.customerName, piutang: order.debtAmount };
+        
+        window.db.transaction(["members"], "readonly").objectStore("members").get(order.customerPhone).onsuccess = (e) => {
+            let m = e.target.result; 
+            if (m) window.openPiutangModal(m, orderId);
+            else window.openPiutangModal(fallbackMember, orderId);
+        };
         return; 
     }
 
@@ -2471,14 +2501,24 @@ window.onload = async () => {
 
     await window.checkAutoCloseShifts(); 
     
-    // 🔥 Check for Sticky Login instantly!
+    // Check for Sticky Login
     const isResumed = await window.autoResumeSession();
+    
+    if (isResumed) {
+        // 🔥 ABSENSI FIX: If they auto-resumed on a new day, auto clock them in!
+        const today = window.getWibDate().split(" ")[0];
+        const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
+        const hasClockedInToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier);
+        if (!hasClockedInToday && window.currentCashier) {
+            let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Resume)", outlet: window.currentOutlet, syncStatus: "Pending" };
+            window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
+        }
+    }
     
     if (navigator.onLine) {
         window.syncCriticalData(); 
     }
     
-    // Only fetch background data if they resumed a session or were already logged in
     if ((isResumed || window.currentOutlet) && navigator.onLine) {
         window.syncBackgroundData();
     }
