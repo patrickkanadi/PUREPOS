@@ -1480,17 +1480,39 @@ window.buildEscPosShiftReport = async function(data) {
 }
 
 window.openInboundModal = function() {
-    let select = document.getElementById("inbound-tank-target"); select.innerHTML = ""; let tanks = window.globalMenuData.filter(m => (m.category === "Tandon" || m.subCategory === "Raw Water") && (m.availableAt === "ALL" || m.availableAt.includes(window.currentOutlet)));
+    let select = document.getElementById("inbound-tank-target"); select.innerHTML = ""; 
+    let tanks = window.globalMenuData.filter(m => (m.category === "Tandon" || m.subCategory === "Raw Water") && (m.availableAt === "ALL" || m.availableAt.includes(window.currentOutlet)));
     tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">💧 ${t.name}</option>`; });
     if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
-    document.getElementById("inbound-qty").value = ""; document.getElementById("inbound-notes").value = ""; document.getElementById("inbound-modal").classList.remove("hidden");
+    
+    // Explicitly ask for Galon in the UI
+    const qtyInput = document.getElementById("inbound-qty");
+    if (qtyInput) qtyInput.placeholder = "Berapa Galon (19L)?";
+    
+    document.getElementById("inbound-qty").value = ""; 
+    document.getElementById("inbound-notes").value = ""; 
+    document.getElementById("inbound-modal").classList.remove("hidden");
 }
 
 window.submitInbound = function() {
-    const qty = Number(document.getElementById("inbound-qty").value); const targetTank = document.getElementById("inbound-tank-target").value; const notes = document.getElementById("inbound-notes").value.trim() || "-";
-    if (qty <= 0) return alert("Masukkan jumlah liter air yang benar.");
-    const payload = { logId: "INB-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId, itemName: targetTank, qty: qty, notes: notes, outlet: window.currentOutlet, syncStatus: "Pending" };
-    window.db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").add(payload); document.getElementById("inbound-modal").classList.add("hidden"); alert(`Berhasil mencatat kedatangan ${qty} Liter ke ${targetTank}.`); window.runBackgroundSync();
+    const qtyGalon = Number(document.getElementById("inbound-qty").value); 
+    const targetTank = document.getElementById("inbound-tank-target").value; 
+    const notes = document.getElementById("inbound-notes").value.trim();
+    
+    // 🔥 MANDATORY CHECK: Prevent submitting if any field is empty or 0
+    if (qtyGalon <= 0 || !targetTank || notes === "") {
+        return alert("⚠️ TRANSAKSI DITOLAK:\nHarap isi SEMUA kolom (Jumlah Galon, Target Tangki, dan Catatan/Supplier)!");
+    }
+
+    // Convert Galon to Liters for the backend spreadsheet (1 Galon = 19 Liters)
+    const qtyLiters = qtyGalon * 19; 
+    
+    const payload = { logId: "INB-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId, itemName: targetTank, qty: qtyLiters, notes: notes, outlet: window.currentOutlet, syncStatus: "Pending" };
+    window.db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").add(payload); 
+    document.getElementById("inbound-modal").classList.add("hidden"); 
+    
+    alert(`Berhasil mencatat kedatangan ${qtyGalon} Galon (${qtyLiters} Liter) ke ${targetTank}.`); 
+    window.runBackgroundSync();
 }
 
 window.openCuciModal = function() {
@@ -1536,10 +1558,16 @@ window.openHistoryModal = function() { document.getElementById("history-modal").
 
 window.renderHistoryList = function(type) {
     const container = document.getElementById("history-container"); container.innerHTML = "";
+    
+    // Get strictly today's date format (YYYY-MM-DD)
+    const todayStr = window.getWibDate().split(" ")[0]; 
+
     if (type === 'orders') {
         window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-            const shiftOrders = e.target.result.filter(o => o.outlet === window.currentOutlet).reverse().slice(0, 100); 
-            if(shiftOrders.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada order di cabang ini.</div>`;
+            // 🔥 FILTER: Only show orders from today and from this branch
+            const shiftOrders = e.target.result.filter(o => o.outlet === window.currentOutlet && String(o.timestamp).startsWith(todayStr)).reverse(); 
+            
+            if(shiftOrders.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada order hari ini di cabang ini.</div>`;
             shiftOrders.forEach(o => {
                 let badge = o.orderStatus === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : o.orderStatus === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">${o.orderStatus}</span>`; 
                 let piutangBadge = (o.debtAmount || 0) > 0 ? `<br><span style="font-size:12px; color:#c0392b; font-weight:bold;">⚠️ Piutang: Rp ${(o.debtAmount).toLocaleString('id-ID')}</span>` : '';
@@ -1552,8 +1580,9 @@ window.renderHistoryList = function(type) {
         };
     } else if (type === 'expenses') {
         window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (e) => {
-            const shiftExpenses = e.target.result.filter(exp => exp.outlet === window.currentOutlet).reverse().slice(0, 100);
-            if(shiftExpenses.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada pengeluaran dicatat.</div>`;
+            // Expenses also filtered to today
+            const shiftExpenses = e.target.result.filter(exp => exp.outlet === window.currentOutlet && String(exp.timestamp).startsWith(todayStr)).reverse();
+            if(shiftExpenses.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada pengeluaran hari ini.</div>`;
             shiftExpenses.forEach(exp => {
                 let badge = exp.status === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : exp.status === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">Aktif</span>`;
                 let btn = (exp.status !== "Voided" && exp.status !== "Void Pending") ? `<button onclick="window.requestVoid('expenses', '${exp.expenseId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Batal/Void</button>` : '';
@@ -1562,6 +1591,7 @@ window.renderHistoryList = function(type) {
         };
     } else if (type === 'shifts') {
         window.db.transaction(["shift_reports"], "readonly").objectStore("shift_reports").getAll().onsuccess = (e) => {
+            // Shift history loads last 50 normally since they span longer times
             const shifts = e.target.result.filter(s => s.outlet === window.currentOutlet).reverse().slice(0, 50);
             if(shifts.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada histori shift di cabang ini.</div>`;
             shifts.forEach(s => {
@@ -2092,17 +2122,18 @@ window.runBackgroundSync = async function() {
 window.showNewOrder = function() {
     document.getElementById("pengiriman-section").classList.add("hidden");
     document.getElementById("piutang-section").classList.add("hidden");
+    let pSec = document.getElementById("peminjam-section"); if (pSec) pSec.classList.add("hidden");
+    
     document.getElementById("command-bar").classList.remove("hidden");
     document.getElementById("category-container").classList.remove("hidden");
     document.getElementById("product-grid").classList.remove("hidden");
-    document.getElementById("glass-overlay").style.display = window.isMenuLocked ? "flex" : "none"; // FIX OVERLAY BUG
+    document.getElementById("glass-overlay").style.display = window.isMenuLocked ? "flex" : "none"; 
     
-    document.getElementById("tab-left-pengiriman").style.background = "transparent";
-    document.getElementById("tab-left-pengiriman").style.color = "#333";
-    document.getElementById("tab-left-piutang").style.background = "transparent";
-    document.getElementById("tab-left-piutang").style.color = "#333";
-    document.getElementById("tab-new-order").style.background = "#3498db";
-    document.getElementById("tab-new-order").style.color = "white";
+    document.getElementById("tab-left-pengiriman").style.background = "transparent"; document.getElementById("tab-left-pengiriman").style.color = "#333";
+    document.getElementById("tab-left-piutang").style.background = "transparent"; document.getElementById("tab-left-piutang").style.color = "#333";
+    let tabPem = document.getElementById("tab-left-peminjam"); if(tabPem) { tabPem.style.background = "transparent"; tabPem.style.color = "#333"; }
+    
+    document.getElementById("tab-new-order").style.background = "#3498db"; document.getElementById("tab-new-order").style.color = "white";
 }
 
 window.showPengirimanTab = function() {
@@ -2110,16 +2141,16 @@ window.showPengirimanTab = function() {
     document.getElementById("category-container").classList.add("hidden");
     document.getElementById("product-grid").classList.add("hidden");
     document.getElementById("piutang-section").classList.add("hidden");
+    let pSec = document.getElementById("peminjam-section"); if (pSec) pSec.classList.add("hidden");
+    
     document.getElementById("pengiriman-section").classList.remove("hidden");
-    document.getElementById("glass-overlay").style.display = "none"; // FIX OVERLAY BUG
+    document.getElementById("glass-overlay").style.display = "none"; 
     
-    document.getElementById("tab-new-order").style.background = "transparent";
-    document.getElementById("tab-new-order").style.color = "#333";
-    document.getElementById("tab-left-piutang").style.background = "transparent";
-    document.getElementById("tab-left-piutang").style.color = "#333";
-    document.getElementById("tab-left-pengiriman").style.background = "#8e44ad";
-    document.getElementById("tab-left-pengiriman").style.color = "white";
+    document.getElementById("tab-new-order").style.background = "transparent"; document.getElementById("tab-new-order").style.color = "#333";
+    document.getElementById("tab-left-piutang").style.background = "transparent"; document.getElementById("tab-left-piutang").style.color = "#333";
+    let tabPem = document.getElementById("tab-left-peminjam"); if(tabPem) { tabPem.style.background = "transparent"; tabPem.style.color = "#333"; }
     
+    document.getElementById("tab-left-pengiriman").style.background = "#8e44ad"; document.getElementById("tab-left-pengiriman").style.color = "white";
     window.renderPengiriman();
 }
 
@@ -2128,20 +2159,104 @@ window.showPiutangTab = function() {
     document.getElementById("category-container").classList.add("hidden");
     document.getElementById("product-grid").classList.add("hidden");
     document.getElementById("pengiriman-section").classList.add("hidden");
-    document.getElementById("piutang-section").classList.remove("hidden");
-    document.getElementById("glass-overlay").style.display = "none"; // FIX OVERLAY BUG
+    let pSec = document.getElementById("peminjam-section"); if (pSec) pSec.classList.add("hidden");
     
-    document.getElementById("tab-new-order").style.background = "transparent";
-    document.getElementById("tab-new-order").style.color = "#333";
-    document.getElementById("tab-left-pengiriman").style.background = "transparent";
-    document.getElementById("tab-left-pengiriman").style.color = "#333";
-    document.getElementById("tab-left-piutang").style.background = "#d35400";
-    document.getElementById("tab-left-piutang").style.color = "white";
+    document.getElementById("piutang-section").classList.remove("hidden");
+    document.getElementById("glass-overlay").style.display = "none"; 
+    
+    document.getElementById("tab-new-order").style.background = "transparent"; document.getElementById("tab-new-order").style.color = "#333";
+    document.getElementById("tab-left-pengiriman").style.background = "transparent"; document.getElementById("tab-left-pengiriman").style.color = "#333";
+    let tabPem = document.getElementById("tab-left-peminjam"); if(tabPem) { tabPem.style.background = "transparent"; tabPem.style.color = "#333"; }
+    
+    document.getElementById("tab-left-piutang").style.background = "#d35400"; document.getElementById("tab-left-piutang").style.color = "white";
     
     window.renderPiutangList();
     document.getElementById("search-piutang").value = "";
 }
 
+window.showPeminjamTab = function() {
+    document.getElementById("command-bar").classList.add("hidden");
+    document.getElementById("category-container").classList.add("hidden");
+    document.getElementById("product-grid").classList.add("hidden");
+    document.getElementById("pengiriman-section").classList.add("hidden");
+    document.getElementById("piutang-section").classList.add("hidden");
+    document.getElementById("glass-overlay").style.display = "none";
+    
+    // Inject Peminjam Section dynamically if it doesn't exist
+    let peminjamSec = document.getElementById("peminjam-section");
+    if (!peminjamSec) {
+        peminjamSec = document.createElement("div");
+        peminjamSec.id = "peminjam-section";
+        peminjamSec.style.padding = "20px";
+        peminjamSec.innerHTML = `
+            <h2 style="margin-top:0; color:#2c3e50;">📦 Daftar Peminjam Galon</h2>
+            <input type="text" id="search-peminjam" placeholder="🔍 Cari Nama Pelanggan atau WA..." oninput="window.renderPeminjamList()" style="width:100%; padding:10px; margin-bottom:15px; border-radius:5px; border:1px solid #ccc;">
+            <div id="peminjam-list-container" style="display:flex; flex-direction:column; gap:10px;"></div>
+        `;
+        document.getElementById("pos-screen").appendChild(peminjamSec);
+    }
+    peminjamSec.classList.remove("hidden");
+    
+    document.getElementById("tab-new-order").style.background = "transparent"; document.getElementById("tab-new-order").style.color = "#333";
+    document.getElementById("tab-left-pengiriman").style.background = "transparent"; document.getElementById("tab-left-pengiriman").style.color = "#333";
+    document.getElementById("tab-left-piutang").style.background = "transparent"; document.getElementById("tab-left-piutang").style.color = "#333";
+    
+    let tabPem = document.getElementById("tab-left-peminjam"); 
+    if(tabPem) { tabPem.style.background = "#2980b9"; tabPem.style.color = "white"; }
+    
+    window.renderPeminjamList();
+}
+
+window.renderPeminjamList = function() {
+    const filterInput = document.getElementById('search-peminjam');
+    const filter = filterInput ? filterInput.value.toLowerCase().trim() : "";
+    const container = document.getElementById("peminjam-list-container"); 
+    if(!container) return;
+    container.innerHTML = "";
+    
+    window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
+        let members = e.target.result.filter(m => (m.bottlesBorrowed || 0) > 0);
+        
+        if (filter) members = members.filter(m => String(m.name).toLowerCase().includes(filter) || String(m.phone).includes(filter));
+        if (members.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Tidak ada data pelanggan yang meminjam galon saat ini.</div>`; return; }
+        
+        members.forEach(m => {
+            container.innerHTML += `
+                <div style="border:1px solid #bdc3c7; border-left:5px solid #2980b9; padding:15px; border-radius:6px; background:#ebf5fb; display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
+                    <div>
+                        <strong style="color:#2c3e50; font-size:16px;">${m.name}</strong> <span style="font-size:14px; color:#7f8c8d;">(${m.phone})</span><br>
+                        📦 <strong style="color:#2980b9; font-size:16px;">Meminjam ${m.bottlesBorrowed} Galon</strong>
+                    </div>
+                    <div>
+                        <button onclick="window.returnGalon('${m.phone}', '${m.name}', ${m.bottlesBorrowed})" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">✅ Kembalikan</button>
+                    </div>
+                </div>`;
+        });
+    };
+}
+
+window.returnGalon = function(phone, name, currentBorrowed) {
+    let qtyStr = prompt(`Berapa galon yang dikembalikan oleh ${name}?\n(Maksimal: ${currentBorrowed} Galon)`);
+    if (!qtyStr) return;
+    let qty = Number(qtyStr);
+    if (isNaN(qty) || qty <= 0) return alert("Jumlah tidak valid.");
+    if (qty > currentBorrowed) return alert("Jumlah melebihi total galon yang dipinjam!");
+    
+    window.db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
+        let mem = e.target.result;
+        if (mem) {
+            mem.bottlesBorrowed -= qty;
+            window.db.transaction(["members"], "readwrite").objectStore("members").put(mem);
+            window.db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").put(mem);
+            alert(`${qty} Galon berhasil dikembalikan oleh ${name}.`);
+            window.renderPeminjamList();
+            if (window.updateLeftBadges) window.updateLeftBadges();
+            window.runBackgroundSync();
+        }
+    };
+}
+
+// 🔄 Replaces your old updateLeftBadges to count the new Peminjam tab
 window.updateLeftBadges = function() {
     if (!window.db) return;
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
@@ -2153,17 +2268,18 @@ window.updateLeftBadges = function() {
         if (tabBtn) { tabBtn.innerText = count > 0 ? "🚚 Pengiriman (" + count + ")" : "🚚 Pengiriman"; }
     };
     window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
-        let pCount = 0;
+        let pCount = 0; let bCount = 0;
         e.target.result.forEach(m => {
-            // 🔥 FRONTEND FILTER: Only count Piutang that belongs to this branch
             let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : m.piutang;
             if (localP > 0) pCount++;
+            if ((m.bottlesBorrowed || 0) > 0) bCount++;
         });
         let pBtn = document.getElementById("tab-left-piutang");
         if (pBtn) { pBtn.innerText = pCount > 0 ? "📒 Piutang (" + pCount + ")" : "📒 Piutang"; }
+        let bBtn = document.getElementById("tab-left-peminjam");
+        if (bBtn) { bBtn.innerText = bCount > 0 ? "📦 Pinjam Galon (" + bCount + ")" : "📦 Pinjam Galon"; }
     };
 }
-
 window.openAbsensiModal = function() {
     document.getElementById('absensi-modal').classList.remove('hidden');
     window.renderAbsensi();
@@ -2214,28 +2330,6 @@ window.renderPengiriman = function() {
 
 window.pendingDeliveryOrderId = null;
 
-window.proceedToCourierSelection = async function(orderId) {
-    window.pendingDeliveryOrderId = orderId;
-    const staffList = await window.getStaffFromDB();
-    const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
-    const today = window.getWibDate().split(" ")[0];
-    const activeClockIns = attendances.filter(a => a.date === today && !a.clockOut).map(a => a.staffName);
-
-    let outletStaff = staffList.filter(s => 
-        (s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'admin' || s.role.toLowerCase() === 'manager') &&
-        activeClockIns.includes(s.name)
-    );
-    
-    let select = document.getElementById("kurir-select");
-    select.innerHTML = "";
-    if (outletStaff.length > 0) {
-        outletStaff.forEach(s => { select.innerHTML += `<option value="${s.name}">${s.name}</option>`; });
-    } else {
-        select.innerHTML = `<option value="${window.currentCashier}">${window.currentCashier} (Kasir Aktif)</option>`;
-    }
-    document.getElementById("kurir-modal").classList.remove("hidden");
-}
-
 window.markDeliveryDone = async function(orderId) {
     const order = await new Promise(res => {
         window.db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = e => res(e.target.result);
@@ -2258,9 +2352,74 @@ window.markDeliveryDone = async function(orderId) {
     window.proceedToCourierSelection(orderId);
 }
 
+window.proceedToCourierSelection = async function(orderId) {
+    window.pendingDeliveryOrderId = orderId;
+    const staffList = await window.getStaffFromDB();
+    const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
+    const today = window.getWibDate().split(" ")[0];
+    const activeClockIns = attendances.filter(a => a.date === today && !a.clockOut).map(a => a.staffName);
+
+    let outletStaff = staffList.filter(s => 
+        (s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'admin' || s.role.toLowerCase() === 'manager') &&
+        activeClockIns.includes(s.name)
+    );
+    
+    let select = document.getElementById("kurir-select");
+    select.innerHTML = "";
+    if (outletStaff.length > 0) {
+        outletStaff.forEach(s => { select.innerHTML += `<option value="${s.name}">${s.name}</option>`; });
+    } else {
+        select.innerHTML = `<option value="${window.currentCashier}">${window.currentCashier} (Kasir Aktif)</option>`;
+    }
+    
+    // 🔥 Inject Pinjam Galon Checkbox Dynamically into Courier Screen
+    let container = select.parentElement;
+    let pinjamDiv = document.getElementById("kurir-pinjam-div");
+    if (!pinjamDiv) {
+        pinjamDiv = document.createElement("div");
+        pinjamDiv.id = "kurir-pinjam-div";
+        pinjamDiv.style.marginTop = "15px";
+        pinjamDiv.style.padding = "10px";
+        pinjamDiv.style.background = "#fdf2e9";
+        pinjamDiv.style.border = "1px solid #e67e22";
+        pinjamDiv.style.borderRadius = "6px";
+        container.appendChild(pinjamDiv);
+    }
+    pinjamDiv.innerHTML = `
+        <label style="display:flex; align-items:center; gap:8px; font-weight:bold; color:#d35400; cursor:pointer;">
+            <input type="checkbox" id="kurir-pinjam-cb" style="width:20px; height:20px;">
+            Pelanggan Pinjam Galon di Lokasi?
+        </label>
+        <div id="kurir-pinjam-qty-div" style="display:none; margin-top:10px;">
+            <label style="font-size:12px; color:#555;">Berapa Galon yang dipinjam?</label>
+            <input type="number" id="kurir-pinjam-qty" placeholder="0" min="1" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px;">
+        </div>
+    `;
+    
+    // Reset Checkbox state
+    document.getElementById("kurir-pinjam-cb").checked = false;
+    document.getElementById("kurir-pinjam-qty-div").style.display = "none";
+    document.getElementById("kurir-pinjam-qty").value = "";
+
+    document.getElementById("kurir-pinjam-cb").addEventListener("change", (e) => {
+        document.getElementById("kurir-pinjam-qty-div").style.display = e.target.checked ? "block" : "none";
+    });
+
+    document.getElementById("kurir-modal").classList.remove("hidden");
+}
+
 window.submitDeliveryDone = function() {
     let courier = document.getElementById("kurir-select").value;
     let orderId = window.pendingDeliveryOrderId;
+    
+    // Check if Pinjam Galon is checked
+    let isPinjam = document.getElementById("kurir-pinjam-cb") ? document.getElementById("kurir-pinjam-cb").checked : false;
+    let pinjamQty = 0;
+    if (isPinjam) {
+        pinjamQty = Number(document.getElementById("kurir-pinjam-qty").value) || 0;
+        if (pinjamQty <= 0) return alert("Harap masukkan jumlah galon yang dipinjam!");
+    }
+
     if (!orderId || !courier) return;
 
     let tx = window.db.transaction(["orders"], "readwrite");
@@ -2269,12 +2428,24 @@ window.submitDeliveryDone = function() {
         if (!order) return;
         
         let doneTime = window.getWibDate(); 
-        let statusText = "Terkirim (" + doneTime + ")";
-        
-        order.deliveryStatus = statusText;
+        order.deliveryStatus = "Terkirim (" + doneTime + ")";
         order.orderStatus = "Completed"; 
         order.courier = courier; 
-        order.syncStatus = "Pending"; // Force robust row update
+        
+        // Add borrowed bottles to the order record AND the member profile instantly
+        if (pinjamQty > 0) {
+            order.rentBottleQty = (order.rentBottleQty || 0) + pinjamQty;
+            window.db.transaction(["members"], "readonly").objectStore("members").get(order.customerPhone).onsuccess = (memEv) => {
+                let mem = memEv.target.result;
+                if (mem) {
+                    mem.bottlesBorrowed = (mem.bottlesBorrowed || 0) + pinjamQty;
+                    window.db.transaction(["members"], "readwrite").objectStore("members").put(mem);
+                    window.db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").put(mem);
+                }
+            };
+        }
+
+        order.syncStatus = "Pending"; 
         tx.objectStore("orders").put(order);
     };
 
@@ -2282,7 +2453,7 @@ window.submitDeliveryDone = function() {
         document.getElementById("kurir-modal").classList.add("hidden");
         window.renderPengiriman();
         if (window.updateLeftBadges) window.updateLeftBadges(); 
-        window.runBackgroundSync(); // Safely trigger sync
+        window.runBackgroundSync(); 
     };
 }
 
