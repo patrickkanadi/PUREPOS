@@ -2200,7 +2200,7 @@ window.showPeminjamTab = function() {
     document.getElementById("piutang-section").classList.add("hidden");
     document.getElementById("glass-overlay").style.display = "none";
     
-    // Inject Peminjam Section dynamically if it doesn't exist
+    // Inject Peminjam Section dynamically into the LEFT panel (next to Piutang)
     let peminjamSec = document.getElementById("peminjam-section");
     if (!peminjamSec) {
         peminjamSec = document.createElement("div");
@@ -2211,16 +2211,30 @@ window.showPeminjamTab = function() {
             <input type="text" id="search-peminjam" placeholder="🔍 Cari Nama Pelanggan atau WA..." oninput="window.renderPeminjamList()" style="width:100%; padding:10px; margin-bottom:15px; border-radius:5px; border:1px solid #ccc;">
             <div id="peminjam-list-container" style="display:flex; flex-direction:column; gap:10px;"></div>
         `;
-        document.getElementById("pos-screen").appendChild(peminjamSec);
+        
+        // 🔥 THE FIX: Place it inside the exact same container as Piutang
+        let piutangSec = document.getElementById("piutang-section");
+        if (piutangSec && piutangSec.parentNode) {
+            piutangSec.parentNode.insertBefore(peminjamSec, piutangSec.nextSibling);
+        } else {
+            document.getElementById("pos-screen").appendChild(peminjamSec);
+        }
     }
     peminjamSec.classList.remove("hidden");
     
-    document.getElementById("tab-new-order").style.background = "transparent"; document.getElementById("tab-new-order").style.color = "#333";
-    document.getElementById("tab-left-pengiriman").style.background = "transparent"; document.getElementById("tab-left-pengiriman").style.color = "#333";
-    document.getElementById("tab-left-piutang").style.background = "transparent"; document.getElementById("tab-left-piutang").style.color = "#333";
+    // Reset other tab colors
+    document.getElementById("tab-new-order").style.background = "transparent"; 
+    document.getElementById("tab-new-order").style.color = "#333";
     
+    let tabPengiriman = document.getElementById("tab-left-pengiriman");
+    if (tabPengiriman) { tabPengiriman.style.background = "transparent"; tabPengiriman.style.color = "#333"; }
+    
+    let tabPiutang = document.getElementById("tab-left-piutang");
+    if (tabPiutang) { tabPiutang.style.background = "transparent"; tabPiutang.style.color = "#333"; }
+    
+    // Highlight active Peminjam tab
     let tabPem = document.getElementById("tab-left-peminjam"); 
-    if(tabPem) { tabPem.style.background = "#2980b9"; tabPem.style.color = "white"; }
+    if (tabPem) { tabPem.style.background = "#2980b9"; tabPem.style.color = "white"; }
     
     window.renderPeminjamList();
 }
@@ -2482,7 +2496,12 @@ window.renderAbsensi = async function() {
     
     window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (e) => {
         let logs = e.target.result.filter(l => l.date === today);
-        let outletStaff = staffList.filter(s => s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'admin' || s.role.toLowerCase() === 'manager');
+        
+        // 🔥 THE FIX: Strictly hide anyone with the "admin" role from the attendance list
+        let outletStaff = staffList.filter(s => 
+            s.role.toLowerCase() !== 'admin' && 
+            (s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'manager')
+        );
 
         outletStaff.forEach(staff => {
             let activeLog = logs.find(l => l.staffName === staff.name && !l.clockOut);
@@ -2499,7 +2518,6 @@ window.renderAbsensi = async function() {
             </div>`;
         });
         
-        // --- NEW: TAMBAH STAFF CEPAT ---
         container.innerHTML += `
         <div style="margin-top: 15px; padding-top: 15px; border-top: 2px dashed #bdc3c7;">
             <p style="margin-top:0; font-weight:bold; color:#2c3e50; font-size:14px;">➕ Tambah Staff Baru Cepat</p>
@@ -2676,6 +2694,17 @@ window.onload = async () => {
         }
     });
 
+    // 🔥 DYNAMIC VERSION INJECTION: Puts "v1.6" directly to the left of "Kasir: "
+    let cashierDisplay = document.getElementById("display-cashier");
+    if (cashierDisplay && cashierDisplay.parentNode) {
+        if (!document.getElementById("app-version-badge")) {
+            let verBadge = document.createElement("span");
+            verBadge.id = "app-version-badge";
+            verBadge.innerHTML = `<span style="background:#f39c12; color:white; padding:3px 8px; border-radius:4px; font-size:12px; margin-right:10px; font-weight:bold; box-shadow: 0 1px 3px rgba(0,0,0,0.3);">v1.6</span>`;
+            cashierDisplay.parentNode.insertBefore(verBadge, cashierDisplay.parentNode.firstChild);
+        }
+    }
+
     await window.initDB(); 
     
     const settings = await window.getDynamicSettings();
@@ -2690,11 +2719,9 @@ window.onload = async () => {
 
     await window.checkAutoCloseShifts(); 
     
-    // Check for Sticky Login
     const isResumed = await window.autoResumeSession();
     
     if (isResumed) {
-        // 🔥 ABSENSI FIX: If they auto-resumed on a new day, auto clock them in!
         const today = window.getWibDate().split(" ")[0];
         const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
         const hasClockedInToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier);
