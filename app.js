@@ -1205,10 +1205,8 @@ window.finalizeOrder = async function(shouldPrint) {
     const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
     const custAddress = document.getElementById("cust-address").value.trim() || "";
 
-    // === NEW: STRICT DELIVERY PAYMENT CHECK ===
     let isDeliveryFinal = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
     if (isDeliveryFinal && cash > 0) return alert("⚠️ PEMBAYARAN DITOLAK:\nPesanan Pengiriman tidak dapat dibayar menggunakan Tunai/Cash di awal.\n\nSilakan gunakan QRIS, Transfer, atau masukkan ke Piutang (agar ditagih oleh kurir).");
-    // ==========================================
 
     if (remaining !== 0) return alert("⚠️ PEMBAYARAN DITOLAK:\nTotal pembayaran (termasuk hutang) harus persis sama dengan Total Akhir.");
     if (debtAmount > 0 && (!custPhone || custPhone === "-")) return alert("⚠️ TRANSAKSI DITOLAK:\nAnda WAJIB memasukkan nomor WhatsApp pelanggan untuk mencatat Piutang.");
@@ -1251,6 +1249,9 @@ window.finalizeOrder = async function(shouldPrint) {
     let updatedWallet = {}; let newPiutang = (window.activeCustomerProfile ? window.activeCustomerProfile.piutang || 0 : 0) + debtAmount;
     let newEarnedRewards = [];
     
+    // 🔥 FIX: Generate rentLogId immediately so the frontend never loses it
+    let localRentLogId = rentBottleQty > 0 ? "PJG-" + Date.now() : null;
+
     if (window.loyaltyEnabled && window.activeCustomerProfile) {
         updatedWallet = JSON.parse(JSON.stringify(window.activeCustomerProfile.wallet || {})); 
         
@@ -1303,20 +1304,34 @@ window.finalizeOrder = async function(shouldPrint) {
         }
 
         window.activeCustomerProfile.piutang = newPiutang;
+        
+        // Push rental breakdown to profile instantly
+        if (localRentLogId) {
+            if (!window.activeCustomerProfile.rentalBreakdown) window.activeCustomerProfile.rentalBreakdown = [];
+            window.activeCustomerProfile.rentalBreakdown.push({ logId: localRentLogId, orderId: "ORD-" + Date.now(), sisa: rentBottleQty, date: window.getWibDate() });
+        }
+
         window.saveMemberToDB(window.activeCustomerProfile.phone, window.activeCustomerProfile.name, updatedWallet, window.activeCustomerProfile.bottlesBorrowed + rentBottleQty, newPiutang, window.activeCustomerProfile.firstOutlet, window.activeCustomerProfile.recentOutlets);
     } else if (custPhone !== "-") {
         let fOut = window.activeCustomerProfile ? window.activeCustomerProfile.firstOutlet : window.currentOutlet; let rOut = window.activeCustomerProfile ? window.activeCustomerProfile.recentOutlets : window.currentOutlet;
+        
+        // Push rental breakdown to profile instantly
+        if (localRentLogId && window.activeCustomerProfile) {
+            if (!window.activeCustomerProfile.rentalBreakdown) window.activeCustomerProfile.rentalBreakdown = [];
+            window.activeCustomerProfile.rentalBreakdown.push({ logId: localRentLogId, orderId: "ORD-" + Date.now(), sisa: rentBottleQty, date: window.getWibDate() });
+        }
+
         window.saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount, fOut, rOut);
     }
 
-    // FIX: Catch any word containing "Kirim" in Name, Category, or SubCategory
     let isDelivery = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
-    let finalStatus = isDelivery ? "Proses Kirim" : "Completed"; // Keep it pending until delivered!
+    let finalStatus = isDelivery ? "Proses Kirim" : "Completed";
 
     const orderPayload = {
         orderId: "ORD-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId,
         customerName: custName, customerPhone: custPhone, customerAddress: custAddress, orderStatus: finalStatus, items: window.currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
         paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, debtAmount: debtAmount,
+        rentLogId: localRentLogId, // 🔥 Passes local ID to backend
         loyaltyChanges: loyaltyChanges, freeItemsRedeemed: freeItemsRedeemed, 
         isDelivery: isDelivery, deliveryStatus: isDelivery ? "Pending" : "-",
         redeemedPromos: redeemedPromos, newEarnedRewards: newEarnedRewards, finalStoredRewards: JSON.stringify(updatedWallet),
@@ -1334,7 +1349,7 @@ window.finalizeOrder = async function(shouldPrint) {
     }
     
     window.closeReview(); window.lockMenu(); window.renderProductGrid(); window.runBackgroundSync();
-    if(window.updateLeftBadges) window.updateLeftBadges(); // Force update badge instantly
+    if(window.updateLeftBadges) window.updateLeftBadges(); 
 }
 
 window.getDynamicSettings = async function() { return new Promise(res => { let req = window.db.transaction(["settings"], "readonly").objectStore("settings").getAll(); req.onsuccess = e => { let s = {}; e.target.result.forEach(row => s[row.key] = row.value); res(s); }; }); }
@@ -2513,7 +2528,33 @@ window.submitDeliveryDone = function() {
         order.deliveryStatus = "Terkirim (" + window.getWibDate() + ")";
         order.orderStatus = "Completed"; 
         order.courier = courier; 
-        order.swapGalon = isSwap; // Save swap status purely for records
+        order.swapGalon = isSwap; 
+
+        // 🔥 FIX: Check if there's a new Pinjam Galon during delivery
+        let isPinjam = document.getElementById("kurir-pinjam-cb") ? document.getElementById("kurir-pinjam-cb").checked : false;
+        let pinjamQty = 0;
+        if (isPinjam) {
+            pinjamQty = Number(document.getElementById("kurir-pinjam-qty").value) || 0;
+            if (pinjamQty > 0) {
+                order.rentBottleQty = (order.rentBottleQty || 0) + pinjamQty;
+                order.rentLogId = "PJG-" + Date.now(); // Generate ID instantly
+                
+                // Immediately attach it to the local customer profile so it doesn't disappear!
+                window.db.transaction(["members"], "readwrite").objectStore("members").get(order.customerPhone).onsuccess = (memEv) => {
+                    let mem = memEv.target.result;
+                    if (mem) {
+                        mem.bottlesBorrowed = (mem.bottlesBorrowed || 0) + pinjamQty;
+                        if (!mem.rentalBreakdown) mem.rentalBreakdown = [];
+                        mem.rentalBreakdown.push({ logId: order.rentLogId, orderId: orderId, sisa: pinjamQty, date: window.getWibDate() });
+                        
+                        let t2 = window.db.transaction(["members", "unsynced_members"], "readwrite");
+                        t2.objectStore("members").put(mem);
+                        t2.objectStore("unsynced_members").put(mem);
+                    }
+                };
+            }
+        }
+
         order.syncStatus = "Pending"; 
         tx.objectStore("orders").put(order);
     };
@@ -2525,7 +2566,6 @@ window.submitDeliveryDone = function() {
         window.runBackgroundSync(); 
     };
 }
-
 window.renderAbsensi = async function() {
     const container = document.getElementById("absensi-list"); container.innerHTML = "";
     const staffList = await window.getStaffFromDB();
