@@ -2137,6 +2137,55 @@ window.runBackgroundSync = async function() {
     } finally { window.isSyncing = false; }
 }
 
+window.updateTabStyles = function(activeId) {
+    const tabs = [
+        { id: "tab-new-order", color: "#3498db" },
+        { id: "tab-left-pengiriman", color: "#8e44ad" },
+        { id: "tab-left-piutang", color: "#d35400" },
+        { id: "tab-left-peminjam", color: "#2980b9" }
+    ];
+    
+    tabs.forEach(tab => {
+        let btn = document.getElementById(tab.id);
+        if (!btn) return;
+        
+        // Base pretty styles for a modern UI
+        btn.style.padding = "12px 15px";
+        btn.style.borderRadius = "8px";
+        btn.style.fontWeight = "bold";
+        btn.style.border = "none";
+        btn.style.cursor = "pointer";
+        btn.style.transition = "all 0.3s ease";
+        btn.style.flex = "1";
+        btn.style.minWidth = "120px";
+        
+        // Auto-align the parent container into a clean grid
+        let parent = btn.parentElement;
+        if (parent && parent.tagName === "DIV") {
+            parent.style.display = "flex";
+            parent.style.flexWrap = "wrap";
+            parent.style.gap = "10px";
+            parent.style.marginBottom = "15px";
+            parent.style.paddingBottom = "15px";
+            parent.style.borderBottom = "2px dashed #ecf0f1";
+        }
+
+        // Active vs Inactive state animations
+        if (tab.id === activeId) {
+            btn.style.background = tab.color;
+            btn.style.color = "white";
+            btn.style.transform = "translateY(-2px)";
+            btn.style.boxShadow = "0 4px 8px rgba(0,0,0,0.2)";
+        } else {
+            btn.style.background = "#f8f9fa";
+            btn.style.color = "#2c3e50";
+            btn.style.transform = "translateY(0)";
+            btn.style.boxShadow = "0 2px 4px rgba(0,0,0,0.05)";
+            btn.style.border = "1px solid #e0e0e0";
+        }
+    });
+}
+
 window.showNewOrder = function() {
     document.getElementById("pengiriman-section").classList.add("hidden");
     document.getElementById("piutang-section").classList.add("hidden");
@@ -2147,11 +2196,7 @@ window.showNewOrder = function() {
     document.getElementById("product-grid").classList.remove("hidden");
     document.getElementById("glass-overlay").style.display = window.isMenuLocked ? "flex" : "none"; 
     
-    document.getElementById("tab-left-pengiriman").style.background = "transparent"; document.getElementById("tab-left-pengiriman").style.color = "#333";
-    document.getElementById("tab-left-piutang").style.background = "transparent"; document.getElementById("tab-left-piutang").style.color = "#333";
-    let tabPem = document.getElementById("tab-left-peminjam"); if(tabPem) { tabPem.style.background = "transparent"; tabPem.style.color = "#333"; }
-    
-    document.getElementById("tab-new-order").style.background = "#3498db"; document.getElementById("tab-new-order").style.color = "white";
+    window.updateTabStyles("tab-new-order");
 }
 
 window.showPengirimanTab = function() {
@@ -2164,11 +2209,7 @@ window.showPengirimanTab = function() {
     document.getElementById("pengiriman-section").classList.remove("hidden");
     document.getElementById("glass-overlay").style.display = "none"; 
     
-    document.getElementById("tab-new-order").style.background = "transparent"; document.getElementById("tab-new-order").style.color = "#333";
-    document.getElementById("tab-left-piutang").style.background = "transparent"; document.getElementById("tab-left-piutang").style.color = "#333";
-    let tabPem = document.getElementById("tab-left-peminjam"); if(tabPem) { tabPem.style.background = "transparent"; tabPem.style.color = "#333"; }
-    
-    document.getElementById("tab-left-pengiriman").style.background = "#8e44ad"; document.getElementById("tab-left-pengiriman").style.color = "white";
+    window.updateTabStyles("tab-left-pengiriman");
     window.renderPengiriman();
 }
 
@@ -2182,12 +2223,7 @@ window.showPiutangTab = function() {
     document.getElementById("piutang-section").classList.remove("hidden");
     document.getElementById("glass-overlay").style.display = "none"; 
     
-    document.getElementById("tab-new-order").style.background = "transparent"; document.getElementById("tab-new-order").style.color = "#333";
-    document.getElementById("tab-left-pengiriman").style.background = "transparent"; document.getElementById("tab-left-pengiriman").style.color = "#333";
-    let tabPem = document.getElementById("tab-left-peminjam"); if(tabPem) { tabPem.style.background = "transparent"; tabPem.style.color = "#333"; }
-    
-    document.getElementById("tab-left-piutang").style.background = "#d35400"; document.getElementById("tab-left-piutang").style.color = "white";
-    
+    window.updateTabStyles("tab-left-piutang");
     window.renderPiutangList();
     document.getElementById("search-piutang").value = "";
 }
@@ -2200,7 +2236,6 @@ window.showPeminjamTab = function() {
     document.getElementById("piutang-section").classList.add("hidden");
     document.getElementById("glass-overlay").style.display = "none";
     
-    // Inject Peminjam Section dynamically into the LEFT panel (next to Piutang)
     let peminjamSec = document.getElementById("peminjam-section");
     if (!peminjamSec) {
         peminjamSec = document.createElement("div");
@@ -2208,11 +2243,9 @@ window.showPeminjamTab = function() {
         peminjamSec.style.padding = "20px";
         peminjamSec.innerHTML = `
             <h2 style="margin-top:0; color:#2c3e50;">📦 Daftar Peminjam Galon</h2>
-            <input type="text" id="search-peminjam" placeholder="🔍 Cari Nama Pelanggan atau WA..." oninput="window.renderPeminjamList()" style="width:100%; padding:10px; margin-bottom:15px; border-radius:5px; border:1px solid #ccc;">
-            <div id="peminjam-list-container" style="display:flex; flex-direction:column; gap:10px;"></div>
+            <input type="text" id="search-peminjam" placeholder="🔍 Cari Nama Pelanggan atau WA..." oninput="window.renderPeminjamList()" style="width:100%; padding:12px; margin-bottom:15px; border-radius:8px; border:1px solid #ccc; font-size:14px; box-shadow:inset 0 1px 3px rgba(0,0,0,0.05);">
+            <div id="peminjam-list-container" style="display:flex; flex-direction:column; gap:12px;"></div>
         `;
-        
-        // 🔥 THE FIX: Place it inside the exact same container as Piutang
         let piutangSec = document.getElementById("piutang-section");
         if (piutangSec && piutangSec.parentNode) {
             piutangSec.parentNode.insertBefore(peminjamSec, piutangSec.nextSibling);
@@ -2222,20 +2255,7 @@ window.showPeminjamTab = function() {
     }
     peminjamSec.classList.remove("hidden");
     
-    // Reset other tab colors
-    document.getElementById("tab-new-order").style.background = "transparent"; 
-    document.getElementById("tab-new-order").style.color = "#333";
-    
-    let tabPengiriman = document.getElementById("tab-left-pengiriman");
-    if (tabPengiriman) { tabPengiriman.style.background = "transparent"; tabPengiriman.style.color = "#333"; }
-    
-    let tabPiutang = document.getElementById("tab-left-piutang");
-    if (tabPiutang) { tabPiutang.style.background = "transparent"; tabPiutang.style.color = "#333"; }
-    
-    // Highlight active Peminjam tab
-    let tabPem = document.getElementById("tab-left-peminjam"); 
-    if (tabPem) { tabPem.style.background = "#2980b9"; tabPem.style.color = "white"; }
-    
+    window.updateTabStyles("tab-left-peminjam");
     window.renderPeminjamList();
 }
 
@@ -2694,7 +2714,6 @@ window.onload = async () => {
         }
     });
 
-    // 🔥 DYNAMIC VERSION INJECTION: Puts "v1.6" directly to the left of "Kasir: "
     let cashierDisplay = document.getElementById("display-cashier");
     if (cashierDisplay && cashierDisplay.parentNode) {
         if (!document.getElementById("app-version-badge")) {
@@ -2705,12 +2724,22 @@ window.onload = async () => {
         }
     }
 
+    // Apply pretty tab styles instantly on load
+    if (typeof window.updateTabStyles === "function") {
+        window.updateTabStyles("tab-new-order");
+    }
+
+    // 🔥 DYNAMIC LOADING TEXT FOR FIRST BOOT
+    const selectBox = document.getElementById("login-outlet");
+    if (selectBox && selectBox.options.length <= 1) {
+        selectBox.innerHTML = `<option value="AUTO">⏳ Memuat Daftar Cabang...</option>`;
+    }
+
     await window.initDB(); 
     
     const settings = await window.getDynamicSettings();
     if (settings["Outlet_List"]) {
         const outletArray = String(settings["Outlet_List"]).split(",").map(s => s.trim()); 
-        const selectBox = document.getElementById("login-outlet");
         if (selectBox) { 
             selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); 
         }
