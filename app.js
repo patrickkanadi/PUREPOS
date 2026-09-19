@@ -1,9 +1,8 @@
 const API_URL = "https://script.google.com/macros/s/AKfycby1vEpawIrDgATXZUHsmmjpmUu3hvLrZPuram0_uandmWwmABr7BIDSOlA1ojrPcu_P/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 18; //
+const DB_VERSION = 19; // 🔥 Bump to 19 to force cache refresh
+const APP_VERSION = "1.8"; // 🔥 Added explicit App Version
 window.db = null;
-
-console.log("✅ PURE POS - Version 1.6 Active"); // You can see this in the browser console
 
 // Core State
 window.posSessions = [{ cart: [], customer: null }, { cart: [], customer: null }, { cart: [], customer: null }];
@@ -2291,46 +2290,73 @@ window.renderPeminjamList = function() {
     if(!container) return;
     container.innerHTML = "";
     
-    window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
-        let members = e.target.result.filter(m => m.rentalBreakdown && m.rentalBreakdown.length > 0);
+    // Fetch local orders to supplement server data
+    window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (ordEv) => {
+        let allOrders = ordEv.target.result;
         
-        if (filter) members = members.filter(m => String(m.name).toLowerCase().includes(filter) || String(m.phone).includes(filter));
-        if (members.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Tidak ada data peminjam galon saat ini.</div>`; return; }
-        
-        members.forEach(m => {
-            let totalBorrowed = m.rentalBreakdown.reduce((sum, r) => sum + r.sisa, 0);
+        window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
+            // 🔥 FILTER: Uses the bulletproof integer "Just like before"
+            let members = e.target.result.filter(m => (m.bottlesBorrowed || 0) > 0);
+            
+            if (filter) members = members.filter(m => String(m.name).toLowerCase().includes(filter) || String(m.phone).includes(filter));
+            if (members.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Tidak ada data peminjam galon saat ini.</div>`; return; }
+            
+            members.forEach(m => {
+                let combinedBreakdown = [];
+                
+                // 1. Add server breakdown if available
+                if (m.rentalBreakdown && m.rentalBreakdown.length > 0) {
+                    m.rentalBreakdown.forEach(r => combinedBreakdown.push(r));
+                }
+                
+                // 2. Add any local un-synced orders to prevent them from missing
+                let localMemOrders = allOrders.filter(o => o.customerPhone === m.phone && (o.rentBottleQty || 0) > 0 && o.orderStatus !== "Voided");
+                localMemOrders.forEach(o => {
+                    if (!combinedBreakdown.some(b => b.orderId === o.orderId)) {
+                        combinedBreakdown.push({
+                            logId: o.rentLogId || ("PJG-" + o.orderId), 
+                            orderId: o.orderId, 
+                            sisa: o.rentBottleQty, 
+                            date: o.timestamp
+                        });
+                    }
+                });
 
-            // Build the expandable list of specific orders
-            let breakdownHtml = m.rentalBreakdown.map(r => {
-                return `
-                <div style="display:flex; justify-content:space-between; align-items:center; background:#fff; padding:10px; border-radius:4px; margin-top:8px; border:1px solid #d6eaf8;">
-                    <div style="font-size:13px; color:#34495e;">
-                        <strong>Nota: ${r.orderId}</strong><br>
-                        📅 ${window.formatDateReadable(r.date)}<br>
-                        📦 Sisa Pinjam: <strong style="color:#e74c3c;">${r.sisa} Galon</strong>
-                    </div>
-                    <div style="display:flex; gap:5px; align-items:center;">
-                        <input type="number" id="ret-qty-${r.logId}" placeholder="Jml" min="1" max="${r.sisa}" style="width:60px; padding:6px; border:1px solid #ccc; border-radius:4px; font-size:13px;">
-                        <button onclick="window.submitReturnGalon('${m.phone}', '${m.name}', '${r.logId}', '${r.orderId}', ${r.sisa})" style="background:#27ae60; color:white; border:none; padding:6px 10px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:12px;">Simpan</button>
-                    </div>
-                </div>
-                `;
-            }).join("");
-
-            container.innerHTML += `
-                <div style="border:1px solid #bdc3c7; border-left:5px solid #2980b9; padding:15px; border-radius:6px; background:#ebf5fb; margin-bottom:10px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="document.getElementById('brk-${m.phone}').classList.toggle('hidden')">
-                        <div>
-                            <strong style="color:#2c3e50; font-size:16px;">${m.name}</strong> <span style="font-size:14px; color:#7f8c8d;">(${m.phone})</span><br>
-                            📦 <strong style="color:#2980b9; font-size:15px;">Total Meminjam: ${totalBorrowed} Galon</strong>
+                let breakdownHtml = combinedBreakdown.map(r => {
+                    return `
+                    <div style="display:flex; justify-content:space-between; align-items:center; background:#fff; padding:10px; border-radius:4px; margin-top:8px; border:1px solid #d6eaf8;">
+                        <div style="font-size:13px; color:#34495e;">
+                            <strong>Nota: ${r.orderId}</strong><br>
+                            📅 ${window.formatDateReadable(r.date)}<br>
+                            📦 Sisa Pinjam: <strong style="color:#e74c3c;">${r.sisa} Galon</strong>
                         </div>
-                        <div style="color:#2980b9; font-weight:bold;">Lihat Nota ⬇️</div>
+                        <div style="display:flex; gap:5px; align-items:center;">
+                            <input type="number" id="ret-qty-${r.logId}" placeholder="Jml" min="1" max="${r.sisa}" style="width:60px; padding:6px; border:1px solid #ccc; border-radius:4px; font-size:13px;">
+                            <button onclick="window.submitReturnGalon('${m.phone}', '${m.name}', '${r.logId}', '${r.orderId}', ${r.sisa})" style="background:#27ae60; color:white; border:none; padding:6px 10px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:12px;">Simpan</button>
+                        </div>
                     </div>
-                    <div id="brk-${m.phone}" class="hidden" style="margin-top:10px; border-top:1px dashed #bdc3c7; padding-top:10px;">
-                        ${breakdownHtml}
-                    </div>
-                </div>`;
-        });
+                    `;
+                }).join("");
+
+                if (combinedBreakdown.length === 0) {
+                    breakdownHtml = `<div style="font-size:12px; color:#7f8c8d; font-style:italic;">Data spesifik nota belum tersinkron dari server.</div>`;
+                }
+
+                container.innerHTML += `
+                    <div style="border:1px solid #bdc3c7; border-left:5px solid #2980b9; padding:15px; border-radius:6px; background:#ebf5fb; margin-bottom:10px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="document.getElementById('brk-${m.phone}').classList.toggle('hidden')">
+                            <div>
+                                <strong style="color:#2c3e50; font-size:16px;">${m.name}</strong> <span style="font-size:14px; color:#7f8c8d;">(${m.phone})</span><br>
+                                📦 <strong style="color:#2980b9; font-size:15px;">Total Meminjam: ${m.bottlesBorrowed} Galon</strong>
+                            </div>
+                            <div style="color:#2980b9; font-weight:bold;">Lihat Nota ⬇️</div>
+                        </div>
+                        <div id="brk-${m.phone}" class="hidden" style="margin-top:10px; border-top:1px dashed #bdc3c7; padding-top:10px;">
+                            ${breakdownHtml}
+                        </div>
+                    </div>`;
+            });
+        };
     };
 }
 
@@ -2351,7 +2377,7 @@ window.submitReturnGalon = function(phone, name, targetLogId, targetOrderId, max
         if (mem) {
             mem.bottlesBorrowed = Math.max(0, mem.bottlesBorrowed - qty);
             
-            // Instantly update the UI breakdown without waiting for server sync
+            // Instantly update the UI breakdown
             if (mem.rentalBreakdown) {
                 let r = mem.rentalBreakdown.find(x => x.logId === targetLogId);
                 if (r) {
@@ -2359,6 +2385,15 @@ window.submitReturnGalon = function(phone, name, targetLogId, targetOrderId, max
                     if (r.sisa <= 0) mem.rentalBreakdown = mem.rentalBreakdown.filter(x => x.logId !== targetLogId);
                 }
             }
+
+            // Also update local order just in case it's a local-only order
+            window.db.transaction(["orders"], "readwrite").objectStore("orders").get(targetOrderId).onsuccess = (ordEv) => {
+                let ord = ordEv.target.result;
+                if (ord) {
+                    ord.rentBottleQty = Math.max(0, ord.rentBottleQty - qty);
+                    window.db.transaction(["orders"], "readwrite").objectStore("orders").put(ord);
+                }
+            };
             
             let tx2 = window.db.transaction(["members", "unsynced_members"], "readwrite");
             tx2.objectStore("members").put(mem);
@@ -2388,7 +2423,9 @@ window.updateLeftBadges = function() {
         e.target.result.forEach(m => {
             let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : m.piutang;
             if (localP > 0) pCount++;
-            if (m.rentalBreakdown && m.rentalBreakdown.length > 0) bCount++;
+            
+            // 🔥 RESTORED TO JUST LIKE BEFORE: Uses the bulletproof integer
+            if ((m.bottlesBorrowed || 0) > 0) bCount++;
         });
         let pBtn = document.getElementById("tab-left-piutang");
         if (pBtn) { pBtn.innerText = pCount > 0 ? "📒 Piutang (" + pCount + ")" : "📒 Piutang"; }
@@ -2771,12 +2808,13 @@ window.onload = async () => {
         }
     });
 
+    // 🔥 DYNAMIC VERSION INJECTION: Puts "App vX | DB vY" directly to the left of "Kasir: "
     let cashierDisplay = document.getElementById("display-cashier");
     if (cashierDisplay && cashierDisplay.parentNode) {
         if (!document.getElementById("app-version-badge")) {
             let verBadge = document.createElement("span");
             verBadge.id = "app-version-badge";
-            verBadge.innerHTML = `<span style="background:#f39c12; color:white; padding:3px 8px; border-radius:4px; font-size:12px; margin-right:10px; font-weight:bold; box-shadow: 0 1px 3px rgba(0,0,0,0.3);">v1.6</span>`;
+            verBadge.innerHTML = `<span style="background:#f39c12; color:white; padding:3px 8px; border-radius:4px; font-size:12px; margin-right:10px; font-weight:bold; box-shadow: 0 1px 3px rgba(0,0,0,0.3);">App v${APP_VERSION} | DB v${DB_VERSION}</span>`;
             cashierDisplay.parentNode.insertBefore(verBadge, cashierDisplay.parentNode.firstChild);
         }
     }
