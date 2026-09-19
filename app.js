@@ -1559,15 +1559,27 @@ window.openHistoryModal = function() { document.getElementById("history-modal").
 window.renderHistoryList = function(type) {
     const container = document.getElementById("history-container"); container.innerHTML = "";
     
-    // Get strictly today's date format (YYYY-MM-DD)
+    // 1. Get strictly today's date format (YYYY-MM-DD)
     const todayStr = window.getWibDate().split(" ")[0]; 
+    
+    // 2. Calculate exactly yesterday's date format
+    const d = new Date(); 
+    const utc = d.getTime() + (d.getTimezoneOffset() * 60000); 
+    const nd = new Date(utc + (3600000 * 7)); // Current WIB time
+    nd.setDate(nd.getDate() - 1); // Subtract 1 day
+    const pad = n => n < 10 ? '0' + n : n;
+    const yesterdayStr = `${nd.getFullYear()}-${pad(nd.getMonth()+1)}-${pad(nd.getDate())}`;
 
     if (type === 'orders') {
         window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-            // 🔥 FILTER: Only show orders from today and from this branch
-            const shiftOrders = e.target.result.filter(o => o.outlet === window.currentOutlet && String(o.timestamp).startsWith(todayStr)).reverse(); 
+            // 🔥 FILTER: Only show orders from TODAY or YESTERDAY in this branch
+            const shiftOrders = e.target.result.filter(o => {
+                const ts = String(o.timestamp);
+                return o.outlet === window.currentOutlet && (ts.startsWith(todayStr) || ts.startsWith(yesterdayStr));
+            }).reverse(); 
             
-            if(shiftOrders.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada order hari ini di cabang ini.</div>`;
+            if(shiftOrders.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada order hari ini atau kemarin di cabang ini.</div>`;
+            
             shiftOrders.forEach(o => {
                 let badge = o.orderStatus === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : o.orderStatus === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">${o.orderStatus}</span>`; 
                 let piutangBadge = (o.debtAmount || 0) > 0 ? `<br><span style="font-size:12px; color:#c0392b; font-weight:bold;">⚠️ Piutang: Rp ${(o.debtAmount).toLocaleString('id-ID')}</span>` : '';
@@ -1580,9 +1592,14 @@ window.renderHistoryList = function(type) {
         };
     } else if (type === 'expenses') {
         window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (e) => {
-            // Expenses also filtered to today
-            const shiftExpenses = e.target.result.filter(exp => exp.outlet === window.currentOutlet && String(exp.timestamp).startsWith(todayStr)).reverse();
-            if(shiftExpenses.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada pengeluaran hari ini.</div>`;
+            // Expenses also filtered to TODAY and YESTERDAY
+            const shiftExpenses = e.target.result.filter(exp => {
+                const ts = String(exp.timestamp);
+                return exp.outlet === window.currentOutlet && (ts.startsWith(todayStr) || ts.startsWith(yesterdayStr));
+            }).reverse();
+            
+            if(shiftExpenses.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada pengeluaran hari ini atau kemarin.</div>`;
+            
             shiftExpenses.forEach(exp => {
                 let badge = exp.status === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : exp.status === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">Aktif</span>`;
                 let btn = (exp.status !== "Voided" && exp.status !== "Void Pending") ? `<button onclick="window.requestVoid('expenses', '${exp.expenseId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Batal/Void</button>` : '';
@@ -1591,9 +1608,10 @@ window.renderHistoryList = function(type) {
         };
     } else if (type === 'shifts') {
         window.db.transaction(["shift_reports"], "readonly").objectStore("shift_reports").getAll().onsuccess = (e) => {
-            // Shift history loads last 50 normally since they span longer times
+            // Shift history loads last 50 normally since they span longer times (you rarely have 50 shifts in one week)
             const shifts = e.target.result.filter(s => s.outlet === window.currentOutlet).reverse().slice(0, 50);
             if(shifts.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada histori shift di cabang ini.</div>`;
+            
             shifts.forEach(s => {
                 let pGiven = (s.piutangGiven || 0) > 0 ? `<br><small style="color:#c0392b;">Piutang KLR: Rp ${(s.piutangGiven).toLocaleString('id-ID')}</small>` : '';
                 let pPaid = (s.piutangPaid || 0) > 0 ? `<br><small style="color:#8e44ad;">Piutang MSK: Rp ${(s.piutangPaid).toLocaleString('id-ID')}</small>` : '';
