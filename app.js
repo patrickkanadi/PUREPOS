@@ -1,6 +1,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycby1vEpawIrDgATXZUHsmmjpmUu3hvLrZPuram0_uandmWwmABr7BIDSOlA1ojrPcu_P/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 16; // 🔥 BUMP TO 16 TO FORCE CACHE REFRESH
+const DB_VERSION = 17; //
 window.db = null;
 
 console.log("✅ PURE POS - Version 1.6 Active"); // You can see this in the browser console
@@ -48,6 +48,7 @@ window.initDB = function() {
             if (!window.db.objectStoreNames.contains("cuci_tandon")) window.db.createObjectStore("cuci_tandon", { keyPath: "logId" });
             if (!window.db.objectStoreNames.contains("lapor_masalah")) window.db.createObjectStore("lapor_masalah", { keyPath: "logId" });
             if (!window.db.objectStoreNames.contains("bayar_piutang")) window.db.createObjectStore("bayar_piutang", { keyPath: "payId" });
+            if (!window.db.objectStoreNames.contains("kembali_galon")) window.db.createObjectStore("kembali_galon", { keyPath: "logId" });
             if (!window.db.objectStoreNames.contains("attendance")) window.db.createObjectStore("attendance", { keyPath: "logId" });
         };
         request.onsuccess = (e) => { window.db = e.target.result; resolve(window.db); };
@@ -1485,7 +1486,6 @@ window.openInboundModal = function() {
     tanks.forEach(t => { select.innerHTML += `<option value="${t.name}">💧 ${t.name}</option>`; });
     if (tanks.length === 0) { select.innerHTML = `<option value="Tangki Air RO">💧 Tangki Air RO</option><option value="Tangki Air Standar">💧 Tangki Air Standar</option>`; }
     
-    // Explicitly ask for Galon in the UI
     const qtyInput = document.getElementById("inbound-qty");
     if (qtyInput) qtyInput.placeholder = "Berapa Galon (19L)?";
     
@@ -1499,15 +1499,14 @@ window.submitInbound = function() {
     const targetTank = document.getElementById("inbound-tank-target").value; 
     const notes = document.getElementById("inbound-notes").value.trim();
     
-    // 🔥 MANDATORY CHECK: Prevent submitting if any field is empty or 0
+    // MANDATORY CHECK: Prevent submitting if any field is empty or 0
     if (qtyGalon <= 0 || !targetTank || notes === "") {
         return alert("⚠️ TRANSAKSI DITOLAK:\nHarap isi SEMUA kolom (Jumlah Galon, Target Tangki, dan Catatan/Supplier)!");
     }
 
-    // Convert Galon to Liters for the backend spreadsheet (1 Galon = 19 Liters)
     const qtyLiters = qtyGalon * 19; 
-    
     const payload = { logId: "INB-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId, itemName: targetTank, qty: qtyLiters, notes: notes, outlet: window.currentOutlet, syncStatus: "Pending" };
+    
     window.db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").add(payload); 
     document.getElementById("inbound-modal").classList.add("hidden"); 
     
@@ -2066,6 +2065,7 @@ window.runBackgroundSync = async function() {
         let cuciLogs = await new Promise(res => tx.objectStore("cuci_tandon").getAll().onsuccess = e => res(e.target.result));
         let laporLogs = await new Promise(res => tx.objectStore("lapor_masalah").getAll().onsuccess = e => res(e.target.result));
         let attendances = await new Promise(res => tx.objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
+        let kembalis = await new Promise(res => tx.objectStore("kembali_galon").getAll().onsuccess = e => res(e.target.result));
 
         // 2. THEN DO THE INTERNET FETCHES
         for (const order of orders) {
@@ -2109,6 +2109,16 @@ window.runBackgroundSync = async function() {
         }
         for (const log of laporLogs) {
             if (log.syncStatus === "Pending") { try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncLaporMasalah", data: log }) }); if ((await r.json()).status === "Success") { window.db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").delete(log.logId); } } catch(e) {} }
+        }
+        for (const kmb of kembalis) {
+            if (kmb.syncStatus === "Pending") {
+                try { 
+                    let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncKembaliGalon", data: kmb }) }); 
+                    if ((await r.json()).status === "Success") { 
+                        window.db.transaction(["kembali_galon"], "readwrite").objectStore("kembali_galon").delete(kmb.logId); 
+                    } 
+                } catch(e) {}
+            }
         }
         
         // --- NEW: UPLOAD ABSENSI KE GOOGLE SHEETS ---
@@ -2266,24 +2276,35 @@ window.renderPeminjamList = function() {
     if(!container) return;
     container.innerHTML = "";
     
-    window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
-        let members = e.target.result.filter(m => (m.bottlesBorrowed || 0) > 0);
+    // Fetch orders to show context tags
+    window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (ordEv) => {
+        let allOrders = ordEv.target.result;
         
-        if (filter) members = members.filter(m => String(m.name).toLowerCase().includes(filter) || String(m.phone).includes(filter));
-        if (members.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Tidak ada data pelanggan yang meminjam galon saat ini.</div>`; return; }
-        
-        members.forEach(m => {
-            container.innerHTML += `
-                <div style="border:1px solid #bdc3c7; border-left:5px solid #2980b9; padding:15px; border-radius:6px; background:#ebf5fb; display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
-                    <div>
-                        <strong style="color:#2c3e50; font-size:16px;">${m.name}</strong> <span style="font-size:14px; color:#7f8c8d;">(${m.phone})</span><br>
-                        📦 <strong style="color:#2980b9; font-size:16px;">Meminjam ${m.bottlesBorrowed} Galon</strong>
-                    </div>
-                    <div>
-                        <button onclick="window.returnGalon('${m.phone}', '${m.name}', ${m.bottlesBorrowed})" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">✅ Kembalikan</button>
-                    </div>
-                </div>`;
-        });
+        window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
+            let members = e.target.result.filter(m => (m.bottlesBorrowed || 0) > 0);
+            
+            if (filter) members = members.filter(m => String(m.name).toLowerCase().includes(filter) || String(m.phone).includes(filter));
+            if (members.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Tidak ada data pelanggan yang meminjam galon saat ini.</div>`; return; }
+            
+            members.forEach(m => {
+                // Find all recent local orders where this customer borrowed bottles
+                let memOrders = allOrders.filter(o => o.customerPhone === m.phone && o.rentBottleQty > 0);
+                let orderTags = memOrders.map(o => `<span style="background:#ecf0f1; padding:3px 6px; border-radius:4px; font-size:11px; margin-right:5px; border:1px solid #bdc3c7;">Nota: ${o.orderId} (${o.rentBottleQty} Gln)</span>`).join("");
+                if (!orderTags) orderTags = `<span style="font-size:11px; color:#7f8c8d;">(Data nota peminjaman berada di arsip lama)</span>`;
+
+                container.innerHTML += `
+                    <div style="border:1px solid #bdc3c7; border-left:5px solid #2980b9; padding:15px; border-radius:6px; background:#ebf5fb; display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <strong style="color:#2c3e50; font-size:16px;">${m.name}</strong> <span style="font-size:14px; color:#7f8c8d;">(${m.phone})</span><br>
+                            📦 <strong style="color:#2980b9; font-size:16px;">Meminjam ${m.bottlesBorrowed} Galon</strong><br>
+                            <div style="margin-top:6px;">${orderTags}</div>
+                        </div>
+                        <div>
+                            <button onclick="window.returnGalon('${m.phone}', '${m.name}', ${m.bottlesBorrowed})" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">✅ Kembalikan</button>
+                        </div>
+                    </div>`;
+            });
+        };
     };
 }
 
@@ -2294,6 +2315,10 @@ window.returnGalon = function(phone, name, currentBorrowed) {
     if (isNaN(qty) || qty <= 0) return alert("Jumlah tidak valid.");
     if (qty > currentBorrowed) return alert("Jumlah melebihi total galon yang dipinjam!");
     
+    // Create the backend log payload
+    let payload = { logId: "KMB-" + Date.now(), timestamp: window.getWibDate(), customerName: name, customerPhone: phone, qtyReturn: qty, cashier: window.currentCashier, outlet: window.currentOutlet, syncStatus: "Pending" };
+    window.db.transaction(["kembali_galon"], "readwrite").objectStore("kembali_galon").add(payload);
+
     window.db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
         let mem = e.target.result;
         if (mem) {
@@ -2424,14 +2449,14 @@ window.proceedToCourierSelection = async function(orderId) {
         select.innerHTML = `<option value="${window.currentCashier}">${window.currentCashier} (Kasir Aktif)</option>`;
     }
     
-    // 🔥 Inject Pinjam Galon Checkbox Dynamically into Courier Screen
+    // Inject Swap Galon Checkbox
     let container = select.parentElement;
     let pinjamDiv = document.getElementById("kurir-pinjam-div");
     if (!pinjamDiv) {
         pinjamDiv = document.createElement("div");
         pinjamDiv.id = "kurir-pinjam-div";
         pinjamDiv.style.marginTop = "15px";
-        pinjamDiv.style.padding = "10px";
+        pinjamDiv.style.padding = "12px";
         pinjamDiv.style.background = "#fdf2e9";
         pinjamDiv.style.border = "1px solid #e67e22";
         pinjamDiv.style.borderRadius = "6px";
@@ -2439,38 +2464,20 @@ window.proceedToCourierSelection = async function(orderId) {
     }
     pinjamDiv.innerHTML = `
         <label style="display:flex; align-items:center; gap:8px; font-weight:bold; color:#d35400; cursor:pointer;">
-            <input type="checkbox" id="kurir-pinjam-cb" style="width:20px; height:20px;">
-            Pelanggan Pinjam Galon di Lokasi?
+            <input type="checkbox" id="kurir-swap-cb" style="width:20px; height:20px;">
+            Tukar/Swap Galon Kosong di Lokasi?
         </label>
-        <div id="kurir-pinjam-qty-div" style="display:none; margin-top:10px;">
-            <label style="font-size:12px; color:#555;">Berapa Galon yang dipinjam?</label>
-            <input type="number" id="kurir-pinjam-qty" placeholder="0" min="1" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px;">
-        </div>
+        <div style="font-size:11px; color:#7f8c8d; margin-top:5px; padding-left:28px;">(Centang jika kurir menarik galon kosong pelanggan. Tidak akan masuk tagihan peminjaman).</div>
     `;
     
-    // Reset Checkbox state
-    document.getElementById("kurir-pinjam-cb").checked = false;
-    document.getElementById("kurir-pinjam-qty-div").style.display = "none";
-    document.getElementById("kurir-pinjam-qty").value = "";
-
-    document.getElementById("kurir-pinjam-cb").addEventListener("change", (e) => {
-        document.getElementById("kurir-pinjam-qty-div").style.display = e.target.checked ? "block" : "none";
-    });
-
+    document.getElementById("kurir-swap-cb").checked = false;
     document.getElementById("kurir-modal").classList.remove("hidden");
 }
 
 window.submitDeliveryDone = function() {
     let courier = document.getElementById("kurir-select").value;
     let orderId = window.pendingDeliveryOrderId;
-    
-    // Check if Pinjam Galon is checked
-    let isPinjam = document.getElementById("kurir-pinjam-cb") ? document.getElementById("kurir-pinjam-cb").checked : false;
-    let pinjamQty = 0;
-    if (isPinjam) {
-        pinjamQty = Number(document.getElementById("kurir-pinjam-qty").value) || 0;
-        if (pinjamQty <= 0) return alert("Harap masukkan jumlah galon yang dipinjam!");
-    }
+    let isSwap = document.getElementById("kurir-swap-cb") ? document.getElementById("kurir-swap-cb").checked : false;
 
     if (!orderId || !courier) return;
 
@@ -2479,24 +2486,10 @@ window.submitDeliveryDone = function() {
         let order = e.target.result;
         if (!order) return;
         
-        let doneTime = window.getWibDate(); 
-        order.deliveryStatus = "Terkirim (" + doneTime + ")";
+        order.deliveryStatus = "Terkirim (" + window.getWibDate() + ")";
         order.orderStatus = "Completed"; 
         order.courier = courier; 
-        
-        // Add borrowed bottles to the order record AND the member profile instantly
-        if (pinjamQty > 0) {
-            order.rentBottleQty = (order.rentBottleQty || 0) + pinjamQty;
-            window.db.transaction(["members"], "readonly").objectStore("members").get(order.customerPhone).onsuccess = (memEv) => {
-                let mem = memEv.target.result;
-                if (mem) {
-                    mem.bottlesBorrowed = (mem.bottlesBorrowed || 0) + pinjamQty;
-                    window.db.transaction(["members"], "readwrite").objectStore("members").put(mem);
-                    window.db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").put(mem);
-                }
-            };
-        }
-
+        order.swapGalon = isSwap; // Save swap status purely for records
         order.syncStatus = "Pending"; 
         tx.objectStore("orders").put(order);
     };
