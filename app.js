@@ -2173,39 +2173,39 @@ window.updateTabStyles = function(activeId) {
         let btn = document.getElementById(tab.id);
         if (!btn) return;
         
-        // Base pretty styles for a modern UI
-        btn.style.padding = "12px 15px";
-        btn.style.borderRadius = "8px";
+        // Compact, flush styling (No floating, no shadows)
+        btn.style.padding = "10px 5px";
+        btn.style.borderRadius = "0"; // Square edges for flush alignment
         btn.style.fontWeight = "bold";
-        btn.style.border = "none";
         btn.style.cursor = "pointer";
-        btn.style.transition = "all 0.3s ease";
         btn.style.flex = "1";
-        btn.style.minWidth = "120px";
+        btn.style.minWidth = "100px";
+        btn.style.margin = "0"; 
+        btn.style.transform = "none"; 
+        btn.style.boxShadow = "none";
         
-        // Auto-align the parent container into a clean grid
+        // Auto-align the parent container into a tight, gapless row
         let parent = btn.parentElement;
         if (parent && parent.tagName === "DIV") {
             parent.style.display = "flex";
-            parent.style.flexWrap = "wrap";
-            parent.style.gap = "10px";
-            parent.style.marginBottom = "15px";
-            parent.style.paddingBottom = "15px";
-            parent.style.borderBottom = "2px dashed #ecf0f1";
+            parent.style.flexWrap = "nowrap"; // Force a single line
+            parent.style.gap = "0"; // 🔥 ZERO GAPS
+            parent.style.marginBottom = "0"; // 🔥 Reclaim vertical space below tabs
+            parent.style.paddingBottom = "0";
+            parent.style.borderBottom = "2px solid #2c3e50"; // Clean dark baseline
         }
 
-        // Active vs Inactive state animations
+        // Active vs Inactive state colors
         if (tab.id === activeId) {
             btn.style.background = tab.color;
             btn.style.color = "white";
-            btn.style.transform = "translateY(-2px)";
-            btn.style.boxShadow = "0 4px 8px rgba(0,0,0,0.2)";
+            btn.style.border = `1px solid ${tab.color}`;
+            btn.style.borderBottom = "none";
         } else {
-            btn.style.background = "#f8f9fa";
-            btn.style.color = "#2c3e50";
-            btn.style.transform = "translateY(0)";
-            btn.style.boxShadow = "0 2px 4px rgba(0,0,0,0.05)";
-            btn.style.border = "1px solid #e0e0e0";
+            btn.style.background = "#ecf0f1";
+            btn.style.color = "#34495e";
+            btn.style.border = "1px solid #bdc3c7";
+            btn.style.borderBottom = "none";
         }
     });
 }
