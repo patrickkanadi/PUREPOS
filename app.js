@@ -2061,6 +2061,18 @@ window.lockScreen = function() {
 window.runBackgroundSync = async function() {
     if (!navigator.onLine || window.isSyncing) return;
     window.isSyncing = true; 
+    
+    // Grab the button and store its original state
+    let syncBtn = document.getElementById("btn-sync");
+    let originalText = syncBtn ? syncBtn.innerHTML : "Sync";
+    
+    if (syncBtn) {
+        syncBtn.innerHTML = "⏳ Syncing...";
+        syncBtn.style.backgroundColor = "#f39c12"; // Yellow
+        syncBtn.style.color = "white";
+        syncBtn.disabled = true;
+    }
+
     try {
         if (!window.db) { await window.initDB(); }
         await window.checkAutoCloseShifts();
@@ -2135,7 +2147,6 @@ window.runBackgroundSync = async function() {
             }
         }
         
-        // --- NEW: UPLOAD ABSENSI KE GOOGLE SHEETS ---
         for (const att of attendances) {
             if (att.syncStatus === "Pending") { 
                 try { 
@@ -2155,9 +2166,35 @@ window.runBackgroundSync = async function() {
             }
         }
 
+        // On Success: Turn Green
+        if (syncBtn) {
+            syncBtn.innerHTML = "✅ Synced";
+            syncBtn.style.backgroundColor = "#27ae60"; // Green
+            setTimeout(() => {
+                if (syncBtn) {
+                    syncBtn.innerHTML = originalText;
+                    syncBtn.style.backgroundColor = ""; 
+                    syncBtn.disabled = false;
+                }
+            }, 3000);
+        }
+
     } catch (e) {
         console.error("Background Sync Error:", e);
         if (e.name === 'InvalidStateError') { await window.initDB(); }
+        
+        // On Error: Turn Red
+        if (syncBtn) {
+            syncBtn.innerHTML = "❌ Sync Failed";
+            syncBtn.style.backgroundColor = "#e74c3c"; // Red
+            setTimeout(() => {
+                if (syncBtn) {
+                    syncBtn.innerHTML = originalText;
+                    syncBtn.style.backgroundColor = ""; 
+                    syncBtn.disabled = false;
+                }
+            }, 3000);
+        }
     } finally { window.isSyncing = false; }
 }
 
