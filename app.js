@@ -707,6 +707,7 @@ window.reviewOrder = function() {
 
     document.getElementById("pay-qris").value = 0; document.getElementById("pay-transfer").value = 0; document.getElementById("pay-free").value = 0; document.getElementById("pay-piutang").value = 0;
     let bottleRentBox = document.getElementById("rent-bottle-qty"); if(bottleRentBox) bottleRentBox.value = 0;
+    let notesBox = document.getElementById("order-notes"); if(notesBox) notesBox.value = "";
     
     document.getElementById("review-subtotal").innerText = `Rp ${window.cartSubtotal.toLocaleString('id-ID')}`; 
     document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
@@ -1203,6 +1204,7 @@ window.finalizeOrder = async function(shouldPrint) {
     let custPhoneRaw = document.getElementById("cust-phone").value.trim(); let custPhone = custPhoneRaw || "-";
     const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
     const custAddress = document.getElementById("cust-address").value.trim() || "";
+    const orderNotes = document.getElementById("order-notes") ? document.getElementById("order-notes").value.trim() : "";
 
     let isDeliveryFinal = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
     if (isDeliveryFinal && cash > 0) return alert("⚠️ PEMBAYARAN DITOLAK:\nPesanan Pengiriman tidak dapat dibayar menggunakan Tunai/Cash di awal.\n\nSilakan gunakan QRIS, Transfer, atau masukkan ke Piutang (agar ditagih oleh kurir).");
@@ -1328,7 +1330,7 @@ window.finalizeOrder = async function(shouldPrint) {
 
     const orderPayload = {
         orderId: "ORD-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId,
-        customerName: custName, customerPhone: custPhone, customerAddress: custAddress, orderStatus: finalStatus, items: window.currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
+        customerName: custName, customerPhone: custPhone, customerAddress: custAddress, notes: orderNotes, orderStatus: finalStatus, items: window.currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
         paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, debtAmount: debtAmount,
         rentLogId: localRentLogId, // 🔥 Passes local ID to backend
         loyaltyChanges: loyaltyChanges, freeItemsRedeemed: freeItemsRedeemed, 
@@ -1395,6 +1397,12 @@ window.buildEscPosReceipt = async function(orderId, order, deposit, debt, payMet
     receipt += dateStr + "\n";
     receipt += leftAlign + "-".repeat(32) + "\n";
     receipt += `Nota: ${orderId}\nNama: ${order.customerName}\nKasir: ${order.cashier}\n`;
+    if (order.customerAddress && order.customerAddress !== "" && order.customerAddress !== "-") {
+        receipt += `Alamat: ${order.customerAddress}\n`;
+    }
+    if (order.notes && order.notes !== "") {
+        receipt += `Catatan: ${order.notes}\n`;
+    }
     receipt += "-".repeat(32) + "\n";
 
     order.items.forEach(item => { 
@@ -1674,7 +1682,10 @@ window.viewHistoricalShift = function(shiftId) {
 window.showOrderDetail = function(orderId) {
     window.db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = (e) => {
         const o = e.target.result; if (!o) return alert("Detail tidak ditemukan.");
-        let html = `<strong>Nota:</strong> ${o.orderId}<br><strong>Waktu:</strong> ${window.formatDateReadable(o.timestamp)}<br><strong>Pelanggan:</strong> ${o.customerName} (${o.customerPhone})<br><strong>Metode Bayar:</strong> ${o.paymentMethod}<br><hr style="border-top:1px dashed #ccc; margin:10px 0;">`;
+        let html = `<strong>Nota:</strong> ${o.orderId}<br><strong>Waktu:</strong> ${window.formatDateReadable(o.timestamp)}<br><strong>Pelanggan:</strong> ${o.customerName} (${o.customerPhone})<br><strong>Metode Bayar:</strong> ${o.paymentMethod}<br>`;
+        if (o.customerAddress) html += `<strong>Alamat:</strong> ${o.customerAddress}<br>`;
+        if (o.notes) html += `<strong>Catatan:</strong> ${o.notes}<br>`;
+        html += `<hr style="border-top:1px dashed #ccc; margin:10px 0;">`;
         if (o.items && o.items.length > 0) { o.items.forEach(i => { html += `<div style="display:flex; justify-content:space-between;"><span>${i.qty}x ${i.name}</span><span>Rp ${(i.qty * i.originalPrice).toLocaleString('id-ID')}</span></div>`; });
         } else { html += `<div style="color:#7f8c8d; font-style:italic;">Detail item tidak tersedia. Subtotal: Rp ${o.subtotal.toLocaleString('id-ID')}</div>`; }
         html += `<hr style="border-top:1px dashed #ccc; margin:10px 0;"><div style="display:flex; justify-content:space-between;"><span><strong>Diskon / Gratis:</strong></span><span style="color:#27ae60;">-Rp ${(o.discounts || o.freeAmount || 0).toLocaleString('id-ID')}</span></div><div style="display:flex; justify-content:space-between; font-size:16px;"><span><strong>Total Akhir:</strong></span><span><strong>Rp ${o.grandTotal.toLocaleString('id-ID')}</strong></span></div>`;
