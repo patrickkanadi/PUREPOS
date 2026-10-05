@@ -2614,10 +2614,14 @@ window.proceedToCourierSelection = async function(orderId) {
     }
     pinjamDiv.innerHTML = `
         <label style="display:flex; align-items:center; gap:8px; font-weight:bold; color:#d35400; cursor:pointer;">
-            <input type="checkbox" id="kurir-swap-cb" style="width:20px; height:20px;">
-            Tukar/Swap Galon Kosong di Lokasi?
+            <input type="checkbox" id="kurir-swap-cb" style="width:20px; height:20px;" onchange="document.getElementById('kurir-pinjam-container').classList.toggle('hidden', !this.checked)">
+            Centang jika Kurir Melakukan Tukar/Swap Galon
         </label>
-        <div style="font-size:11px; color:#7f8c8d; margin-top:5px; padding-left:28px;">(Centang jika kurir menarik galon kosong pelanggan. Tidak akan masuk tagihan peminjaman).</div>
+        <div id="kurir-pinjam-container" class="hidden" style="margin-top:10px; padding-left:28px; border-left: 2px solid #d35400;">
+            <label style="font-size:12px; font-weight:bold; color:#c0392b;">Berapa galon yang TERTINGGAL di pelanggan?</label>
+            <input type="number" id="kurir-pinjam-qty" placeholder="Isi angka (kosongkan jika ditarik semua)" min="0" style="width:100%; padding:8px; margin-top:5px; border:1px solid #c0392b; border-radius:4px; font-size:14px;">
+            <div style="font-size:11px; color:#7f8c8d; margin-top:5px;">Sistem akan otomatis mencatat sisa galon ini ke tagihan Pinjam Galon.</div>
+        </div>
     `;
     
     document.getElementById("kurir-swap-cb").checked = false;
@@ -2641,32 +2645,32 @@ window.submitDeliveryDone = function() {
         order.courier = courier; 
         order.swapGalon = isSwap; 
 
-        // 🔥 FIX: Check if there's a new Pinjam Galon during delivery
-        let isPinjam = document.getElementById("kurir-pinjam-cb") ? document.getElementById("kurir-pinjam-cb").checked : false;
+        // Capture Pinjam Galon if the courier left gallons behind during swap
         let pinjamQty = 0;
-        if (isPinjam) {
+        if (isSwap && document.getElementById("kurir-pinjam-qty")) {
             pinjamQty = Number(document.getElementById("kurir-pinjam-qty").value) || 0;
-            if (pinjamQty > 0) {
-                order.rentBottleQty = (order.rentBottleQty || 0) + pinjamQty;
-                order.rentLogId = "PJG-" + Date.now(); // Generate ID instantly
-                
-                // Immediately attach it to the local customer profile so it doesn't disappear!
-                window.db.transaction(["members"], "readwrite").objectStore("members").get(order.customerPhone).onsuccess = (memEv) => {
-                    let mem = memEv.target.result;
-                    if (mem) {
-                        mem.bottlesBorrowed = (mem.bottlesBorrowed || 0) + pinjamQty;
-                        if (!mem.rentalBreakdown) mem.rentalBreakdown = [];
-                        mem.rentalBreakdown.push({ logId: order.rentLogId, orderId: orderId, sisa: pinjamQty, date: window.getWibDate() });
-                        
-                        let t2 = window.db.transaction(["members", "unsynced_members"], "readwrite");
-                        t2.objectStore("members").put(mem);
-                        t2.objectStore("unsynced_members").put(mem);
-                    }
-                };
-            }
         }
 
-        order.syncStatus = "Pending"; 
+        if (pinjamQty > 0) {
+            order.rentBottleQty = (order.rentBottleQty || 0) + pinjamQty;
+            order.rentLogId = "PJG-" + Date.now(); // Generate ID instantly
+            
+            // Immediately attach it to the local customer profile
+            window.db.transaction(["members"], "readwrite").objectStore("members").get(order.customerPhone).onsuccess = (memEv) => {
+                let mem = memEv.target.result;
+                if (mem) {
+                    mem.bottlesBorrowed = (mem.bottlesBorrowed || 0) + pinjamQty;
+                    if (!mem.rentalBreakdown) mem.rentalBreakdown = [];
+                    mem.rentalBreakdown.push({ logId: order.rentLogId, orderId: orderId, sisa: pinjamQty, date: window.getWibDate() });
+                    
+                    let t2 = window.db.transaction(["members", "unsynced_members"], "readwrite");
+                    t2.objectStore("members").put(mem);
+                    t2.objectStore("unsynced_members").put(mem);
+                }
+            };
+        }
+
+        order.syncStatus = "Pending";
         tx.objectStore("orders").put(order);
     };
 
