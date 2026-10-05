@@ -1079,6 +1079,8 @@ window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
     document.getElementById("piutang-pay-cash").value = "";
     document.getElementById("piutang-pay-qris").value = "";
     document.getElementById("piutang-pay-transfer").value = "";
+    document.getElementById("piutang-parkir").value = "0";
+    document.getElementById("piutang-tip").value = "0";
     
     const orderSelect = document.getElementById("piutang-target-order"); orderSelect.innerHTML = `<option value="">-- Lunasi Saldo Global --</option>`;
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
@@ -1105,92 +1107,134 @@ window.autoBalancePiutangPay = function() {
     const c = Number(document.getElementById("piutang-pay-cash").value) || 0; 
     const q = Number(document.getElementById("piutang-pay-qris").value) || 0; 
     const t = Number(document.getElementById("piutang-pay-transfer").value) || 0;
-    const total = c + q + t;
-    document.getElementById("piutang-total-dibayar").innerText = `Rp ${total.toLocaleString('id-ID')}`;
+    const totalReceived = c + q + t;
+    
+    const parkir = Number(document.getElementById("piutang-parkir").value) || 0;
+    const tip = Number(document.getElementById("piutang-tip").value) || 0;
+    const totalExtra = parkir + tip;
 
-    // NEW: Calculate and display the remaining debt automatically
-    let sisa = window.piutangTargetMember.piutang - total;
+    const debtPaid = totalReceived - totalExtra;
+
+    document.getElementById("piutang-total-dibayar").innerText = `Rp ${totalReceived.toLocaleString('id-ID')}`;
+    
+    let extraInfo = document.getElementById("piutang-extra-info");
+    if (totalExtra > 0) {
+        extraInfo.innerText = `(Potongan Parkir/Tip: Rp ${totalExtra.toLocaleString('id-ID')} | Masuk ke Piutang: Rp ${Math.max(0, debtPaid).toLocaleString('id-ID')})`;
+        extraInfo.classList.remove("hidden");
+    } else {
+        extraInfo.classList.add("hidden");
+    }
+
     let sisaInput = document.getElementById("piutang-pay-piutang");
-    if (sisaInput) sisaInput.value = Math.max(0, sisa);
+    if (sisaInput) sisaInput.value = Math.max(0, window.piutangTargetMember.piutang - debtPaid);
 }
 
 window.submitPiutang = function() {
     const c = Number(document.getElementById("piutang-pay-cash").value) || 0; 
     const q = Number(document.getElementById("piutang-pay-qris").value) || 0; 
     const t = Number(document.getElementById("piutang-pay-transfer").value) || 0;
-    let payAmount = c + q + t;
+    const parkir = Number(document.getElementById("piutang-parkir").value) || 0;
+    const tip = Number(document.getElementById("piutang-tip").value) || 0;
+    
+    let totalReceived = c + q + t;
+    let totalExtra = parkir + tip;
+    let payAmount = totalReceived - totalExtra;
     let targetOrderId = document.getElementById("piutang-target-order").value;
     
-    if(payAmount < 0) return alert("Jumlah bayar tidak valid"); 
+    if(totalReceived < 0) return alert("Jumlah bayar tidak valid"); 
+    if(payAmount < 0 && totalReceived > 0) return alert("Jumlah uang masuk tidak cukup untuk menutupi biaya Parkir & Tip!");
     if(payAmount > window.piutangTargetMember.piutang) return alert("Jumlah yang dimasukkan melebihi total piutang pelanggan!");
     
-    // === NEW: ZERO PAYMENT BYPASS ===
-    if (payAmount === 0) {
+    if (payAmount === 0 && totalReceived === 0) {
         let confirmZero = confirm("Tercatat tidak ada pembayaran yang dimasukkan (Rp 0).\n\nApakah pelanggan benar-benar belum membayar dan nota ini dibiarkan tetap berada di tab Piutang?");
         if (!confirmZero) return;
-
         document.getElementById("piutang-modal").classList.add("hidden");
-        // Jika dari pengiriman, lanjutkan ke pemilihan kurir
         if (window.piutangFromDeliveryOrderId) {
             window.proceedToCourierSelection(window.piutangFromDeliveryOrderId);
             window.piutangFromDeliveryOrderId = null;
         }
         return;
     }
-    // ================================
 
-    let payMethods = [];
-    if(c > 0) payMethods.push("Tunai");
-    if(q > 0) payMethods.push("QRIS");
-    if(t > 0) payMethods.push("Trf.Bank");
-    let method = payMethods.join("+");
-    
-    let payload = { payId: "BYR-" + Date.now(), timestamp: window.getWibDate(), customerName: window.piutangTargetMember.name, customerPhone: window.piutangTargetMember.phone, amountPaid: payAmount, paymentMethod: method, cashAmount: c, qrisAmount: q, transferAmount: t, cashier: window.currentCashier, outlet: window.currentOutlet, syncStatus: "Pending", shiftId: window.currentShiftId, originalOrderId: targetOrderId };
-    
-    window.db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").add(payload);
-    
-    window.piutangTargetMember.piutang -= payAmount;
-    window.saveMemberToDB(window.piutangTargetMember.phone, window.piutangTargetMember.name, window.piutangTargetMember.wallet, window.piutangTargetMember.bottlesBorrowed, window.piutangTargetMember.piutang, window.piutangTargetMember.firstOutlet, window.piutangTargetMember.recentOutlets);
-    if (window.activeCustomerProfile && window.activeCustomerProfile.phone === window.piutangTargetMember.phone) { window.activeCustomerProfile = window.piutangTargetMember; window.updatePromoBanner(window.activeCustomerProfile); }
-    if(window.updateLeftBadges) window.updateLeftBadges();
-    
-    let remainingPay = payAmount;
-    window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        let orders = e.target.result.filter(o => o.customerPhone === window.piutangTargetMember.phone && (o.debtAmount || 0) > 0);
-        orders.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp)); 
+    let processPayment = function(courierName) {
+        let netC = c; let netQ = q; let netT = t;
+        let remExtra = totalExtra;
+        // Deduct extra from the inputs so the DB matches perfectly
+        if (remExtra > 0 && netC > 0) { let deduct = Math.min(remExtra, netC); netC -= deduct; remExtra -= deduct; }
+        if (remExtra > 0 && netQ > 0) { let deduct = Math.min(remExtra, netQ); netQ -= deduct; remExtra -= deduct; }
+        if (remExtra > 0 && netT > 0) { let deduct = Math.min(remExtra, netT); netT -= deduct; remExtra -= deduct; }
+
+        let payMethods = [];
+        if(netC > 0) payMethods.push("Tunai");
+        if(netQ > 0) payMethods.push("QRIS");
+        if(netT > 0) payMethods.push("Trf.Bank");
+        let method = payMethods.join("+") || "Lunas (Ekstra)";
         
-        let tx2 = window.db.transaction(["orders"], "readwrite");
-        let store2 = tx2.objectStore("orders");
+        let payload = { 
+            payId: "BYR-" + Date.now(), timestamp: window.getWibDate(), 
+            customerName: window.piutangTargetMember.name, customerPhone: window.piutangTargetMember.phone, 
+            amountPaid: payAmount, paymentMethod: method, 
+            cashAmount: netC, qrisAmount: netQ, transferAmount: netT, 
+            parkirFee: parkir, tipAmount: tip, tipCourier: courierName,
+            cashier: window.currentCashier, outlet: window.currentOutlet, 
+            syncStatus: "Pending", shiftId: window.currentShiftId, originalOrderId: targetOrderId 
+        };
         
-        for (let o of orders) {
-            if (remainingPay <= 0) break;
-            if (targetOrderId !== "" && o.orderId !== targetOrderId) continue; 
-            
-            let currentDebt = o.debtAmount || 0;
-            let payHere = Math.min(currentDebt, remainingPay);
-            remainingPay -= payHere;
-            
-            o.debtAmount = currentDebt - payHere;
-            if (o.debtAmount === 0 && String(o.paymentMethod).includes("Piutang")) {
-                o.paymentMethod = String(o.paymentMethod).replace("Piutang", "Lunas ("+method+")");
-            } else if (o.debtAmount > 0 && String(o.paymentMethod).includes("Piutang")) {
-                if (!String(o.paymentMethod).includes("Sebagian")) { o.paymentMethod = String(o.paymentMethod).replace("Piutang", "Piutang (Sebagian)"); }
-            }
-            o.syncStatus = "Pending"; 
-            store2.put(o);
+        window.db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").add(payload);
+        window.piutangTargetMember.piutang -= payAmount;
+        window.saveMemberToDB(window.piutangTargetMember.phone, window.piutangTargetMember.name, window.piutangTargetMember.wallet, window.piutangTargetMember.bottlesBorrowed, window.piutangTargetMember.piutang, window.piutangTargetMember.firstOutlet, window.piutangTargetMember.recentOutlets);
+        
+        if (window.activeCustomerProfile && window.activeCustomerProfile.phone === window.piutangTargetMember.phone) { 
+            window.activeCustomerProfile = window.piutangTargetMember; window.updatePromoBanner(window.activeCustomerProfile); 
         }
-        tx2.oncomplete = () => {
-            document.getElementById("piutang-modal").classList.add("hidden"); 
-            alert("Pembayaran Piutang Berhasil Dicatat!"); 
-            window.runBackgroundSync();
+        if(window.updateLeftBadges) window.updateLeftBadges();
+        
+        let remainingPay = payAmount;
+        window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
+            let orders = e.target.result.filter(o => o.customerPhone === window.piutangTargetMember.phone && (o.debtAmount || 0) > 0);
+            orders.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp)); 
             
-            // Lanjutkan ke pemilihan kurir jika dipanggil dari Pengiriman
-            if (window.piutangFromDeliveryOrderId) {
-                window.proceedToCourierSelection(window.piutangFromDeliveryOrderId);
-                window.piutangFromDeliveryOrderId = null;
+            let tx2 = window.db.transaction(["orders"], "readwrite");
+            let store2 = tx2.objectStore("orders");
+            
+            for (let o of orders) {
+                if (remainingPay <= 0) break;
+                if (targetOrderId !== "" && o.orderId !== targetOrderId) continue; 
+                
+                let currentDebt = o.debtAmount || 0;
+                let payHere = Math.min(currentDebt, remainingPay);
+                remainingPay -= payHere;
+                
+                o.debtAmount = currentDebt - payHere;
+                if (o.debtAmount === 0 && String(o.paymentMethod).includes("Piutang")) {
+                    o.paymentMethod = String(o.paymentMethod).replace("Piutang", "Lunas ("+method+")");
+                } else if (o.debtAmount > 0 && String(o.paymentMethod).includes("Piutang")) {
+                    if (!String(o.paymentMethod).includes("Sebagian")) o.paymentMethod = String(o.paymentMethod).replace("Piutang", "Piutang (Sebagian)");
+                }
+                o.syncStatus = "Pending"; 
+                store2.put(o);
             }
+            tx2.oncomplete = () => {
+                document.getElementById("piutang-modal").classList.add("hidden"); 
+                alert("Pembayaran Piutang Berhasil Dicatat!"); 
+                window.runBackgroundSync();
+                if (window.piutangFromDeliveryOrderId) {
+                    window.proceedToCourierSelection(window.piutangFromDeliveryOrderId);
+                    window.piutangFromDeliveryOrderId = null;
+                }
+            };
         };
     };
+
+    // Auto-infer the Courier from the selected order silently
+    if (targetOrderId) {
+        window.db.transaction(["orders"], "readonly").objectStore("orders").get(targetOrderId).onsuccess = (e) => {
+            let ord = e.target.result;
+            processPayment((ord && ord.courier && ord.courier !== "-") ? ord.courier : "-");
+        };
+    } else {
+        processPayment("-");
+    }
 }
 
 window.finalizeOrder = async function(shouldPrint) {
