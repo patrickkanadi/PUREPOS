@@ -1367,6 +1367,30 @@ window.formatLine = function(leftText, rightText, isBig) {
     }
 }
 
+window.wrapTextForPrinter = function(prefix, text) {
+    const MAX_CHARS = 32;
+    let fullText = prefix + text;
+    
+    // If it fits on one line, just return it
+    if (fullText.length <= MAX_CHARS) return fullText + "\n";
+    
+    let words = text.split(" ");
+    let result = prefix;
+    let currentLineLen = prefix.length;
+
+    words.forEach(word => {
+        // If adding the next word exceeds 32 chars, drop to a new line with an indent
+        if (currentLineLen + word.length + 1 > MAX_CHARS && currentLineLen > 0) {
+            result += "\n  " + word + " "; // The "  " creates a nice little indent for wrapped lines
+            currentLineLen = 2 + word.length + 1;
+        } else {
+            result += word + " ";
+            currentLineLen += word.length + 1;
+        }
+    });
+    return result.trimEnd() + "\n";
+}
+
 window.buildEscPosReceipt = async function(orderId, order, deposit, debt, payMethod, updatedWallet) {
     const settings = await window.getDynamicSettings();
     const h1 = settings["Header_1"] || "PURE WATER"; 
@@ -1397,12 +1421,14 @@ window.buildEscPosReceipt = async function(orderId, order, deposit, debt, payMet
     receipt += dateStr + "\n";
     receipt += leftAlign + "-".repeat(32) + "\n";
     receipt += `Nota: ${orderId}\nNama: ${order.customerName}\nKasir: ${order.cashier}\n`;
-    if (order.customerAddress && order.customerAddress !== "" && order.customerAddress !== "-") {
-        receipt += `Alamat: ${order.customerAddress}\n`;
+    
+    if (order.customerAddress && order.customerAddress.trim() !== "" && order.customerAddress.trim() !== "-") {
+        receipt += window.wrapTextForPrinter("Alamat: ", order.customerAddress.trim());
     }
-    if (order.notes && order.notes !== "") {
-        receipt += `Catatan: ${order.notes}\n`;
+    if (order.notes && order.notes.trim() !== "") {
+        receipt += window.wrapTextForPrinter("Catatan: ", order.notes.trim());
     }
+    
     receipt += "-".repeat(32) + "\n";
 
     order.items.forEach(item => { 
