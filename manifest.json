@@ -5,7 +5,7 @@
   "display": "standalone",
   "background_color": "#2980b9",
   "theme_color": "#2980b9",
-  "orientation": "portrait-primary",
+  "orientation": "any",
   "icons": [
     {
       "src": "https://raw.githubusercontent.com/patrickkanadi/PUREPOS/main/images.png",
