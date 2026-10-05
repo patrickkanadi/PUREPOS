@@ -327,6 +327,12 @@
                 </select>
             </div>
             
+            <p style="font-weight:bold; color:#8e44ad; margin-bottom:5px; margin-top:10px;">🎁 Ekstra (Jika Pelanggan Bayar Lebih)</p>
+            <div class="split-pay-grid" style="background:#f4ecf7; border-color:#d2b4de;">
+                <div class="form-box" style="margin-bottom:0;"><label>Parkir (Rp)</label><input type="number" id="piutang-parkir" value="0" onclick="this.select()" oninput="window.autoBalancePiutangPay()"></div>
+                <div class="form-box" style="margin-bottom:0;"><label>Tip Kurir (Rp)</label><input type="number" id="piutang-tip" value="0" onclick="this.select()" oninput="window.autoBalancePiutangPay()"></div>
+            </div>
+            
             <p style="font-weight:bold; color:#e67e22; margin-bottom:5px;">💵 Metode Pembayaran Piutang</p>
             <div class="split-pay-grid">
                 <div class="form-box" style="margin-bottom:0;"><label>Tunai / Cash (Rp)</label><input type="number" id="piutang-pay-cash" value="0" onclick="this.select()" oninput="window.autoBalancePiutangPay()"></div>
@@ -334,8 +340,9 @@
                 <div class="form-box" style="margin-bottom:0;"><label>Transfer Bank (Rp)</label><input type="number" id="piutang-pay-transfer" value="0" onclick="this.select()" oninput="window.autoBalancePiutangPay()"></div>
             </div>
             
-            <div style="display:flex; justify-content:space-between; font-size:18px; color:#27ae60; font-weight:bold; margin-bottom: 20px; padding:10px; background:#e8f8f5; border-radius:8px;">
-                <span>Total Dibayar:</span> <span id="piutang-total-dibayar">Rp 0</span>
+            <div style="display:flex; flex-direction:column; gap:5px; font-size:18px; color:#27ae60; font-weight:bold; margin-bottom: 20px; padding:10px; background:#e8f8f5; border-radius:8px;">
+                <div style="display:flex; justify-content:space-between;"><span>Total Uang Diterima:</span> <span id="piutang-total-dibayar">Rp 0</span></div>
+                <div id="piutang-extra-info" class="hidden" style="font-size:13px; color:#8e44ad; text-align:right;"></div>
             </div>
 
             <div style="display: flex; gap: 10px;">
