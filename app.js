@@ -1268,6 +1268,9 @@ window.finalizeOrder = async function(shouldPrint) {
     window.currentCart.forEach(i => i.redeemed = 0);
     let redeemedPromos = []; 
     
+    // 🔥 FIX: Generate the Order ID once to prevent millisecond mismatch
+    const currentOrderId = "ORD-" + Date.now();
+    
     document.querySelectorAll(".redeem-input").forEach(input => {
         let itemId = input.getAttribute("data-item"); 
         let name = input.getAttribute("data-name");
@@ -1294,7 +1297,6 @@ window.finalizeOrder = async function(shouldPrint) {
     let updatedWallet = {}; let newPiutang = (window.activeCustomerProfile ? window.activeCustomerProfile.piutang || 0 : 0) + debtAmount;
     let newEarnedRewards = [];
     
-    // 🔥 FIX: Generate rentLogId immediately so the frontend never loses it
     let localRentLogId = rentBottleQty > 0 ? "PJG-" + Date.now() : null;
 
     if (window.loyaltyEnabled && window.activeCustomerProfile) {
@@ -1350,20 +1352,20 @@ window.finalizeOrder = async function(shouldPrint) {
 
         window.activeCustomerProfile.piutang = newPiutang;
         
-        // Push rental breakdown to profile instantly
         if (localRentLogId) {
             if (!window.activeCustomerProfile.rentalBreakdown) window.activeCustomerProfile.rentalBreakdown = [];
-            window.activeCustomerProfile.rentalBreakdown.push({ logId: localRentLogId, orderId: "ORD-" + Date.now(), sisa: rentBottleQty, date: window.getWibDate() });
+            // 🔥 Use currentOrderId instead of "ORD-" + Date.now()
+            window.activeCustomerProfile.rentalBreakdown.push({ logId: localRentLogId, orderId: currentOrderId, sisa: rentBottleQty, date: window.getWibDate(), outlet: window.currentOutlet });
         }
 
         window.saveMemberToDB(window.activeCustomerProfile.phone, window.activeCustomerProfile.name, updatedWallet, window.activeCustomerProfile.bottlesBorrowed + rentBottleQty, newPiutang, window.activeCustomerProfile.firstOutlet, window.activeCustomerProfile.recentOutlets);
     } else if (custPhone !== "-") {
         let fOut = window.activeCustomerProfile ? window.activeCustomerProfile.firstOutlet : window.currentOutlet; let rOut = window.activeCustomerProfile ? window.activeCustomerProfile.recentOutlets : window.currentOutlet;
         
-        // Push rental breakdown to profile instantly
         if (localRentLogId && window.activeCustomerProfile) {
             if (!window.activeCustomerProfile.rentalBreakdown) window.activeCustomerProfile.rentalBreakdown = [];
-            window.activeCustomerProfile.rentalBreakdown.push({ logId: localRentLogId, orderId: "ORD-" + Date.now(), sisa: rentBottleQty, date: window.getWibDate() });
+            // 🔥 Use currentOrderId instead of "ORD-" + Date.now()
+            window.activeCustomerProfile.rentalBreakdown.push({ logId: localRentLogId, orderId: currentOrderId, sisa: rentBottleQty, date: window.getWibDate(), outlet: window.currentOutlet });
         }
 
         window.saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount, fOut, rOut);
@@ -1373,10 +1375,11 @@ window.finalizeOrder = async function(shouldPrint) {
     let finalStatus = isDelivery ? "Proses Kirim" : "Completed";
 
     const orderPayload = {
-        orderId: "ORD-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId,
+        orderId: currentOrderId, // 🔥 Use the unified ID here
+        timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId,
         customerName: custName, customerPhone: custPhone, customerAddress: custAddress, notes: orderNotes, orderStatus: finalStatus, items: window.currentCart, subtotal: window.cartSubtotal, discounts: free, grandTotal: window.cartGrandTotal,
         paymentMethod: payString, cashAmount: cash, qrisAmount: qris, transferAmount: transfer, freeAmount: free, rentBottleQty: rentBottleQty, debtAmount: debtAmount,
-        rentLogId: localRentLogId, // 🔥 Passes local ID to backend
+        rentLogId: localRentLogId, 
         loyaltyChanges: loyaltyChanges, freeItemsRedeemed: freeItemsRedeemed, 
         isDelivery: isDelivery, deliveryStatus: isDelivery ? "Pending" : "-",
         redeemedPromos: redeemedPromos, newEarnedRewards: newEarnedRewards, finalStoredRewards: JSON.stringify(updatedWallet),
@@ -2413,8 +2416,15 @@ window.renderPeminjamList = function() {
         let allOrders = ordEv.target.result;
         
         window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
-            // 🔥 FILTER: Uses the bulletproof integer "Just like before"
-            let members = e.target.result.filter(m => (m.bottlesBorrowed || 0) > 0);
+            // 🔥 STRICT BRANCH FILTER: Calculate branch-specific borrowed bottles instantly
+            let members = e.target.result.filter(m => {
+                let localB = 0;
+                if (m.rentalBreakdown) {
+                    localB = m.rentalBreakdown.filter(r => (r.outlet || window.currentOutlet) === window.currentOutlet).reduce((sum, r) => sum + r.sisa, 0);
+                }
+                m._tempBranchBorrowed = localB;
+                return localB > 0;
+            });
             
             if (filter) members = members.filter(m => String(m.name).toLowerCase().includes(filter) || String(m.phone).includes(filter));
             if (members.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Tidak ada data peminjam galon saat ini.</div>`; return; }
@@ -2422,13 +2432,13 @@ window.renderPeminjamList = function() {
             members.forEach(m => {
                 let combinedBreakdown = [];
                 
-                // 1. Add server breakdown if available
+                // 1. Filter server breakdown to ONLY include this branch
                 if (m.rentalBreakdown && m.rentalBreakdown.length > 0) {
-                    m.rentalBreakdown.forEach(r => combinedBreakdown.push(r));
+                    m.rentalBreakdown.filter(r => (r.outlet || window.currentOutlet) === window.currentOutlet).forEach(r => combinedBreakdown.push(r));
                 }
                 
-                // 2. Add any local un-synced orders to prevent them from missing
-                let localMemOrders = allOrders.filter(o => o.customerPhone === m.phone && (o.rentBottleQty || 0) > 0 && o.orderStatus !== "Voided");
+                // 2. Add any local un-synced orders strictly for this branch
+                let localMemOrders = allOrders.filter(o => o.customerPhone === m.phone && (o.rentBottleQty || 0) > 0 && o.orderStatus !== "Voided" && o.outlet === window.currentOutlet);
                 localMemOrders.forEach(o => {
                     if (!combinedBreakdown.some(b => b.orderId === o.orderId)) {
                         combinedBreakdown.push({
@@ -2465,7 +2475,7 @@ window.renderPeminjamList = function() {
                         <div style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="document.getElementById('brk-${m.phone}').classList.toggle('hidden')">
                             <div>
                                 <strong style="color:#2c3e50; font-size:16px;">${m.name}</strong> <span style="font-size:14px; color:#7f8c8d;">(${m.phone})</span><br>
-                                📦 <strong style="color:#2980b9; font-size:15px;">Total Meminjam: ${m.bottlesBorrowed} Galon</strong>
+                                📦 <strong style="color:#2980b9; font-size:15px;">Total Meminjam: ${m._tempBranchBorrowed} Galon</strong>
                             </div>
                             <div style="color:#2980b9; font-weight:bold;">Lihat Nota ⬇️</div>
                         </div>
@@ -2542,8 +2552,11 @@ window.updateLeftBadges = function() {
             let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : m.piutang;
             if (localP > 0) pCount++;
             
-            // 🔥 RESTORED TO JUST LIKE BEFORE: Uses the bulletproof integer
-            if ((m.bottlesBorrowed || 0) > 0) bCount++;
+            let localB = 0;
+            if (m.rentalBreakdown) {
+                localB = m.rentalBreakdown.filter(r => (r.outlet || window.currentOutlet) === window.currentOutlet).reduce((sum, r) => sum + r.sisa, 0);
+            }
+            if (localB > 0) bCount++;
         });
         let pBtn = document.getElementById("tab-left-piutang");
         if (pBtn) { pBtn.innerText = pCount > 0 ? "📒 Piutang (" + pCount + ")" : "📒 Piutang"; }
@@ -2705,7 +2718,7 @@ window.submitDeliveryDone = function() {
                 if (mem) {
                     mem.bottlesBorrowed = (mem.bottlesBorrowed || 0) + pinjamQty;
                     if (!mem.rentalBreakdown) mem.rentalBreakdown = [];
-                    mem.rentalBreakdown.push({ logId: order.rentLogId, orderId: orderId, sisa: pinjamQty, date: window.getWibDate() });
+                    mem.rentalBreakdown.push({ logId: order.rentLogId, orderId: orderId, sisa: pinjamQty, date: window.getWibDate(), outlet: window.currentOutlet });
                     
                     let t2 = window.db.transaction(["members", "unsynced_members"], "readwrite");
                     t2.objectStore("members").put(mem);
