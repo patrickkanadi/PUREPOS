@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbw1w3B11VMGefnoh8A0TXVu5Hhrbrfi5HqcxYVNVZwb1Tgx_LlDMXVEEQQdKxdis37v/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 20; // 🔥 Bump to 19 to force cache refresh
-const APP_VERSION = "1.9"; // 🔥 Added explicit App Version
+const DB_VERSION = 21; // 🔥 Bump to 19 to force cache refresh
+const APP_VERSION = "2.0"; // 🔥 Added explicit App Version
 window.db = null;
 
 // Core State
@@ -1973,46 +1973,28 @@ window.submitCashDrop = function() {
     });
 }
 
-window.openCurrentShiftReport = function() {
+window.fallbackLocalShiftReport = function() {
     const today = window.getWibDate().split(" ")[0];
-    
-    // 1. Check Attendance First
     window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (ev) => {
-        // NEW: Ignore the current cashier in this warning, because they will auto-clock-out during End Shift
         let pendingOuts = ev.target.result.filter(l => l.date === today && !l.clockOut && l.staffName !== window.currentCashier);
         let currentHour = new Date(window.getWibDate().replace(' ', 'T')).getHours();
-        
         if (pendingOuts.length > 0) {
             let msg = "Terdapat staff yang belum Clock-Out:\n";
             pendingOuts.forEach(p => msg += `- ${p.staffName}\n`);
-            
             if (currentHour >= 20) {
                 alert(msg + "\nKarena sudah lewat jam 20:00, sistem otomatis melakukan Clock-Out untuk mereka sekarang.");
                 pendingOuts.forEach(p => window.clockOutStaff(p.logId, window.getWibDate()));
             } else {
-                let forceOut = prompt(msg + "\nMasukkan waktu Clock-Out manual untuk mereka (Format HH:MM) atau biarkan kosong jika masih bekerja:", "");
+                let forceOut = prompt(msg + "\nMasukkan waktu Clock-Out manual (HH:MM) atau biarkan kosong jika masih bekerja:", "");
                 if (forceOut && forceOut.includes(":")) {
-                    let outTime = `${today} ${forceOut}:00`;
-                    pendingOuts.forEach(p => window.clockOutStaff(p.logId, outTime));
+                    pendingOuts.forEach(p => window.clockOutStaff(p.logId, `${today} ${forceOut}:00`));
                 }
             }
         }
 
-        // 2. Delay slightly to allow database to save clock-outs, then generate the actual Shift Report
         setTimeout(() => {
             let tCust = 0; let tOrders = 0; let tOmset = 0; let tCash = 0; let tQris = 0; let tTransfer = 0; let tFree = 0; let tExpense = 0; let tPiutangGiven = 0; let tPiutangPaidCash = 0; let foodSummary = {};
             document.getElementById("meter-water").value = "";
-            
-            let meterContainer = document.getElementById("meter-water-container"); if(meterContainer) meterContainer.classList.remove("hidden");
-            let btnEndShift = document.getElementById("btn-end-shift"); if(btnEndShift) btnEndShift.classList.remove("hidden");
-            
-            let btnPrintHist = document.getElementById("btn-print-history"); 
-            if (btnPrintHist) { 
-                btnPrintHist.classList.remove("hidden"); 
-                btnPrintHist.onclick = window.printShiftReport; 
-            }
-            
-            let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = "";
             
             window.db.transaction(["orders", "expenses", "bayar_piutang"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
                 const validOrders = e.target.result.filter(o => o.shiftId === window.currentShiftId && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending");
@@ -2030,7 +2012,6 @@ window.openCurrentShiftReport = function() {
                 
                 window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (ex) => {
                     const shiftExpenses = ex.target.result.filter(exp => exp.shiftId === window.currentShiftId && exp.status === "Active"); shiftExpenses.forEach(exp => { tExpense += (exp.amount || 0); });
-                    
                     window.db.transaction(["bayar_piutang"], "readonly").objectStore("bayar_piutang").getAll().onsuccess = (bpRes) => {
                         const shiftPiutangs = bpRes.target.result.filter(bp => bp.shiftId === window.currentShiftId); shiftPiutangs.forEach(bp => { tPiutangPaidCash += (bp.cashAmount || 0); });
                         
@@ -2042,7 +2023,6 @@ window.openCurrentShiftReport = function() {
                             document.getElementById("sr-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`; 
                             
                             let itemsHtml = ""; 
-                            // Added safety fallback (foodSummary || {})
                             for (const [key, val] of Object.entries(foodSummary || {})) { 
                                 let qty = typeof val === 'object' ? val.qty : val;
                                 let name = typeof val === 'object' && val.name ? val.name : key;
@@ -2051,13 +2031,99 @@ window.openCurrentShiftReport = function() {
                             let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual.</div>";
                             
                             document.getElementById("shift-report-modal").classList.remove("hidden");
-                            
                             window.currentShiftData = { shiftId: window.currentShiftId, loginTime: window.currentLoginTime, totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree, totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, logoutTime: window.getWibDate() };
                         });
                     };
                 };
             };
-        }, 300); // 300ms delay to finish logging out staff
+        }, 300);
+    };
+}
+
+window.openCurrentShiftReport = async function() {
+    if (!navigator.onLine) {
+        alert("⚠️ Anda sedang offline. Sistem akan menggunakan data lokal (mungkin kurang akurat jika cache pernah terhapus).");
+        return window.fallbackLocalShiftReport();
+    }
+
+    const today = window.getWibDate().split(" ")[0];
+    window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (ev) => {
+        let pendingOuts = ev.target.result.filter(l => l.date === today && !l.clockOut && l.staffName !== window.currentCashier);
+        let currentHour = new Date(window.getWibDate().replace(' ', 'T')).getHours();
+        if (pendingOuts.length > 0) {
+            let msg = "Terdapat staff yang belum Clock-Out:\n";
+            pendingOuts.forEach(p => msg += `- ${p.staffName}\n`);
+            if (currentHour >= 20) {
+                alert(msg + "\nKarena sudah lewat jam 20:00, sistem otomatis melakukan Clock-Out untuk mereka sekarang.");
+                pendingOuts.forEach(p => window.clockOutStaff(p.logId, window.getWibDate()));
+            } else {
+                let forceOut = prompt(msg + "\nMasukkan waktu Clock-Out manual (HH:MM) atau biarkan kosong jika masih bekerja:", "");
+                if (forceOut && forceOut.includes(":")) {
+                    pendingOuts.forEach(p => window.clockOutStaff(p.logId, `${today} ${forceOut}:00`));
+                }
+            }
+        }
+
+        setTimeout(async () => {
+            let meterContainer = document.getElementById("meter-water-container"); if(meterContainer) meterContainer.classList.remove("hidden");
+            let btnEndShift = document.getElementById("btn-end-shift"); if(btnEndShift) btnEndShift.classList.remove("hidden");
+            
+            document.getElementById("meter-water").value = "";
+            document.getElementById("sr-orders").innerText = "-"; 
+            document.getElementById("sr-customers").innerText = "-";
+            document.getElementById("sr-omset").innerText = "Rp -";
+            document.getElementById("sr-cash").innerText = "Rp -";
+            document.getElementById("sr-net").innerText = "Rp -";
+            document.getElementById("sr-items-list").innerHTML = "<div style='padding:15px; text-align:center; color:#e67e22; font-weight:bold;'><i>⏳ Menarik data akurat langsung dari Server...</i></div>";
+            
+            document.getElementById("shift-report-modal").classList.remove("hidden");
+            
+            try {
+                let url = API_URL + `?type=shiftSummary&outlet=${encodeURIComponent(window.currentOutlet)}&cashier=${encodeURIComponent(window.currentCashier)}`;
+                let res = await fetch(url, { method: "GET" });
+                let result = await res.json();
+                
+                if (result.status === "Success" && result.data.shiftSummary) {
+                    let d = result.data.shiftSummary;
+                    window.currentShiftId = d.shiftId; // Force align shift ID with server
+                    window.currentLoginTime = d.loginTime;
+                    
+                    window.currentShiftData = {
+                        shiftId: d.shiftId, loginTime: d.loginTime, totalCustomers: d.totalCustomers, 
+                        totalOrders: d.totalOrders, totalOmset: d.totalOmset, totalCash: d.totalCash, 
+                        totalQris: d.totalQris, totalTransfer: d.totalTransfer, totalFree: d.totalFree, 
+                        totalExpenses: d.totalExpenses, netCash: d.netCash, foodSummary: d.foodSummary, 
+                        piutangGiven: d.piutangGiven, piutangPaid: d.piutangPaid, logoutTime: window.getWibDate()
+                    };
+                    
+                    document.getElementById("sr-orders").innerText = d.totalOrders; 
+                    document.getElementById("sr-customers").innerText = d.totalCustomers; 
+                    document.getElementById("sr-omset").innerText = `Rp ${d.totalOmset.toLocaleString('id-ID')}`;
+                    document.getElementById("sr-cash").innerText = `Rp ${d.totalCash.toLocaleString('id-ID')}`; 
+                    document.getElementById("sr-qris").innerText = `Rp ${d.totalQris.toLocaleString('id-ID')}`; 
+                    document.getElementById("sr-transfer").innerText = `Rp ${d.totalTransfer.toLocaleString('id-ID')}`;
+                    document.getElementById("sr-free").innerText = `Rp ${d.totalFree.toLocaleString('id-ID')}`; 
+                    document.getElementById("sr-expense").innerText = `Rp ${d.totalExpenses.toLocaleString('id-ID')}`;
+                    document.getElementById("sr-piutang-given").innerText = `Rp ${d.piutangGiven.toLocaleString('id-ID')}`; 
+                    document.getElementById("sr-piutang-paid").innerText = `Rp ${d.piutangPaid.toLocaleString('id-ID')}`;
+                    document.getElementById("sr-net").innerText = `Rp ${d.netCash.toLocaleString('id-ID')}`; 
+                    
+                    let itemsHtml = ""; 
+                    for (const [key, val] of Object.entries(d.foodSummary || {})) { 
+                        itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${key}</span><strong>${val.qty}</strong></div>`; 
+                    }
+                    document.getElementById("sr-items-list").innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual hari ini.</div>";
+                    
+                    let btnPrintHist = document.getElementById("btn-print-history"); 
+                    if (btnPrintHist) { btnPrintHist.classList.remove("hidden"); btnPrintHist.onclick = window.printShiftReport; }
+                } else {
+                    window.fallbackLocalShiftReport();
+                }
+            } catch(e) {
+                console.error(e);
+                window.fallbackLocalShiftReport();
+            }
+        }, 300);
     };
 }
 
