@@ -1158,11 +1158,12 @@ window.submitPiutang = function() {
 
     let processPayment = function(courierName) {
         let netC = c; let netQ = q; let netT = t;
-        let remExtra = totalExtra;
-        // Deduct extra from the inputs so the DB matches perfectly
-        if (remExtra > 0 && netC > 0) { let deduct = Math.min(remExtra, netC); netC -= deduct; remExtra -= deduct; }
-        if (remExtra > 0 && netQ > 0) { let deduct = Math.min(remExtra, netQ); netQ -= deduct; remExtra -= deduct; }
-        if (remExtra > 0 && netT > 0) { let deduct = Math.min(remExtra, netT); netT -= deduct; remExtra -= deduct; }
+        let remParkir = parkir;
+        
+        // We ONLY deduct Parkir because it leaves the drawer immediately. Tip enters the drawer.
+        if (remParkir > 0 && netC > 0) { let d = Math.min(remParkir, netC); netC -= d; remParkir -= d; }
+        if (remParkir > 0 && netQ > 0) { let d = Math.min(remParkir, netQ); netQ -= d; remParkir -= d; }
+        if (remParkir > 0 && netT > 0) { let d = Math.min(remParkir, netT); netT -= d; remParkir -= d; }
 
         let payMethods = [];
         if(netC > 0) payMethods.push("Tunai");
