@@ -408,11 +408,7 @@ window.attemptLogin = async function() {
 
                 await window.checkAutoCloseShifts();
 
-                if (navigator.onLine) {
-                    loginBtn.innerText = "Sinkron Data Cabang...";
-                    await window.syncCriticalData();
-                }
-
+                // Sinkronisasi dihapus dari jalur login agar menu terbuka instan
                 document.getElementById("login-screen").classList.add("hidden"); 
                 document.getElementById("pos-screen").classList.remove("hidden");
                 document.getElementById("display-cashier").innerText = window.currentCashier; 
@@ -422,8 +418,10 @@ window.attemptLogin = async function() {
                 window.lockMenu(); 
                 
                 if (navigator.onLine) { 
+                    // Dijalankan di background agar kasir bisa langsung input pesanan
+                    window.syncCriticalData();
                     window.syncBackgroundData(); 
-                } 
+                }
                 
                 const today = window.getWibDate().split(" ")[0];
                 const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
@@ -1217,12 +1215,19 @@ window.submitPiutang = function() {
             }
             tx2.oncomplete = () => {
                 document.getElementById("piutang-modal").classList.add("hidden"); 
+                window.renderPiutangList(); // Meng-update list agar nama langsung hilang
+                if (window.updateLeftBadges) window.updateLeftBadges();
+                
                 alert("Pembayaran Piutang Berhasil Dicatat!"); 
-                window.runBackgroundSync();
-                if (window.piutangFromDeliveryOrderId) {
-                    window.proceedToCourierSelection(window.piutangFromDeliveryOrderId);
-                    window.piutangFromDeliveryOrderId = null;
-                }
+                
+                // Mengisolasi proses berat ke belakang layar
+                setTimeout(() => {
+                    window.runBackgroundSync();
+                    if (window.piutangFromDeliveryOrderId) {
+                        window.proceedToCourierSelection(window.piutangFromDeliveryOrderId);
+                        window.piutangFromDeliveryOrderId = null;
+                    }
+                }, 100);
             };
         };
     };
@@ -2801,8 +2806,13 @@ window.submitDeliveryDone = function() {
     tx.oncomplete = () => {
         document.getElementById("kurir-modal").classList.add("hidden");
         window.renderPengiriman();
+        window.renderPeminjamList(); 
         if (window.updateLeftBadges) window.updateLeftBadges(); 
-        window.runBackgroundSync(); 
+        
+        // Jeda 100ms agar UI layar tablet ter-refresh HILANG instan sebelum Sync berjalan
+        setTimeout(() => {
+            window.runBackgroundSync(); 
+        }, 100);
     };
 }
 window.renderAbsensi = async function() {
