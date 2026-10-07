@@ -1794,7 +1794,9 @@ window.renderShiftModalData = function(data, isLocal) {
     let btnPrintHist = document.getElementById("btn-print-history");
     if (btnPrintHist) {
         btnPrintHist.classList.remove("hidden");
+        btnPrintHist.disabled = false;
         btnPrintHist.innerText = "🖨️ Cetak Laporan";
+        btnPrintHist.style.background = "#2980b9";
         btnPrintHist.onclick = async function() {
             let printData = {...data, foodSummary: printFoodSummary};
             const payloadBytes = await window.buildEscPosShiftReport(printData);
@@ -2084,11 +2086,12 @@ window.fallbackLocalShiftReport = function() {
                             document.getElementById("shift-report-modal").classList.remove("hidden");
                             window.currentShiftData = { shiftId: window.currentShiftId, loginTime: window.currentLoginTime, totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree, totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, logoutTime: window.getWibDate() };
 
-                            // Ensure Print button is unhidden during fallback offline calculation
                             let btnPrintHist = document.getElementById("btn-print-history"); 
                             if (btnPrintHist) { 
                                 btnPrintHist.classList.remove("hidden"); 
+                                btnPrintHist.disabled = false;
                                 btnPrintHist.innerText = "🖨️ Cetak Laporan";
+                                btnPrintHist.style.background = "#2980b9";
                                 btnPrintHist.onclick = window.printShiftReport; 
                             }
                         });
@@ -2135,6 +2138,15 @@ window.openCurrentShiftReport = async function() {
             document.getElementById("sr-net").innerText = "Rp -";
             document.getElementById("sr-items-list").innerHTML = "<div style='padding:15px; text-align:center; color:#e67e22; font-weight:bold;'><i>⏳ Menarik data akurat langsung dari Server...</i></div>";
             
+            // Tampilkan tombol cetak tapi buat abu-abu (loading)
+            let btnPrintHist = document.getElementById("btn-print-history");
+            if (btnPrintHist) {
+                btnPrintHist.classList.remove("hidden");
+                btnPrintHist.disabled = true;
+                btnPrintHist.innerText = "⏳ Loading...";
+                btnPrintHist.style.background = "#95a5a6";
+            }
+            
             document.getElementById("shift-report-modal").classList.remove("hidden");
             
             try {
@@ -2174,7 +2186,12 @@ window.openCurrentShiftReport = async function() {
                     document.getElementById("sr-items-list").innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual hari ini.</div>";
                     
                     let btnPrintHist = document.getElementById("btn-print-history"); 
-                    if (btnPrintHist) { btnPrintHist.classList.remove("hidden"); btnPrintHist.onclick = window.printShiftReport; }
+                    if (btnPrintHist) { 
+                        btnPrintHist.disabled = false;
+                        btnPrintHist.innerText = "🖨️ Cetak Laporan";
+                        btnPrintHist.style.background = "#2980b9";
+                        btnPrintHist.onclick = window.printShiftReport; 
+                    }
                 } else {
                     window.fallbackLocalShiftReport();
                 }
