@@ -414,13 +414,12 @@ window.attemptLogin = async function() {
                 document.getElementById("display-cashier").innerText = window.currentCashier; 
                 document.getElementById("display-outlet").innerText = window.currentOutlet;
                 
+                await window.loadMenuFromCache(); // 🔥 Muat seketika dari memori lokal (0.1 detik)
                 window.loadMenuUI();
                 window.lockMenu(); 
                 
                 if (navigator.onLine) { 
-                    // Dijalankan di background agar kasir bisa langsung input pesanan
-                    window.syncCriticalData();
-                    window.syncBackgroundData(); 
+                    window.syncMasterData(); // 🔥 Tarik data terbaru di background dan perbarui teks status UI
                 }
                 
                 const today = window.getWibDate().split(" ")[0];
@@ -542,6 +541,16 @@ window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rO
         window.db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").put(mem);
     };
 }
+
+window.loadMenuFromCache = async function() {
+    return new Promise(resolve => {
+        if (!window.db) { window.globalMenuData = []; return resolve(); }
+        window.db.transaction(["menu"], "readonly").objectStore("menu").getAll().onsuccess = (e) => {
+            window.globalMenuData = e.target.result || [];
+            resolve();
+        };
+    });
+};
 
 window.loadMenuUI = function() {
     const visibleItems = window.globalMenuData.filter(i => !i.hideOnPos); const categories = [...new Set(visibleItems.map(i => i.category))]; 
@@ -3056,6 +3065,7 @@ window.autoResumeSession = async function() {
                     document.getElementById("display-cashier").innerText = window.currentCashier;
                     document.getElementById("display-outlet").innerText = window.currentOutlet;
 
+                    await window.loadMenuFromCache(); // 🔥 Muat seketika saat aplikasi dibuka kembali
                     window.loadMenuUI();
                     window.lockMenu();
                     resolve(true);
@@ -3139,11 +3149,12 @@ window.onload = async () => {
     }
     
     if (navigator.onLine) {
-        window.syncCriticalData(); 
-    }
-    
-    if ((isResumed || window.currentOutlet) && navigator.onLine) {
-        window.syncBackgroundData();
+        window.syncMasterData(); 
+    } else {
+        let netText = document.getElementById("network-text");
+        let netDot = document.getElementById("network-dot");
+        if (netText) netText.innerText = "Mode Offline (Data Lokal)";
+        if (netDot) netDot.style.backgroundColor = "#e74c3c";
     }
     
     window.setInterval(window.runBackgroundSync, 15000); 
