@@ -1726,37 +1726,83 @@ window.renderHistoryList = function(type) {
 
 window.viewHistoricalShift = function(shiftId) {
     window.db.transaction(["local_shift_history"], "readonly").objectStore("local_shift_history").get(shiftId).onsuccess = (e) => {
-        const data = e.target.result;
-        if(!data) return alert("Data shift tidak ditemukan di perangkat ini.");
-        
-        document.getElementById("sr-orders").innerText = data.totalOrders; document.getElementById("sr-customers").innerText = data.totalCustomers; document.getElementById("sr-omset").innerText = `Rp ${data.totalOmset.toLocaleString('id-ID')}`;
-        document.getElementById("sr-cash").innerText = `Rp ${data.totalCash.toLocaleString('id-ID')}`; document.getElementById("sr-qris").innerText = `Rp ${data.totalQris.toLocaleString('id-ID')}`; document.getElementById("sr-transfer").innerText = `Rp ${data.totalTransfer.toLocaleString('id-ID')}`;
-        document.getElementById("sr-free").innerText = `Rp ${data.totalFree.toLocaleString('id-ID')}`; document.getElementById("sr-expense").innerText = `Rp ${data.totalExpenses.toLocaleString('id-ID')}`;
-        document.getElementById("sr-piutang-given").innerText = `Rp ${(data.piutangGiven||0).toLocaleString('id-ID')}`; document.getElementById("sr-piutang-paid").innerText = `Rp ${(data.piutangPaid||0).toLocaleString('id-ID')}`;
-        document.getElementById("sr-net").innerText = `Rp ${data.netCash.toLocaleString('id-ID')}`; 
-        
-        let itemsHtml = ""; 
+        const localData = e.target.result;
+        if (localData) {
+            window.renderShiftModalData(localData, true);
+        } else {
+            // If cache cleared, pull from the synced Server Shift Reports
+            window.db.transaction(["shift_reports"], "readonly").objectStore("shift_reports").get(shiftId).onsuccess = (ev) => {
+                const serverData = ev.target.result;
+                if (serverData) {
+                    window.renderShiftModalData(serverData, false);
+                } else {
+                    alert("Data shift tidak ditemukan di perangkat ini maupun di server sinkronisasi.");
+                }
+            };
+        }
+    };
+}
+
+window.renderShiftModalData = function(data, isLocal) {
+    document.getElementById("sr-orders").innerText = data.totalOrders || 0; 
+    document.getElementById("sr-customers").innerText = data.totalCustomers || 0; 
+    document.getElementById("sr-omset").innerText = `Rp ${(data.totalOmset||0).toLocaleString('id-ID')}`;
+    document.getElementById("sr-cash").innerText = `Rp ${(data.totalCash||0).toLocaleString('id-ID')}`; 
+    document.getElementById("sr-qris").innerText = `Rp ${(data.totalQris||0).toLocaleString('id-ID')}`; 
+    document.getElementById("sr-transfer").innerText = `Rp ${(data.totalTransfer||0).toLocaleString('id-ID')}`;
+    document.getElementById("sr-free").innerText = `Rp ${(data.totalFree||0).toLocaleString('id-ID')}`; 
+    document.getElementById("sr-expense").innerText = `Rp ${(data.totalExpenses||0).toLocaleString('id-ID')}`;
+    document.getElementById("sr-piutang-given").innerText = `Rp ${(data.piutangGiven||0).toLocaleString('id-ID')}`; 
+    document.getElementById("sr-piutang-paid").innerText = `Rp ${(data.piutangPaid||0).toLocaleString('id-ID')}`;
+    document.getElementById("sr-net").innerText = `Rp ${(data.netCash||0).toLocaleString('id-ID')}`; 
+    
+    let itemsHtml = ""; 
+    let printFoodSummary = {}; 
+    
+    if (isLocal) {
         for (const [key, val] of Object.entries(data.foodSummary || {})) { 
             let qty = typeof val === 'object' ? val.qty : val;
             let name = typeof val === 'object' && val.name ? val.name : key;
             itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; 
+            printFoodSummary[name] = { qty: qty, name: name };
         }
-        let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual.</div>";
-        
-        let meterContainer = document.getElementById("meter-water-container"); if(meterContainer) meterContainer.classList.add("hidden");
-        let btnEndShift = document.getElementById("btn-end-shift"); if(btnEndShift) btnEndShift.classList.add("hidden");
-        
-        let btnPrintHist = document.getElementById("btn-print-history");
-        if (btnPrintHist) {
-            btnPrintHist.classList.remove("hidden");
-            btnPrintHist.onclick = async function() {
-                const payloadBytes = await window.buildEscPosShiftReport(data);
-                await window.printViaBluetooth(payloadBytes);
-            };
-        }
-        document.getElementById("shift-report-modal").classList.remove("hidden");
-    };
-}
+    } else {
+        // Reconstruct JSON from Server String format for the Bluetooth Printer
+        let lines = (data.itemsSoldSummary || "").split('\n');
+        lines.forEach(line => {
+            if(line.trim()) {
+                let match = line.match(/•\s*(\d+)[xX]\s+(.+)/);
+                if(match) {
+                    let qty = Number(match[1]);
+                    let name = match[2].trim();
+                    itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`;
+                    printFoodSummary[name] = { qty: qty, name: name };
+                } else {
+                    itemsHtml += `<div style="padding:3px 0; font-size:14px; color:#2c3e50;">${line}</div>`;
+                }
+            }
+        });
+    }
+    
+    let itemsContainer = document.getElementById("sr-items-list"); 
+    if(itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual.</div>";
+    
+    let meterContainer = document.getElementById("meter-water-container"); if(meterContainer) meterContainer.classList.add("hidden");
+    let btnEndShift = document.getElementById("btn-end-shift"); if(btnEndShift) btnEndShift.classList.add("hidden");
+    
+    // Unhide and set up Print Button
+    let btnPrintHist = document.getElementById("btn-print-history");
+    if (btnPrintHist) {
+        btnPrintHist.classList.remove("hidden");
+        btnPrintHist.innerText = "🖨️ Cetak Laporan";
+        btnPrintHist.onclick = async function() {
+            let printData = {...data, foodSummary: printFoodSummary};
+            const payloadBytes = await window.buildEscPosShiftReport(printData);
+            await window.printViaBluetooth(payloadBytes);
+        };
+    }
+    document.getElementById("shift-report-modal").classList.remove("hidden");
+};
 
 window.showOrderDetail = function(orderId) {
     window.db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = (e) => {
@@ -2037,6 +2083,14 @@ window.fallbackLocalShiftReport = function() {
                             
                             document.getElementById("shift-report-modal").classList.remove("hidden");
                             window.currentShiftData = { shiftId: window.currentShiftId, loginTime: window.currentLoginTime, totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree, totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, logoutTime: window.getWibDate() };
+
+                            // Ensure Print button is unhidden during fallback offline calculation
+                            let btnPrintHist = document.getElementById("btn-print-history"); 
+                            if (btnPrintHist) { 
+                                btnPrintHist.classList.remove("hidden"); 
+                                btnPrintHist.innerText = "🖨️ Cetak Laporan";
+                                btnPrintHist.onclick = window.printShiftReport; 
+                            }
                         });
                     };
                 };
