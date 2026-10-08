@@ -1140,7 +1140,12 @@ window.triggerBayarPiutang = function(phone, linkedOrderId = null) {
 
 window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
     window.piutangTargetMember = memberOverride || window.activeCustomerProfile;
-    if(!window.piutangTargetMember || window.piutangTargetMember.piutang <= 0) return;
+    
+    // 🔥 THE FIX: Do not silently abort. If it's a delivery intercept, force it open.
+    if(!window.piutangTargetMember || (window.piutangTargetMember.piutang <= 0 && !linkedOrderId)) {
+        console.log("Piutang modal diblokir: Tidak ada target atau piutang 0.");
+        return;
+    }
     
     window.piutangFromDeliveryOrderId = linkedOrderId;
     
@@ -1163,14 +1168,17 @@ window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
     document.getElementById("piutang-parkir").value = "0";
     document.getElementById("piutang-tip").value = "0";
     
-    const orderSelect = document.getElementById("piutang-target-order"); orderSelect.innerHTML = `<option value="">-- Lunasi Saldo Global --</option>`;
+    const orderSelect = document.getElementById("piutang-target-order"); 
+    orderSelect.innerHTML = `<option value="">-- Lunasi Saldo Global --</option>`;
+    
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        const memberOrders = e.target.result.filter(o => o.customerPhone === window.piutangTargetMember.phone && o.debtAmount > 0 && String(o.paymentMethod).includes("Piutang"));
+        // 🔥 THE FIX: Broadened the filter to ANY order with debtAmount > 0 (prevents missing dropdowns)
+        const memberOrders = e.target.result.filter(o => o.customerPhone === window.piutangTargetMember.phone && (o.debtAmount || 0) > 0);
         memberOrders.forEach(o => { orderSelect.innerHTML += `<option value="${o.orderId}">Nota: ${o.orderId} (Hutang Rp ${o.debtAmount.toLocaleString('id-ID')})</option>`; });
         
         if (linkedOrderId) orderSelect.value = linkedOrderId;
 
-        // 🔥 DYNAMIC BUTTON TEXT
+        // DYNAMIC BUTTON TEXT
         let buttons = document.querySelectorAll("#piutang-modal button");
         buttons.forEach(b => {
             if (b.innerText.toLowerCase().includes("lunas") || b.innerText.toLowerCase().includes("simpan") || b.innerText.toLowerCase().includes("selesai")) {
@@ -2944,8 +2952,14 @@ window.markDeliveryDone = async function(orderId) {
         
         window.db.transaction(["members"], "readonly").objectStore("members").get(order.customerPhone).onsuccess = (e) => {
             let m = e.target.result; 
-            if (m) window.openPiutangModal(m, orderId);
-            else window.openPiutangModal(fallbackMember, orderId);
+            if (m) {
+                // 🔥 THE FIX: Prevent silent crash! Force piutang amount to be AT LEAST the order's debt, 
+                // in case the background sync temporarily overwrote it with '0'.
+                m.piutang = Math.max((m.piutang || 0), order.debtAmount);
+                window.openPiutangModal(m, orderId);
+            } else {
+                window.openPiutangModal(fallbackMember, orderId);
+            }
         };
         return; 
     }
