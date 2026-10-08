@@ -2130,6 +2130,67 @@ window.fallbackLocalShiftReport = function() {
     };
 }
 
+window.submitNewMember = async function() {
+    let phone = document.getElementById("new-mem-phone").value.trim();
+    let name = document.getElementById("new-mem-name").value.trim() || "Tanpa Nama";
+    let address = document.getElementById("new-mem-address").value.trim();
+
+    if (!phone) return alert("⚠️ Nomor WA wajib diisi!");
+    
+    // Auto-format phone number
+    let formatPhone = phone;
+    if (formatPhone.startsWith("0")) formatPhone = "62" + formatPhone.substring(1);
+    else if (formatPhone.startsWith("8")) formatPhone = "62" + formatPhone;
+
+    let btn = document.querySelector("#add-member-modal button:nth-child(2)");
+    let originalText = btn.innerText;
+    btn.innerText = "Menyimpan...";
+    btn.disabled = true;
+
+    try {
+        // 1. Save directly to local tablet DB for instant access
+        let newMember = {
+            phone: formatPhone, 
+            name: name, 
+            address: address,
+            wallet: {}, 
+            bottlesBorrowed: 0, 
+            piutang: 0,
+            firstOutlet: window.currentOutlet, 
+            recentOutlets: window.currentOutlet
+        };
+        
+        await new Promise((resolve) => {
+            let tx = window.db.transaction(["members"], "readwrite");
+            tx.objectStore("members").put(newMember);
+            tx.oncomplete = resolve;
+        });
+
+        // 2. Push to server silently in background
+        if (navigator.onLine) {
+            let payload = { action: "addMember", phone: formatPhone, name: name, address: address, outlet: window.currentOutlet };
+            fetch(API_URL, { method: "POST", body: JSON.stringify(payload) }).catch(() => {}); 
+        }
+
+        alert("✅ Member berhasil ditambahkan!");
+        document.getElementById("add-member-modal").classList.add("hidden");
+        document.getElementById("new-mem-phone").value = "";
+        document.getElementById("new-mem-name").value = "";
+        document.getElementById("new-mem-address").value = "";
+
+        // Convenience: Auto-fill the POS fields immediately
+        if (document.getElementById("cust-phone")) document.getElementById("cust-phone").value = formatPhone;
+        if (document.getElementById("cust-name")) document.getElementById("cust-name").value = name;
+        if (document.getElementById("cust-address")) document.getElementById("cust-address").value = address;
+
+    } catch (err) {
+        alert("❌ Gagal menyimpan member.");
+    } finally {
+        btn.innerText = originalText;
+        btn.disabled = false;
+    }
+};
+
 window.openCurrentShiftReport = async function() {
     if (!navigator.onLine) {
         alert("⚠️ Anda sedang offline. Sistem akan menggunakan data lokal (mungkin kurang akurat jika cache pernah terhapus).");
