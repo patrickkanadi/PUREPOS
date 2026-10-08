@@ -544,11 +544,30 @@ window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rO
 
 window.loadMenuFromCache = async function() {
     return new Promise(resolve => {
-        if (!window.db) { window.globalMenuData = []; return resolve(); }
-        window.db.transaction(["menu"], "readonly").objectStore("menu").getAll().onsuccess = (e) => {
-            window.globalMenuData = e.target.result || [];
+        try {
+            if (!window.db) { 
+                window.globalMenuData = []; 
+                return resolve(); 
+            }
+            
+            let tx = window.db.transaction(["menu"], "readonly");
+            let req = tx.objectStore("menu").getAll();
+            
+            req.onsuccess = (e) => {
+                window.globalMenuData = e.target.result || [];
+                resolve();
+            };
+            
+            req.onerror = (err) => {
+                console.warn("Gagal membaca cache menu, lanjut dengan array kosong.", err);
+                window.globalMenuData = [];
+                resolve();
+            };
+        } catch (error) {
+            console.warn("Database menu belum siap, melewati cache lokal.", error);
+            window.globalMenuData = [];
             resolve();
-        };
+        }
     });
 };
 
@@ -3049,7 +3068,8 @@ window.autoResumeSession = async function() {
 
     if (staff) {
         return new Promise(resolve => {
-            window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staff.pin).onsuccess = (shiftReq) => {
+            // 🔥 ADDED 'async' HERE:
+            window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staff.pin).onsuccess = async (shiftReq) => {
                 const activeShift = shiftReq.target.result;
                 if (activeShift) {
                     // Restore the session context instantly
@@ -3065,7 +3085,7 @@ window.autoResumeSession = async function() {
                     document.getElementById("display-cashier").innerText = window.currentCashier;
                     document.getElementById("display-outlet").innerText = window.currentOutlet;
 
-                    await window.loadMenuFromCache(); // 🔥 Muat seketika saat aplikasi dibuka kembali
+                    await window.loadMenuFromCache(); // 🔥 Sekarang 'await' akan berfungsi dengan benar
                     window.loadMenuUI();
                     window.lockMenu();
                     resolve(true);
