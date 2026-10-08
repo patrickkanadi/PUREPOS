@@ -191,33 +191,88 @@ window.forceCloseShift = async function(shift) {
 }
 
 window.connectBluetoothPrinter = async function() {
+    let btn = document.getElementById("btn-connect-printer");
+    let originalText = btn.innerText;
+    let originalBg = btn.style.background;
+
     try {
-        window.bluetoothDevice = await navigator.bluetooth.requestDevice({ filters: [{ services: [0x18F0] }], optionalServices: [0x18F0] });
-        const server = await window.bluetoothDevice.gatt.connect(); const service = await server.getPrimaryService(0x18F0);
+        btn.innerText = "⏳ Mencari...";
+        btn.style.background = "#95a5a6";
+        btn.style.borderColor = "#95a5a6";
+
+        // FIXED: Standardized to window.printDevice
+        window.printDevice = await navigator.bluetooth.requestDevice({ filters: [{ services: [0x18F0] }], optionalServices: [0x18F0] });
+        const server = await window.printDevice.gatt.connect(); 
+        const service = await server.getPrimaryService(0x18F0);
         window.printerCharacteristic = await service.getCharacteristic(0x2AF1);
         
         alert("Printer Thermal Berhasil Terhubung!");
-        document.getElementById("btn-connect-printer").innerText = "🖨️ Printer Aktif"; document.getElementById("btn-connect-printer").style.background = "#27ae60"; document.getElementById("btn-connect-printer").style.borderColor = "#27ae60";
+        btn.innerText = "🖨️ Printer Siap"; 
+        btn.style.background = "#27ae60"; 
+        btn.style.borderColor = "#27ae60";
         
-        window.bluetoothDevice.addEventListener('gattserverdisconnected', () => {
-            alert("Koneksi Printer Terputus!");
-            document.getElementById("btn-connect-printer").innerText = "🖨️ Printer"; document.getElementById("btn-connect-printer").style.background = "#f39c12"; document.getElementById("btn-connect-printer").style.borderColor = "#f39c12";
+        window.printDevice.addEventListener('gattserverdisconnected', () => {
+            btn.innerText = "🖨️ Terputus"; 
+            btn.style.background = "#e74c3c"; 
+            btn.style.borderColor = "#e74c3c";
             window.printerCharacteristic = null;
         });
-    } catch (error) { console.error(error); alert("Gagal koneksi printer: " + error.message); }
+    } catch (error) { 
+        console.error(error); 
+        alert("Gagal koneksi printer: " + error.message); 
+        btn.innerText = originalText;
+        btn.style.background = originalBg;
+        btn.style.borderColor = originalBg;
+    }
 }
 
-window.printViaBluetooth = async function(payloadUint8Array) {
-    if (!window.printerCharacteristic) { alert("Printer belum terhubung! Silakan hubungkan dulu dengan tombol 'Printer'."); return false; }
+window.printViaBluetooth = async function(payloadBytes) {
+    if (!window.printDevice) {
+        alert("⚠️ Printer belum pernah dipasangkan! Klik tombol '🖨️ Printer' di atas sekali saja untuk pairing pertama kalinya.");
+        return;
+    }
+
+    let btn = document.getElementById("btn-connect-printer");
+
+    // 🔥 STICKY PRINTER: If disconnected or cache cleared, wake it up and RE-FETCH characteristics
+    if (!window.printDevice.gatt.connected || !window.printerCharacteristic) {
+        try {
+            if (btn) btn.innerText = "⏳ Membangunkan...";
+            
+            const server = await window.printDevice.gatt.connect();
+            const service = await server.getPrimaryService(0x18F0);
+            window.printerCharacteristic = await service.getCharacteristic(0x2AF1);
+            
+            if (btn) {
+                btn.innerText = "🖨️ Printer Siap";
+                btn.style.background = "#27ae60";
+                btn.style.borderColor = "#27ae60";
+            }
+        } catch (err) {
+            if (btn) {
+                btn.innerText = "🖨️ Terputus";
+                btn.style.background = "#e74c3c";
+                btn.style.borderColor = "#e74c3c";
+            }
+            alert("⚠️ Gagal menyambung ulang ke printer. Pastikan printer dalam keadaan MENYALA.");
+            return;
+        }
+    }
+
     try {
         const CHUNK_SIZE = 20; 
-        for (let i = 0; i < payloadUint8Array.length; i += CHUNK_SIZE) {
-            const chunk = payloadUint8Array.slice(i, i + CHUNK_SIZE);
+        // FIXED: Changed payloadUint8Array to payloadBytes to match the parameter
+        for (let i = 0; i < payloadBytes.length; i += CHUNK_SIZE) {
+            const chunk = payloadBytes.slice(i, i + CHUNK_SIZE);
             await window.printerCharacteristic.writeValue(chunk);
             await new Promise(r => setTimeout(r, 10)); 
         }
         return true;
-    } catch (error) { console.error("Print Error:", error); alert("Print Gagal: " + error.message); return false; }
+    } catch (error) { 
+        console.error("Print Error:", error); 
+        alert("Print Gagal: " + error.message); 
+        return false; 
+    }
 }
 
 window.manualPushSync = async function() {
@@ -2130,6 +2185,37 @@ window.fallbackLocalShiftReport = function() {
     };
 }
 
+window.restorePrinterConnection = async function() {
+    if (navigator.bluetooth && navigator.bluetooth.getDevices) {
+        try {
+            const devices = await navigator.bluetooth.getDevices();
+            if (devices.length > 0) {
+                window.printDevice = devices[0]; 
+                
+                let btn = document.getElementById("btn-connect-printer");
+                
+                // 🔥 FIX: Added listener so button turns red if printer shuts down while app is open
+                window.printDevice.addEventListener('gattserverdisconnected', () => {
+                    if (btn) {
+                        btn.innerText = "🖨️ Terputus";
+                        btn.style.background = "#e74c3c";
+                        btn.style.borderColor = "#e74c3c";
+                        window.printerCharacteristic = null;
+                    }
+                });
+
+                if (btn) {
+                    btn.innerText = "🖨️ Printer Siap";
+                    btn.style.background = "#27ae60";
+                    btn.style.borderColor = "#27ae60";
+                }
+            }
+        } catch (err) {
+            console.log("Browser tidak mendukung restore Bluetooth otomatis.");
+        }
+    }
+};
+
 window.submitNewMember = async function() {
     let phone = document.getElementById("new-mem-phone").value.trim();
     let name = document.getElementById("new-mem-name").value.trim() || "Tanpa Nama";
@@ -3205,6 +3291,9 @@ window.onload = async () => {
     }
 
     await window.initDB(); 
+    
+    // 🔥 Panggil memori Bluetooth secara otomatis saat aplikasi dibuka
+    await window.restorePrinterConnection();
     
     const settings = await window.getDynamicSettings();
     if (settings["Outlet_List"]) {
