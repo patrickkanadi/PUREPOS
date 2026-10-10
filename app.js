@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbw1w3B11VMGefnoh8A0TXVu5Hhrbrfi5HqcxYVNVZwb1Tgx_LlDMXVEEQQdKxdis37v/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 21; // 🔥 Bump to 19 to force cache refresh
-const APP_VERSION = "2.0"; // 🔥 Added explicit App Version
+const DB_VERSION = 22; // 🔥 Bump to 19 to force cache refresh
+const APP_VERSION = "2.2"; // 🔥 Added explicit App Version
 window.db = null;
 
 // Core State
