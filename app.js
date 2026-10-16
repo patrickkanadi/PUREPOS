@@ -3263,6 +3263,106 @@ window.autoResumeSession = async function() {
     }
 };
 
+window.openMemberHistoryModal = function() {
+    let queryInput = document.getElementById("hist-search-query");
+    
+    // Auto-fill phone if a customer is currently active in the POS
+    if (window.activeCustomerProfile && window.activeCustomerProfile.phone && window.activeCustomerProfile.phone !== "-") {
+        queryInput.value = window.activeCustomerProfile.phone;
+    } else {
+        queryInput.value = "";
+    }
+    
+    // Default "From" and "To" dates to today (WIB) so it's ready for quick daily checks
+    let todayWib = window.getWibDate().split(" ")[0]; // Format: YYYY-MM-DD
+    document.getElementById("hist-search-from").value = todayWib;
+    document.getElementById("hist-search-to").value = todayWib;
+    
+    document.getElementById("hist-search-results").innerHTML = `<div style="text-align:center; color:#7f8c8d; font-style:italic; padding:20px;">Tekan tombol cari untuk memuat data dari server.</div>`;
+    document.getElementById("member-history-modal").classList.remove("hidden");
+};
+
+window.fetchMemberHistory = async function() {
+    if (!navigator.onLine) {
+        return alert("⚠️ Anda sedang offline! Fitur ini membutuhkan koneksi internet untuk menarik data arsip dari server.");
+    }
+
+    let query = document.getElementById("hist-search-query").value.trim();
+    let dateFrom = document.getElementById("hist-search-from").value;
+    let dateTo = document.getElementById("hist-search-to").value;
+
+    // Validation: Require either a Member Query OR at least one Date
+    if (!query && !dateFrom && !dateTo) {
+        return alert("⚠️ Harap isi setidaknya Nama/WA Pelanggan ATAU pilih Rentang Tanggal (Dari / Sampai)!");
+    }
+
+    if (dateFrom && dateTo && new Date(dateFrom) > new Date(dateTo)) {
+        return alert("⚠️ Rentang Tanggal Salah:\n'Dari Tanggal' tidak boleh lebih baru daripada 'Sampai Tanggal'.");
+    }
+
+    let btn = document.getElementById("btn-fetch-history");
+    let resBox = document.getElementById("hist-search-results");
+    
+    btn.innerHTML = "⏳ Menarik data dari server & arsip...";
+    btn.disabled = true;
+    btn.style.background = "#f39c12";
+    resBox.innerHTML = `<div style="text-align:center; padding:20px; font-weight:bold; color:#e67e22;">Sedang memindai database aktif & arsip... Mohon tunggu.</div>`;
+
+    try {
+        let url = API_URL + `?type=memberHistory&q=${encodeURIComponent(query)}&from=${encodeURIComponent(dateFrom)}&to=${encodeURIComponent(dateTo)}&outlet=${encodeURIComponent(window.currentOutlet)}`;
+        let response = await fetch(url, { method: "GET", redirect: "follow" });
+        let result = await response.json();
+
+        if (result.status === "Success") {
+            let list = result.data || [];
+            if (list.length === 0) {
+                resBox.innerHTML = `<div style="text-align:center; padding:20px; color:#7f8c8d;">Tidak ada transaksi ditemukan untuk filter tersebut.</div>`;
+            } else {
+                let totalSum = list.reduce((sum, item) => sum + (item.status !== "Voided" ? item.total : 0), 0);
+                let html = `<div style="background:#e8f8f5; padding:8px 12px; border-radius:6px; margin-bottom:10px; font-size:13px; color:#117a65; display:flex; justify-content:space-between;">
+                    <span>Ditemukan: <strong>${list.length} Transaksi</strong></span>
+                    <span>Total (Non-Void): <strong>Rp ${totalSum.toLocaleString('id-ID')}</strong></span>
+                </div>`;
+
+                list.forEach(o => {
+                    let badge = o.status === "Voided" 
+                        ? `<span class="status-badge status-voided">Voided</span>` 
+                        : `<span class="status-badge status-paid">${o.status}</span>`;
+                    
+                    let debtBadge = o.debt > 0 
+                        ? `<br><small style="color:#c0392b; font-weight:bold;">⚠️ Sisa Piutang: Rp ${o.debt.toLocaleString('id-ID')}</small>` 
+                        : "";
+
+                    html += `
+                    <div style="border-bottom:1px solid #e0e0e0; padding:10px 4px; display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px;">
+                        <div style="flex:1; min-width:220px;">
+                            <strong style="color:#2c3e50;">👤 ${o.customerName}</strong> <span style="font-size:12px; color:#7f8c8d;">(${o.customerPhone})</span><br>
+                            <small style="color:#7f8c8d;">🧾 ${o.orderId} | 🕒 ${window.formatDateReadable(o.timestamp)} | 📍 ${o.outlet} (${o.cashier})</small><br>
+                            <div style="font-size:13px; color:#2980b9; font-weight:bold; margin-top:4px;">📦 ${o.items}</div>
+                        </div>
+                        <div style="text-align:right; min-width:120px;">
+                            ${badge}<br>
+                            <strong style="font-size:16px; color:#2c3e50;">Rp ${o.total.toLocaleString('id-ID')}</strong><br>
+                            <small style="color:#27ae60; font-weight:bold;">${o.paymentMethod}</small>
+                            ${debtBadge}
+                        </div>
+                    </div>`;
+                });
+                resBox.innerHTML = html;
+            }
+        } else {
+            resBox.innerHTML = `<div style="text-align:center; color:#e74c3c; padding:20px;">Gagal memuat data: ${result.message}</div>`;
+        }
+    } catch (err) {
+        console.error(err);
+        resBox.innerHTML = `<div style="text-align:center; color:#e74c3c; padding:20px;">Terjadi kesalahan koneksi saat menghubungi server.</div>`;
+    } finally {
+        btn.innerHTML = "🔍 Tarik Data dari Server";
+        btn.disabled = false;
+        btn.style.background = "#16a085";
+    }
+};
+
 window.onload = async () => { 
     document.getElementById("cust-phone").addEventListener("input", window.handleAutocomplete);
     document.getElementById("cust-name").addEventListener("input", window.handleAutocomplete);
