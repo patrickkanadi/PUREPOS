@@ -3268,17 +3268,16 @@ window.openMemberHistoryModal = function() {
     let dropList = document.getElementById("hist-autocomplete-list");
     if (dropList) dropList.classList.add("hidden");
     
-    // Auto-fill phone if a customer is currently active in the POS
+    // Auto-fill phone jika ada pelanggan yang sedang aktif di POS
     if (window.activeCustomerProfile && window.activeCustomerProfile.phone && window.activeCustomerProfile.phone !== "-") {
         queryInput.value = window.activeCustomerProfile.phone;
     } else {
         queryInput.value = "";
     }
     
-    // Default "From" and "To" dates to today (WIB) so it's ready for quick daily checks
-    let todayWib = window.getWibDate().split(" ")[0]; // Format: YYYY-MM-DD
-    document.getElementById("hist-search-from").value = todayWib;
-    document.getElementById("hist-search-to").value = todayWib;
+    // 🔥 PERUBAHAN: Kosongkan tanggal secara default agar pencarian bersifat "Semua Waktu" (All-Time)
+    document.getElementById("hist-search-from").value = "";
+    document.getElementById("hist-search-to").value = "";
     
     document.getElementById("hist-search-results").innerHTML = `<div style="text-align:center; color:#7f8c8d; font-style:italic; padding:20px;">Tekan tombol cari untuk memuat data dari server.</div>`;
     document.getElementById("member-history-modal").classList.remove("hidden");
