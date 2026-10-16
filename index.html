@@ -168,6 +168,7 @@
                 <button class="btn-top" style="background:#3498db; border-color:#3498db;" onclick="window.openInboundModal()">🚚 Truk</button>
                 <button class="btn-top" style="background:#16a085; border-color:#16a085;" onclick="window.openCashDrop(false)">🏦 Laci</button>
                 <button class="btn-top" style="background:#8e44ad; border-color:#8e44ad;" onclick="window.openHistoryModal()">📋 Riwayat</button>
+                <button class="btn-top" style="background:#16a085; border-color:#16a085;" onclick="window.openMemberHistoryModal()">🔍 Cari Arsip</button>
                 <button class="btn-top" style="background:#e67e22; border-color:#e67e22;" onclick="window.openExpenseModal()">💸 Keluar</button>
                 <button class="btn-top" style="background:#2980b9; border-color:#2980b9;" onclick="window.openCurrentShiftReport()">📊 Shift</button>
                 <button class="btn-top" style="background:#7f8c8d; border-color:#7f8c8d;" onclick="window.lockScreen()">🔒 Kunci</button>
@@ -488,34 +489,35 @@
         </div>
     </div>
 
+    <!-- Modal Cari Riwayat Server (On-Demand) -->
     <div id="member-history-modal" class="modal-overlay hidden" style="z-index: 10050;">
         <div class="modal-content modal-large">
-            <h2 style="margin-top:0; color:#2980b9;">👁️ Riwayat Transaksi Member</h2>
-            <p style="color:#7f8c8d; font-size:14px;">Tarik data riwayat langsung dari server (Online).</p>
+            <h2 style="margin-top:0; color:#16a085;">🔍 Cari Riwayat & Arsip Transaksi</h2>
+            <p style="color:#7f8c8d; font-size:13px; margin-top:0;">Isi Nama/WA, rentang tanggal (Dari - Sampai), atau keduanya untuk menarik data dari server.</p>
             
-            <div class="split-pay-grid">
-                <div class="form-box" style="margin-bottom:0;">
-                    <label>Nomor WA / ID Member</label>
-                    <input type="text" id="hist-search-phone" placeholder="0812...">
+            <div class="split-pay-grid" style="grid-template-columns: 1fr 1fr; gap:10px;">
+                <div class="form-box" style="margin-bottom:0; grid-column: span 2;">
+                    <label>Nama Pelanggan / Nomor WA (Opsional jika Tanggal diisi)</label>
+                    <input type="text" id="hist-search-query" placeholder="Contoh: Budi atau 0812... (Kosongkan untuk semua pelanggan)">
                 </div>
                 <div class="form-box" style="margin-bottom:0;">
-                    <label>Dari Tanggal</label>
+                    <label>Dari Tanggal (From)</label>
                     <input type="date" id="hist-search-from">
                 </div>
                 <div class="form-box" style="margin-bottom:0;">
-                    <label>Sampai Tanggal</label>
+                    <label>Sampai Tanggal (To)</label>
                     <input type="date" id="hist-search-to">
                 </div>
             </div>
-    
-            <button id="btn-fetch-history" onclick="window.fetchMemberHistory()" style="width:100%; padding:15px; background:#27ae60; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer; margin-bottom:15px; font-size:16px;">
-                🔍 Cari Riwayat
+
+            <button id="btn-fetch-history" onclick="window.fetchMemberHistory()" style="width:100%; padding:14px; background:#16a085; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer; margin-bottom:15px; font-size:16px;">
+                🔍 Tarik Data dari Server
             </button>
-    
-            <div id="hist-search-results" style="max-height:300px; overflow-y:auto; background:#f9f9f9; border:1px solid #ddd; border-radius:8px; padding:10px;">
+
+            <div id="hist-search-results" style="max-height:350px; overflow-y:auto; background:#f9f9f9; border:1px solid #ddd; border-radius:8px; padding:12px;">
                 <div style="text-align:center; color:#7f8c8d; font-style:italic; padding:20px;">Hasil pencarian akan muncul di sini...</div>
             </div>
-    
+
             <button onclick="document.getElementById('member-history-modal').classList.add('hidden')" style="width:100%; padding:15px; margin-top:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Tutup</button>
         </div>
     </div>
