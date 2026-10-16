@@ -3365,7 +3365,7 @@ window.fetchMemberHistory = async function() {
     resBox.innerHTML = `<div style="text-align:center; padding:20px; font-weight:bold; color:#e67e22;">Sedang memindai database aktif & arsip... Mohon tunggu.</div>`;
 
     try {
-        let url = API_URL + `?type=memberHistory&q=${encodeURIComponent(query)}&from=${encodeURIComponent(dateFrom)}&to=${encodeURIComponent(dateTo)}&outlet=${encodeURIComponent(window.currentOutlet)}`;
+        let url = API_URL + `?type=memberHistory&q=${encodeURIComponent(query)}&from=${encodeURIComponent(dateFrom)}&to=${encodeURIComponent(dateTo)}`;
         let response = await fetch(url, { method: "GET", redirect: "follow" });
         let result = await response.json();
 
