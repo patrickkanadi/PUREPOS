@@ -499,7 +499,7 @@
                 <div class="form-box" style="margin-bottom:0; grid-column: span 2; position: relative;">
                     <label>Nama Pelanggan / Nomor WA (Opsional jika Tanggal diisi)</label>
                     <input type="text" id="hist-search-query" placeholder="Ketik Nama / No. WA untuk saran..." autocomplete="off" oninput="window.handleHistoryMemberAutocomplete(this.value)" onfocus="window.handleHistoryMemberAutocomplete(this.value)">
-                    <div id="hist-autocomplete-list" class="autocomplete-items hidden" style="max-height: 220px; overflow-y: auto; z-index: 10060;"></div>
+                    <div id="hist-autocomplete-list" class="autocomplete-items hidden" style="position:absolute; top:100%; left:0; right:0; background:white; border:1px solid #ccc; border-radius:0 0 8px 8px; max-height:220px; overflow-y:auto; z-index:10060; box-shadow:0 4px 8px rgba(0,0,0,0.15);"></div>
                 </div>
                 <div class="form-box" style="margin-bottom:0;">
                     <label>Dari Tanggal (From)</label>
