@@ -3265,6 +3265,8 @@ window.autoResumeSession = async function() {
 
 window.openMemberHistoryModal = function() {
     let queryInput = document.getElementById("hist-search-query");
+    let dropList = document.getElementById("hist-autocomplete-list");
+    if (dropList) dropList.classList.add("hidden");
     
     // Auto-fill phone if a customer is currently active in the POS
     if (window.activeCustomerProfile && window.activeCustomerProfile.phone && window.activeCustomerProfile.phone !== "-") {
@@ -3280,6 +3282,61 @@ window.openMemberHistoryModal = function() {
     
     document.getElementById("hist-search-results").innerHTML = `<div style="text-align:center; color:#7f8c8d; font-style:italic; padding:20px;">Tekan tombol cari untuk memuat data dari server.</div>`;
     document.getElementById("member-history-modal").classList.remove("hidden");
+};
+
+let histAutocompleteTimeout = null;
+window.handleHistoryMemberAutocomplete = function(val) {
+    clearTimeout(histAutocompleteTimeout);
+    histAutocompleteTimeout = setTimeout(async () => {
+        let list = document.getElementById("hist-autocomplete-list");
+        if (!list || !window.db) return;
+        list.innerHTML = "";
+        
+        if (!val || val.trim().length < 1) {
+            list.classList.add("hidden");
+            return;
+        }
+        
+        let searchLower = val.trim().toLowerCase();
+        let searchDigits = val.replace(/\D/g, '').replace(/^0+/, '');
+        let hasDigits = searchDigits.length > 0;
+        
+        const allMembers = await new Promise(res => {
+            let req = window.db.transaction(["members"], "readonly").objectStore("members").getAll();
+            req.onsuccess = e => res(e.target.result || []);
+            req.onerror = () => res([]);
+        });
+        
+        let matches = allMembers.filter(m => {
+            let nameMatch = m.name && String(m.name).toLowerCase().includes(searchLower);
+            let phoneNorm = m.phone ? String(m.phone).replace(/\D/g, '').replace(/^0+/, '') : "";
+            let phoneMatch = hasDigits && phoneNorm.includes(searchDigits);
+            return nameMatch || phoneMatch;
+        }).slice(0, 10); // Limit to top 10 matches for speed
+        
+        if (matches.length === 0) {
+            list.classList.add("hidden");
+            return;
+        }
+        
+        matches.forEach(m => {
+            let safePhone = String(m.phone || "").replace(/'/g, "\\'");
+            let addrText = (m.address && m.address !== "-") ? ` | 📍 ${m.address}` : "";
+            list.innerHTML += `
+                <div onclick="window.selectHistoryMember('${safePhone}')" style="padding:10px 12px; cursor:pointer; border-bottom:1px solid #eee; background:#fff;">
+                    <strong style="color:#2c3e50;">👤 ${m.name}</strong> <span style="color:#16a085; font-weight:bold;">(${m.phone})</span>
+                    <br><small style="color:#7f8c8d;">Cabang: ${m.firstOutlet || "-"}${addrText}</small>
+                </div>`;
+        });
+        list.classList.remove("hidden");
+    }, 150);
+};
+
+window.selectHistoryMember = function(phone) {
+    let input = document.getElementById("hist-search-query");
+    let list = document.getElementById("hist-autocomplete-list");
+    if (input) input.value = phone; // Option A: Fills the exact WhatsApp number
+    if (list) list.classList.add("hidden");
 };
 
 window.fetchMemberHistory = async function() {
@@ -3379,6 +3436,10 @@ window.onload = async () => {
         if(e.target.id !== 'exp-category') {
             const catBox = document.getElementById('cat-autocomplete-results');
             if(catBox) catBox.classList.add('hidden');
+        }
+        if(e.target.id !== 'hist-search-query' && !e.target.closest('#hist-autocomplete-list')) {
+            const histBox = document.getElementById('hist-autocomplete-list');
+            if(histBox) histBox.classList.add('hidden');
         }
     });
 
