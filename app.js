@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbw1w3B11VMGefnoh8A0TXVu5Hhrbrfi5HqcxYVNVZwb1Tgx_LlDMXVEEQQdKxdis37v/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 22; // 🔥 Bump to 19 to force cache refresh
-const APP_VERSION = "2.2"; // 🔥 Added explicit App Version
+const DB_VERSION = 23; // 🔥 Bumped to 23
+const APP_VERSION = "2.3"; // 🔥 Bumped to 2.3 (RAM Member Cache & Instant Recall)
 window.db = null;
 
 // Core State
@@ -13,7 +13,7 @@ window.piutangTargetMember = null;
 
 // App Context
 window.currentCashier = ""; window.currentPin = ""; window.currentShiftId = ""; window.currentLoginTime = ""; window.currentOutlet = "";
-window.globalMenuData = []; window.currentCategory = ""; 
+window.globalMenuData = []; window.globalMembersCache = []; window.currentCategory = "";
 window.outletStocks = {}; window.isLoggingOut = false; window.currentVoidTarget = { type: null, id: null };
 window.isMenuLocked = true; window.isSyncing = false; window.loyaltyEnabled = false; 
 
@@ -337,8 +337,32 @@ window.syncCriticalData = async function() {
                 if(selectBox) { selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); }
             }
             if (result.data.members) {
-                const memT = tx.objectStore("members"); memT.clear();
-                result.data.members.forEach(m => memT.put(m));
+                // First, grab any newly added local members that haven't synced to the server yet
+                const unsyncedList = await new Promise(r => {
+                    try {
+                        let req = window.db.transaction(["unsynced_members"], "readonly").objectStore("unsynced_members").getAll();
+                        req.onsuccess = e => r(e.target.result || []);
+                        req.onerror = () => r([]);
+                    } catch(err) { r([]); }
+                });
+
+                const writeMemTx = window.db.transaction(["members"], "readwrite");
+                const memT = writeMemTx.objectStore("members");
+                memT.clear();
+
+                const mergedMap = new Map();
+                result.data.members.forEach(m => {
+                    mergedMap.set(m.phone, m);
+                    memT.put(m);
+                });
+                // Keep unsynced local members alive so they are never wiped out!
+                unsyncedList.forEach(um => {
+                    if (!mergedMap.has(um.phone)) {
+                        mergedMap.set(um.phone, um);
+                        memT.put(um);
+                    }
+                });
+                window.globalMembersCache = Array.from(mergedMap.values());
             }
         }
     } catch(e) { console.error("Critical Sync Error:", e); }
@@ -493,47 +517,6 @@ window.attemptLogin = async function() {
     }
 }
 
-window.handleAutocomplete = function(e) {
-    if (!window.db) return; 
-    const val = e.target.value.toLowerCase().trim(); 
-    const resBox = document.getElementById("autocomplete-results");
-
-    window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (ev) => {
-        const members = ev.target.result || []; 
-        let matches = members;
-        
-        if (val.length > 0) { matches = members.filter(m => String(m.phone).toLowerCase().includes(val) || String(m.name).toLowerCase().includes(val)); }
-        matches.sort((a, b) => (b.spent || 0) - (a.spent || 0)); matches = matches.slice(0, 15);
-
-        if (matches.length > 0) {
-            resBox.innerHTML = matches.map(m => {
-                let wStr = JSON.stringify(m.wallet || {}).replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
-                let nameStr = String(m.name || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                let fOut = String(m.firstOutlet || "").replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
-                let rOutStr = m.recentOutlets || "";
-                let rOutList = rOutStr ? rOutStr.split(",").map(s => s.trim()) : [];
-                let lOut = rOutList.length > 0 ? rOutList[rOutList.length - 1] : "-";
-                let safePhone = String(m.phone || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                let safeAddress = String(m.address || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                
-                // 🔥 FRONTEND FILTER: Ensure customer selection uses strict branch Piutang
-                let localPiutang = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : (m.piutang || 0);
-                
-                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div class="autocomplete-name">${m.name} <span style="font-size:11px; background:#ecf0f1; padding:2px 6px; border-radius:4px; margin-left:6px;">📍 Awal: ${fOut !== "Unknown" ? fOut : "-"} | Akhir: ${lOut}</span></div>
-                        <div class="autocomplete-phone" style="font-size:14px; color:#7f8c8d;">${m.phone}</div>
-                    </div>
-                    <div style="font-size:12px; color:#95a5a6; margin-top:4px;">${m.address || "Alamat belum diisi"}</div>
-                </div>`;
-            }).join("");
-            resBox.classList.remove("hidden");
-        } else { 
-            resBox.innerHTML = `<div style="padding:15px; color:#7f8c8d; text-align:center; font-style:italic;">Tidak ada member ditemukan</div>`;
-            resBox.classList.remove("hidden"); 
-        }
-    };
-}
 
 window.handleCategoryAutocomplete = function() {
     if (!window.db) return;
@@ -575,6 +558,82 @@ window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localP
     window.updatePromoBanner(window.activeCustomerProfile);
 };
 
+let posAutocompleteTimer = null;
+window.handleAutocomplete = function(e) {
+    if (!window.db) return;
+    const rawVal = (e && e.target) ? e.target.value : (document.getElementById("cust-phone").value || document.getElementById("cust-name").value || "");
+    
+    clearTimeout(posAutocompleteTimer);
+    posAutocompleteTimer = setTimeout(async () => {
+        const val = String(rawVal || "").toLowerCase().trim();
+        const digitsOnly = val.replace(/\D/g, '').replace(/^(62|0)/, ''); // Smart phone core: "0812", "62812", "812" -> "812"
+        const rawDigits = val.replace(/\D/g, '');
+        const resBox = document.getElementById("autocomplete-results");
+        if (!resBox) return;
+
+        // Ensure RAM cache is loaded
+        if (!window.globalMembersCache || window.globalMembersCache.length === 0) {
+            await window.loadMembersFromCache();
+        }
+        const members = window.globalMembersCache || [];
+        let matches = [];
+
+        if (val.length === 0) {
+            matches = members.slice().sort((a, b) => (b.spent || 0) - (a.spent || 0)).slice(0, 20);
+        } else {
+            matches = members.filter(m => {
+                let mName = String(m.name || "").toLowerCase();
+                let mPhoneRaw = String(m.phone || "").toLowerCase();
+                let mPhoneCore = mPhoneRaw.replace(/\D/g, '').replace(/^(62|0)/, '');
+
+                let nameHit = mName.includes(val);
+                let phoneHit = (rawDigits.length > 0 && mPhoneRaw.includes(rawDigits)) || (digitsOnly.length > 0 && mPhoneCore.includes(digitsOnly));
+                return nameHit || phoneHit;
+            });
+
+            // Sort: Exact/StartsWith name or phone matches first so duplicate names group together cleanly!
+            matches.sort((a, b) => {
+                let aName = String(a.name || "").toLowerCase();
+                let bName = String(b.name || "").toLowerCase();
+                let aStarts = aName.startsWith(val) ? 1 : 0;
+                let bStarts = bName.startsWith(val) ? 1 : 0;
+                if (aStarts !== bStarts) return bStarts - aStarts;
+                if (aName === bName) return String(a.phone).localeCompare(String(b.phone));
+                return (b.spent || 0) - (a.spent || 0);
+            });
+            matches = matches.slice(0, 40); // Show up to 40 so all duplicate names with different WA numbers appear
+        }
+
+        if (matches.length > 0) {
+            resBox.innerHTML = matches.map(m => {
+                let wStr = JSON.stringify(m.wallet || {}).replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
+                let nameStr = String(m.name || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                let fOut = String(m.firstOutlet || "").replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
+                let rOutStr = String(m.recentOutlets || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                let rOutList = rOutStr ? rOutStr.split(",").map(s => s.trim()) : [];
+                let lOut = rOutList.length > 0 ? rOutList[rOutList.length - 1] : "-";
+                let rawPhoneDisplay = String(m.phone || "").startsWith("TANPA-WA") ? "-" : String(m.phone || "").replace(/-DUP\d+$/, "");
+                let safePhone = rawPhoneDisplay.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                let safeAddress = String(m.address || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                
+                let localPiutang = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : (m.piutang || 0);
+                
+                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+                        <div class="autocomplete-name">👤 ${m.name} <span style="font-size:13px; background:#e8f8f5; color:#117a65; border:1px solid #16a085; padding:2px 8px; border-radius:12px; margin-left:6px; font-weight:bold;">📱 ${rawPhoneDisplay}</span></div>
+                        <div style="font-size:11px; background:#ecf0f1; color:#2c3e50; padding:2px 6px; border-radius:4px;">📍 Awal: ${fOut !== "Unknown" && fOut !== "" ? fOut : "-"} | Akhir: ${lOut}</div>
+                    </div>
+                    <div style="font-size:12px; color:#7f8c8d; margin-top:4px;">🏠 ${m.address && m.address !== "-" ? m.address : "Alamat belum diisi"}</div>
+                </div>`;
+            }).join("");
+            resBox.classList.remove("hidden");
+        } else { 
+            resBox.innerHTML = `<div style="padding:15px; color:#7f8c8d; text-align:center; font-style:italic;">Tidak ada member ditemukan untuk "${rawVal}"</div>`;
+            resBox.classList.remove("hidden"); 
+        }
+    }, 80);
+};
+
 window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rOut) {
     if(!phone || phone === "-") return; 
     window.db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
@@ -587,9 +646,15 @@ window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rO
         
         if(piutang !== undefined) {
             mem.piutang = piutang; 
-            // 🔥 ENSURE LOCAL TRANSACTIONS STAY ISOLATED IN MEMORY
             if (!mem.piutangBreakdown) mem.piutangBreakdown = {};
             mem.piutangBreakdown[window.currentOutlet] = piutang; 
+        }
+
+        // 🔥 Update RAM cache immediately so autocomplete & badges stay in sync in 0ms
+        if (window.globalMembersCache) {
+            let idx = window.globalMembersCache.findIndex(x => x.phone === phone);
+            if (idx > -1) window.globalMembersCache[idx] = mem;
+            else window.globalMembersCache.unshift(mem);
         }
 
         window.db.transaction(["members"], "readwrite").objectStore("members").put(mem);
@@ -597,7 +662,19 @@ window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rO
     };
 }
 
+window.loadMembersFromCache = async function() {
+    return new Promise(resolve => {
+        try {
+            if (!window.db) { window.globalMembersCache = []; return resolve(); }
+            let req = window.db.transaction(["members"], "readonly").objectStore("members").getAll();
+            req.onsuccess = (e) => { window.globalMembersCache = e.target.result || []; resolve(); };
+            req.onerror = () => { window.globalMembersCache = []; resolve(); };
+        } catch (err) { window.globalMembersCache = []; resolve(); }
+    });
+};
+
 window.loadMenuFromCache = async function() {
+    await window.loadMembersFromCache(); // 🔥 Also warm up the Member RAM cache on boot!
     return new Promise(resolve => {
         try {
             if (!window.db) { 
@@ -1043,40 +1120,39 @@ window.unlockMenu = function() {
         return;
     }
 
-    // === STRICT VALIDATION RULES ===
-    if (phoneRaw !== "" && (cleanedPhone.length < 8 || !/^\d+$/.test(cleanedPhone))) {
-        return alert("⚠️ Format WhatsApp Salah:\nKolom WhatsApp harus diisi dengan nomor telepon yang valid (angka saja).");
+    // === FLEXIBLE VALIDATION RULES ===
+    if (phoneRaw !== "" && phoneRaw !== "-" && (cleanedPhone.length < 8 || !/^\d+$/.test(cleanedPhone))) {
+        return alert("⚠️ Format WhatsApp Salah:\nKolom WhatsApp harus diisi dengan nomor telepon yang valid (minimal 8 angka).");
     }
 
-    if (nameRaw !== "" && !/^[a-zA-Z\s]+$/.test(nameRaw)) {
-        return alert("⚠️ Format Nama Salah:\nKolom Nama harus diisi dengan huruf (alfabet), tidak boleh menggunakan angka atau simbol.");
+    if (nameRaw !== "" && !/^[a-zA-Z0-9\s.,()\-/'&]+$/.test(nameRaw)) {
+        return alert("⚠️ Format Nama Salah:\nKolom Nama mengandung simbol yang tidak diizinkan.");
     }
 
-    // === REGULAR MEMBER CHECK ===
+    // === REGULAR MEMBER CHECK (RAM-First for 0ms Speed) ===
     let phone = phoneRaw;
     let name = nameRaw || "Pelanggan";
     let searchPhone = phone.replace(/\D/g, ''); 
     if (searchPhone.startsWith('62')) searchPhone = '0' + searchPhone.substring(2);
     if (searchPhone.length > 0 && !searchPhone.startsWith('0')) searchPhone = '0' + searchPhone;
+    if (!searchPhone) searchPhone = "-";
 
-    const tx = window.db.transaction(["members"], "readonly");
-    tx.objectStore("members").get(searchPhone).onsuccess = (ev) => {
-        const member = ev.target.result;
-        
+    let applyUnlockedMember = (member) => {
         if (member) { 
-            window.activeCustomerProfile = member; 
+            let localPiutang = member.piutangBreakdown ? (member.piutangBreakdown[window.currentOutlet] || 0) : (member.piutang || 0);
+            window.activeCustomerProfile = { ...member, piutang: localPiutang }; 
             name = member.name; 
             document.getElementById("cust-name").value = name; 
             if (addressRaw !== "") window.activeCustomerProfile.address = addressRaw;
-            window.updatePromoBanner(member); 
-        } 
-        else { 
+            window.updatePromoBanner(window.activeCustomerProfile); 
+        } else { 
             window.activeCustomerProfile = { phone: searchPhone, name: name, address: addressRaw, wallet: {}, bottlesBorrowed: 0, piutang: 0, firstOutlet: window.currentOutlet, recentOutlets: window.currentOutlet }; 
             window.updatePromoBanner(window.activeCustomerProfile); 
         }
 
+        window.posSessions[window.activeSessionIndex].customer = window.activeCustomerProfile;
         document.getElementById("active-cust-name").innerText = name; 
-        document.getElementById("active-cust-phone").innerText = `(${searchPhone})`;
+        document.getElementById("active-cust-phone").innerText = searchPhone !== "-" ? `(${searchPhone})` : "";
         document.getElementById("customer-input-section").classList.add("hidden"); 
         document.getElementById("active-customer-banner").classList.remove("hidden");
         
@@ -1084,7 +1160,15 @@ window.unlockMenu = function() {
         document.getElementById("glass-overlay").style.opacity = "0"; 
         setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
     };
-}
+
+    // Check RAM cache first
+    let cachedMember = (window.globalMembersCache || []).find(m => m.phone === searchPhone || (searchPhone === "-" && String(m.name || "").toLowerCase() === name.toLowerCase()));
+    if (cachedMember) {
+        applyUnlockedMember(cachedMember);
+    } else {
+        const tx = window.db.transaction(["members"], "readonly");
+        tx.objectStore("members").get(searchPhone).onsuccess = (ev) => applyUnlockedMember(ev.target.result);
+    }
 
 window.renderPiutangList = function() {
     const filter = document.getElementById('search-piutang').value.toLowerCase().trim();
@@ -2255,7 +2339,12 @@ window.submitNewMember = async function() {
             recentOutlets: window.currentOutlet
         };
         
-        // 1. Save to local DB + queue in unsynced_members in case tablet is offline
+        // 1. Save to RAM Cache + local DB + queue in unsynced_members
+        if (!window.globalMembersCache) window.globalMembersCache = [];
+        let existingIdx = window.globalMembersCache.findIndex(m => m.phone === formatPhone);
+        if (existingIdx > -1) window.globalMembersCache[existingIdx] = newMember;
+        else window.globalMembersCache.unshift(newMember);
+
         await new Promise((resolve) => {
             let tx = window.db.transaction(["members", "unsynced_members"], "readwrite");
             tx.objectStore("members").put(newMember);
@@ -2277,16 +2366,15 @@ window.submitNewMember = async function() {
             }).catch(() => {}); 
         }
 
-        alert("✅ Member berhasil ditambahkan!");
         document.getElementById("add-member-modal").classList.add("hidden");
         document.getElementById("new-mem-phone").value = "";
         document.getElementById("new-mem-name").value = "";
         document.getElementById("new-mem-address").value = "";
 
-        // Convenience: Auto-fill the POS fields immediately
-        if (document.getElementById("cust-phone")) document.getElementById("cust-phone").value = formatPhone;
-        if (document.getElementById("cust-name")) document.getElementById("cust-name").value = name;
-        if (document.getElementById("cust-address")) document.getElementById("cust-address").value = address;
+        // 🔥 3. DIRECT RECALL & AUTO-UNLOCK: Activate member immediately on the current order queue!
+        window.selectMember(formatPhone, name, "{}", 0, 0, window.currentOutlet, window.currentOutlet, address, "", 0, 0, "Member Baru");
+        window.unlockMenu();
+        alert(`✅ Member "${name}" (${formatPhone}) berhasil ditambahkan dan langsung diaktifkan untuk pesanan ini!`);
 
     } catch (err) {
         alert("❌ Gagal menyimpan member.");
@@ -2495,7 +2583,9 @@ window.runBackgroundSync = async function() {
 
     try {
         if (!window.db) { await window.initDB(); }
-        await window.checkAutoCloseShifts();
+        
+        // 🔥 Background sync now focuses purely on pulling/pushing live transactions and data rapidly,
+        // keeping your POS data fully refreshed every 25 seconds without redundant shift scans.
         
         // 1. READ EVERYTHING INTO MEMORY FIRST (Prevents database timeout)
         let tx = window.db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah", "bayar_piutang", "attendance", "kembali_galon"], "readonly");
@@ -2871,7 +2961,6 @@ window.submitReturnGalon = function(phone, name, targetLogId, targetOrderId, max
     };
 }
 
-// 🔄 Replaces your old updateLeftBadges to count the new Peminjam tab
 window.updateLeftBadges = function() {
     if (!window.db) return;
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
@@ -2882,24 +2971,29 @@ window.updateLeftBadges = function() {
         let tabBtn = document.getElementById("tab-left-pengiriman");
         if (tabBtn) { tabBtn.innerText = count > 0 ? "🚚 Pengiriman (" + count + ")" : "🚚 Pengiriman"; }
     };
-    window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
-        let pCount = 0; let bCount = 0;
-        e.target.result.forEach(m => {
-            let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : m.piutang;
-            if (localP > 0) pCount++;
-            
+
+    // ⚡ FAST RAM BADGE CALCULATION (No IndexedDB disk read needed!)
+    let memList = window.globalMembersCache || [];
+    let pCount = 0; let bCount = 0;
+    for (let i = 0; i < memList.length; i++) {
+        let m = memList[i];
+        let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : m.piutang;
+        if (localP > 0) pCount++;
+        
+        if (m.rentalBreakdown && m.rentalBreakdown.length > 0) {
             let localB = 0;
-            if (m.rentalBreakdown) {
-                localB = m.rentalBreakdown.filter(r => (r.outlet || window.currentOutlet) === window.currentOutlet).reduce((sum, r) => sum + r.sisa, 0);
+            for (let j = 0; j < m.rentalBreakdown.length; j++) {
+                let r = m.rentalBreakdown[j];
+                if ((r.outlet || window.currentOutlet) === window.currentOutlet) localB += (r.sisa || 0);
             }
             if (localB > 0) bCount++;
-        });
-        let pBtn = document.getElementById("tab-left-piutang");
-        if (pBtn) { pBtn.innerText = pCount > 0 ? "📒 Piutang (" + pCount + ")" : "📒 Piutang"; }
-        let bBtn = document.getElementById("tab-left-peminjam");
-        if (bBtn) { bBtn.innerText = bCount > 0 ? "📦 Pinjam Galon (" + bCount + ")" : "📦 Pinjam Galon"; }
-    };
-}
+        }
+    }
+    let pBtn = document.getElementById("tab-left-piutang");
+    if (pBtn) { pBtn.innerText = pCount > 0 ? "📒 Piutang (" + pCount + ")" : "📒 Piutang"; }
+    let bBtn = document.getElementById("tab-left-peminjam");
+    if (bBtn) { bBtn.innerText = bCount > 0 ? "📦 Pinjam Galon (" + bCount + ")" : "📦 Pinjam Galon"; }
+};
 window.openAbsensiModal = function() {
     document.getElementById('absensi-modal').classList.remove('hidden');
     window.renderAbsensi();
@@ -3197,8 +3291,8 @@ window.saveEditedCustomer = function() {
         return alert("⚠️ Format WhatsApp Salah:\nKolom WhatsApp harus diisi dengan nomor telepon yang valid (angka saja).");
     }
 
-    if (name !== "" && !/^[a-zA-Z\s]+$/.test(name)) {
-        return alert("⚠️ Format Nama Salah:\nKolom Nama harus diisi dengan huruf (alfabet), tidak boleh menggunakan angka atau simbol.");
+    if (name !== "" && !/^[a-zA-Z0-9\s.,()\-/'&]+$/.test(name)) {
+        return alert("⚠️ Format Nama Salah:\nKolom Nama mengandung simbol yang tidak diizinkan.");
     }
 
     if (phone.startsWith('62')) phone = '0' + phone.substring(2);
@@ -3307,21 +3401,20 @@ window.handleHistoryMemberAutocomplete = function(val) {
         }
         
         let searchLower = val.trim().toLowerCase();
-        let searchDigits = val.replace(/\D/g, '').replace(/^0+/, '');
+        let searchDigits = val.replace(/\D/g, '').replace(/^(62|0)/, '');
         let hasDigits = searchDigits.length > 0;
         
-        const allMembers = await new Promise(res => {
-            let req = window.db.transaction(["members"], "readonly").objectStore("members").getAll();
-            req.onsuccess = e => res(e.target.result || []);
-            req.onerror = () => res([]);
-        });
+        if (!window.globalMembersCache || window.globalMembersCache.length === 0) {
+            await window.loadMembersFromCache();
+        }
+        const allMembers = window.globalMembersCache || [];
         
         let matches = allMembers.filter(m => {
             let nameMatch = m.name && String(m.name).toLowerCase().includes(searchLower);
-            let phoneNorm = m.phone ? String(m.phone).replace(/\D/g, '').replace(/^0+/, '') : "";
+            let phoneNorm = m.phone ? String(m.phone).replace(/\D/g, '').replace(/^(62|0)/, '') : "";
             let phoneMatch = hasDigits && phoneNorm.includes(searchDigits);
             return nameMatch || phoneMatch;
-        }).slice(0, 10); // Limit to top 10 matches for speed
+        }).slice(0, 25);
         
         if (matches.length === 0) {
             list.classList.add("hidden");
@@ -3329,18 +3422,19 @@ window.handleHistoryMemberAutocomplete = function(val) {
         }
         
         matches.forEach(m => {
-            let safePhone = String(m.phone || "").replace(/'/g, "\\'");
+            let displayPhone = String(m.phone || "").startsWith("TANPA-WA") ? m.name : String(m.phone || "").replace(/-DUP\d+$/, "");
+            let safeValue = String(displayPhone || "").replace(/'/g, "\\'");
             let addrText = (m.address && m.address !== "-") ? ` | 📍 ${m.address}` : "";
             list.innerHTML += `
-                <div onclick="window.selectHistoryMember('${safePhone}')" style="padding:10px 12px; cursor:pointer; border-bottom:1px solid #eee; background:#fff;">
-                    <strong style="color:#2c3e50;">👤 ${m.name}</strong> <span style="color:#16a085; font-weight:bold;">(${m.phone})</span>
+                <div onclick="window.selectHistoryMember('${safeValue}')" style="padding:10px 12px; cursor:pointer; border-bottom:1px solid #eee; background:#fff;">
+                    <strong style="color:#2c3e50;">👤 ${m.name}</strong> <span style="color:#16a085; font-weight:bold;">(📱 ${displayPhone})</span>
                     <br><small style="color:#7f8c8d;">Cabang: ${m.firstOutlet || "-"}${addrText}</small>
                 </div>`;
         });
         list.classList.remove("hidden");
-    }, 150);
+    }, 80);
 };
-
+    
 window.selectHistoryMember = function(phone) {
     let input = document.getElementById("hist-search-query");
     let list = document.getElementById("hist-autocomplete-list");
@@ -3570,11 +3664,11 @@ window.onload = async () => {
         if (netDot) netDot.style.backgroundColor = "#e74c3c";
     }
     
-    window.setInterval(window.runBackgroundSync, 15000); 
+    window.setInterval(window.runBackgroundSync, 25000); 
     window.setInterval(window.checkAutoCloseShifts, 3600000); 
     
     if(window.updateLeftBadges) {
-        window.setInterval(window.updateLeftBadges, 5000); 
+        window.setInterval(window.updateLeftBadges, 12000); 
         window.updateLeftBadges();
     } 
 };
