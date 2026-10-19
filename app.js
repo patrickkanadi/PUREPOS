@@ -1916,7 +1916,7 @@ window.reprintOrder = async function(orderId) {
     const order = await new Promise(res => window.db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = e => res(e.target.result));
     if (!order) return alert("Order tidak ditemukan di memori tablet lokal.");
     const deposit = (order.cashAmount || 0) + (order.qrisAmount || 0) + (order.transferAmount || 0) + (order.freeAmount || 0);
-    const updatedWallet = {}; try { updatedWallet = JSON.parse(order.finalStoredRewards || "{}"); } catch(e){}
+    let updatedWallet = {}; try { updatedWallet = JSON.parse(order.finalStoredRewards || "{}"); } catch(e){}
     const payloadBytes = await window.buildEscPosReceipt(order.orderId, order, deposit, (order.debtAmount || 0), order.paymentMethod, updatedWallet);
     await window.printViaBluetooth(payloadBytes);
 }
@@ -2231,39 +2231,50 @@ window.submitNewMember = async function() {
 
     if (!phone) return alert("⚠️ Nomor WA wajib diisi!");
     
-    // Auto-format phone number
-    let formatPhone = phone;
-    if (formatPhone.startsWith("0")) formatPhone = "62" + formatPhone.substring(1);
-    else if (formatPhone.startsWith("8")) formatPhone = "62" + formatPhone;
+    // 🔥 Standardized to 08xxx so it matches syncCriticalData & unlockMenu
+    let formatPhone = phone.replace(/\D/g, '');
+    if (formatPhone.startsWith("62")) formatPhone = "0" + formatPhone.substring(2);
+    if (formatPhone.length > 0 && !formatPhone.startsWith("0")) formatPhone = "0" + formatPhone;
+
+    if (formatPhone.length < 8) return alert("⚠️ Nomor WA tidak valid!");
 
     let btn = document.querySelector("#add-member-modal button:nth-child(2)");
-    let originalText = btn.innerText;
-    btn.innerText = "Menyimpan...";
-    btn.disabled = true;
+    let originalText = btn ? btn.innerText : "Simpan Member";
+    if (btn) { btn.innerText = "Menyimpan..."; btn.disabled = true; }
 
     try {
-        // 1. Save directly to local tablet DB for instant access
         let newMember = {
             phone: formatPhone, 
             name: name, 
             address: address,
             wallet: {}, 
+            spent: 0,
             bottlesBorrowed: 0, 
             piutang: 0,
             firstOutlet: window.currentOutlet, 
             recentOutlets: window.currentOutlet
         };
         
+        // 1. Save to local DB + queue in unsynced_members in case tablet is offline
         await new Promise((resolve) => {
-            let tx = window.db.transaction(["members"], "readwrite");
+            let tx = window.db.transaction(["members", "unsynced_members"], "readwrite");
             tx.objectStore("members").put(newMember);
+            tx.objectStore("unsynced_members").put(newMember);
             tx.oncomplete = resolve;
         });
 
-        // 2. Push to server silently in background
+        // 2. Push to server immediately if online
         if (navigator.onLine) {
-            let payload = { action: "addMember", phone: formatPhone, name: name, address: address, outlet: window.currentOutlet };
-            fetch(API_URL, { method: "POST", body: JSON.stringify(payload) }).catch(() => {}); 
+            fetch(API_URL, { 
+                method: "POST", 
+                redirect: "follow",
+                headers: { "Content-Type": "text/plain;charset=utf-8" },
+                body: JSON.stringify({ action: "addMember", data: newMember }) 
+            }).then(r => r.json()).then(res => {
+                if (res.status === "Success") {
+                    window.db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(formatPhone);
+                }
+            }).catch(() => {}); 
         }
 
         alert("✅ Member berhasil ditambahkan!");
@@ -2280,8 +2291,7 @@ window.submitNewMember = async function() {
     } catch (err) {
         alert("❌ Gagal menyimpan member.");
     } finally {
-        btn.innerText = originalText;
-        btn.disabled = false;
+        if (btn) { btn.innerText = originalText; btn.disabled = false; }
     }
 };
 
@@ -3338,6 +3348,17 @@ window.selectHistoryMember = function(phone) {
     if (list) list.classList.add("hidden");
 };
 
+window.lastHistorySearchResults = [];
+
+window.clearHistoryFilters = function() {
+    document.getElementById("hist-search-query").value = "";
+    document.getElementById("hist-search-from").value = "";
+    document.getElementById("hist-search-to").value = "";
+    let dropList = document.getElementById("hist-autocomplete-list");
+    if (dropList) dropList.classList.add("hidden");
+    document.getElementById("hist-search-query").focus();
+};
+
 window.fetchMemberHistory = async function() {
     if (!navigator.onLine) {
         return alert("⚠️ Anda sedang offline! Fitur ini membutuhkan koneksi internet untuk menarik data arsip dari server.");
@@ -3347,7 +3368,6 @@ window.fetchMemberHistory = async function() {
     let dateFrom = document.getElementById("hist-search-from").value;
     let dateTo = document.getElementById("hist-search-to").value;
 
-    // Validation: Require either a Member Query OR at least one Date
     if (!query && !dateFrom && !dateTo) {
         return alert("⚠️ Harap isi setidaknya Nama/WA Pelanggan ATAU pilih Rentang Tanggal (Dari / Sampai)!");
     }
@@ -3371,6 +3391,8 @@ window.fetchMemberHistory = async function() {
 
         if (result.status === "Success") {
             let list = result.data || [];
+            window.lastHistorySearchResults = list;
+
             if (list.length === 0) {
                 resBox.innerHTML = `<div style="text-align:center; padding:20px; color:#7f8c8d;">Tidak ada transaksi ditemukan untuk filter tersebut.</div>`;
             } else {
@@ -3380,7 +3402,7 @@ window.fetchMemberHistory = async function() {
                     <span>Total (Non-Void): <strong>Rp ${totalSum.toLocaleString('id-ID')}</strong></span>
                 </div>`;
 
-                list.forEach(o => {
+                list.forEach((o, idx) => {
                     let badge = o.status === "Voided" 
                         ? `<span class="status-badge status-voided">Voided</span>` 
                         : `<span class="status-badge status-paid">${o.status}</span>`;
@@ -3396,11 +3418,15 @@ window.fetchMemberHistory = async function() {
                             <small style="color:#7f8c8d;">🧾 ${o.orderId} | 🕒 ${window.formatDateReadable(o.timestamp)} | 📍 ${o.outlet} (${o.cashier})</small><br>
                             <div style="font-size:13px; color:#2980b9; font-weight:bold; margin-top:4px;">📦 ${o.items}</div>
                         </div>
-                        <div style="text-align:right; min-width:120px;">
+                        <div style="text-align:right; min-width:140px;">
                             ${badge}<br>
                             <strong style="font-size:16px; color:#2c3e50;">Rp ${o.total.toLocaleString('id-ID')}</strong><br>
                             <small style="color:#27ae60; font-weight:bold;">${o.paymentMethod}</small>
                             ${debtBadge}
+                            <div style="margin-top:6px; display:flex; gap:5px; justify-content:flex-end;">
+                                <button onclick="window.showArchivedOrderDetail(${idx})" style="background:#f39c12; color:white; border:none; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:bold; cursor:pointer;">👁️ Detail</button>
+                                <button onclick="window.reprintArchivedOrder(${idx})" style="background:#2980b9; color:white; border:none; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:bold; cursor:pointer;">🖨️ Cetak</button>
+                            </div>
                         </div>
                     </div>`;
                 });
@@ -3417,6 +3443,49 @@ window.fetchMemberHistory = async function() {
         btn.disabled = false;
         btn.style.background = "#16a085";
     }
+};
+
+window.showArchivedOrderDetail = function(idx) {
+    const o = window.lastHistorySearchResults[idx];
+    if (!o) return;
+    let html = `<strong>Nota:</strong> ${o.orderId}<br><strong>Waktu:</strong> ${window.formatDateReadable(o.timestamp)}<br><strong>Cabang:</strong> ${o.outlet} (${o.cashier})<br><strong>Pelanggan:</strong> ${o.customerName} (${o.customerPhone})<br><strong>Metode Bayar:</strong> ${o.paymentMethod}<br><hr style="border-top:1px dashed #ccc; margin:10px 0;">`;
+    if (o.itemsArray && o.itemsArray.length > 0) {
+        o.itemsArray.forEach(i => {
+            let p = Number(i.originalPrice || i.price) || 0;
+            html += `<div style="display:flex; justify-content:space-between;"><span>${i.qty}x ${i.name}</span><span>Rp ${(i.qty * p).toLocaleString('id-ID')}</span></div>`;
+        });
+    } else {
+        html += `<div style="color:#2c3e50;">${o.items}</div>`;
+    }
+    html += `<hr style="border-top:1px dashed #ccc; margin:10px 0;"><div style="display:flex; justify-content:space-between;"><span><strong>Diskon / Gratis:</strong></span><span style="color:#27ae60;">-Rp ${(o.discounts || o.freeAmount || 0).toLocaleString('id-ID')}</span></div><div style="display:flex; justify-content:space-between; font-size:16px;"><span><strong>Total Akhir:</strong></span><span><strong>Rp ${(o.total || 0).toLocaleString('id-ID')}</strong></span></div>`;
+    if ((o.debt || 0) > 0) {
+        html += `<div style="display:flex; justify-content:space-between; color:#c0392b; margin-top:5px;"><span><strong>Sisa Piutang:</strong></span><span><strong>Rp ${o.debt.toLocaleString('id-ID')}</strong></span></div>`;
+    }
+    document.getElementById("order-detail-container").innerHTML = html;
+    document.getElementById("order-detail-modal").classList.remove("hidden");
+};
+
+window.reprintArchivedOrder = async function(idx) {
+    const o = window.lastHistorySearchResults[idx];
+    if (!o) return;
+    let printOrderObj = {
+        orderId: o.orderId,
+        timestamp: o.timestamp,
+        outlet: o.outlet,
+        cashier: o.cashier,
+        customerName: o.customerName,
+        customerPhone: o.customerPhone,
+        subtotal: o.subtotal || o.total,
+        discounts: o.discounts || 0,
+        freeAmount: o.freeAmount || 0,
+        grandTotal: o.total || 0,
+        items: (o.itemsArray && o.itemsArray.length > 0) ? o.itemsArray.map(i => ({ name: i.name, qty: Number(i.qty) || 1, originalPrice: Number(i.originalPrice || i.price) || 0 })) : [{ name: o.items, qty: 1, originalPrice: o.total || 0 }]
+    };
+    const deposit = (o.cashAmount || 0) + (o.qrisAmount || 0) + (o.transferAmount || 0) + (o.freeAmount || 0) || (o.total - (o.debt || 0));
+    let updatedWallet = {};
+    try { updatedWallet = JSON.parse(o.finalStoredRewards || "{}"); } catch(e) {}
+    const payloadBytes = await window.buildEscPosReceipt(o.orderId, printOrderObj, deposit, o.debt || 0, o.paymentMethod, updatedWallet);
+    await window.printViaBluetooth(payloadBytes);
 };
 
 window.onload = async () => { 
