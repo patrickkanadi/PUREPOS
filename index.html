@@ -307,7 +307,7 @@
         </div>
     </div>
 
-    <div id="order-detail-modal" class="modal-overlay hidden" style="z-index: 10005;">
+    <div id="order-detail-modal" class="modal-overlay hidden" style="z-index: 10070;">
         <div class="modal-content">
             <h2 style="margin-top:0; color:#2980b9;">🔍 Detail Pesanan</h2>
             <div id="order-detail-container" style="background:#f9f9f9; padding:15px; border-radius:8px; font-size:14px; line-height:1.6;"></div>
@@ -511,9 +511,14 @@
                 </div>
             </div>
 
-            <button id="btn-fetch-history" onclick="window.fetchMemberHistory()" style="width:100%; padding:14px; background:#16a085; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer; margin-bottom:15px; font-size:16px;">
-                🔍 Tarik Data dari Server
-            </button>
+            <div style="display:flex; gap:10px; margin-bottom:15px;">
+                <button onclick="window.clearHistoryFilters()" style="flex:1; padding:14px; background:#95a5a6; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer; font-size:14px;">
+                    🧹 Reset Filter
+                </button>
+                <button id="btn-fetch-history" onclick="window.fetchMemberHistory()" style="flex:3; padding:14px; background:#16a085; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer; font-size:16px;">
+                    🔍 Tarik Data dari Server
+                </button>
+            </div>
 
             <div id="hist-search-results" style="max-height:350px; overflow-y:auto; background:#f9f9f9; border:1px solid #ddd; border-radius:8px; padding:12px;">
                 <div style="text-align:center; color:#7f8c8d; font-style:italic; padding:20px;">Hasil pencarian akan muncul di sini...</div>
@@ -523,4 +528,4 @@
         </div>
     </div>
         
-    <script src="app.js?v=14"></script></body></html>
+    <script src="app.js?v=15"></script></body></html>
