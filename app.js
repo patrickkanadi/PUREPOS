@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbw1w3B11VMGefnoh8A0TXVu5Hhrbrfi5HqcxYVNVZwb1Tgx_LlDMXVEEQQdKxdis37v/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 23; // 🔥 Bumped to 23
-const APP_VERSION = "2.3"; // 🔥 Bumped to 2.3 (RAM Member Cache & Instant Recall)
+const DB_VERSION = 22; // 🔥 Keep at 22 so IndexedDB never blocks!
+const APP_VERSION = "2.2"; 
 window.db = null;
 
 // Core State
@@ -337,32 +337,9 @@ window.syncCriticalData = async function() {
                 if(selectBox) { selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); }
             }
             if (result.data.members) {
-                // First, grab any newly added local members that haven't synced to the server yet
-                const unsyncedList = await new Promise(r => {
-                    try {
-                        let req = window.db.transaction(["unsynced_members"], "readonly").objectStore("unsynced_members").getAll();
-                        req.onsuccess = e => r(e.target.result || []);
-                        req.onerror = () => r([]);
-                    } catch(err) { r([]); }
-                });
-
-                const writeMemTx = window.db.transaction(["members"], "readwrite");
-                const memT = writeMemTx.objectStore("members");
-                memT.clear();
-
-                const mergedMap = new Map();
-                result.data.members.forEach(m => {
-                    mergedMap.set(m.phone, m);
-                    memT.put(m);
-                });
-                // Keep unsynced local members alive so they are never wiped out!
-                unsyncedList.forEach(um => {
-                    if (!mergedMap.has(um.phone)) {
-                        mergedMap.set(um.phone, um);
-                        memT.put(um);
-                    }
-                });
-                window.globalMembersCache = Array.from(mergedMap.values());
+                const memT = tx.objectStore("members"); memT.clear();
+                result.data.members.forEach(m => memT.put(m));
+                window.globalMembersCache = result.data.members;
             }
         }
     } catch(e) { console.error("Critical Sync Error:", e); }
