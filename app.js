@@ -293,6 +293,17 @@ window.syncCriticalData = async function() {
         const res = await fetch(url, { method: "GET", redirect: "follow" });
         const result = await res.json();
         if (result.status === "Success") {
+            
+            // 1. Fetch offline/unsynced members safely BEFORE opening the main write transaction
+            const unsyncedList = await new Promise(r => {
+                try {
+                    let req = window.db.transaction(["unsynced_members"], "readonly").objectStore("unsynced_members").getAll();
+                    req.onsuccess = e => r(e.target.result || []);
+                    req.onerror = () => r([]);
+                } catch(err) { r([]); }
+            });
+
+            // 2. Open the main write transaction
             const tx = window.db.transaction(["staff", "settings", "menu", "members"], "readwrite");
             
             if (result.data.staff) {
@@ -338,8 +349,21 @@ window.syncCriticalData = async function() {
             }
             if (result.data.members) {
                 const memT = tx.objectStore("members"); memT.clear();
-                result.data.members.forEach(m => memT.put(m));
-                window.globalMembersCache = result.data.members;
+                const mergedMap = new Map();
+                
+                result.data.members.forEach(m => {
+                    mergedMap.set(m.phone, m);
+                    memT.put(m);
+                });
+                
+                // Keep unsynced local members alive so they are never wiped out!
+                unsyncedList.forEach(um => {
+                    if (!mergedMap.has(um.phone)) {
+                        mergedMap.set(um.phone, um);
+                        memT.put(um);
+                    }
+                });
+                window.globalMembersCache = Array.from(mergedMap.values());
             }
         }
     } catch(e) { console.error("Critical Sync Error:", e); }
@@ -1146,6 +1170,7 @@ window.unlockMenu = function() {
         const tx = window.db.transaction(["members"], "readonly");
         tx.objectStore("members").get(searchPhone).onsuccess = (ev) => applyUnlockedMember(ev.target.result);
     }
+}; // 🔥 THE FATAL MISSING BRACKET HAS BEEN RESTORED!
 
 window.renderPiutangList = function() {
     const filter = document.getElementById('search-piutang').value.toLowerCase().trim();
@@ -2564,21 +2589,16 @@ window.runBackgroundSync = async function() {
         // 🔥 Background sync now focuses purely on pulling/pushing live transactions and data rapidly,
         // keeping your POS data fully refreshed every 25 seconds without redundant shift scans.
         
-        // 1. READ EVERYTHING INTO MEMORY FIRST (Prevents database timeout)
+        // 1. READ EVERYTHING INTO MEMORY FIRST (Safely in parallel)
         let tx = window.db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah", "bayar_piutang", "attendance", "kembali_galon"], "readonly");
         
-        let orders = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
-        let piutangs = await new Promise(res => tx.objectStore("bayar_piutang").getAll().onsuccess = e => res(e.target.result));
-        let drops = await new Promise(res => tx.objectStore("cash_drops").getAll().onsuccess = e => res(e.target.result));
-        let reports = await new Promise(res => tx.objectStore("shift_reports").getAll().onsuccess = e => res(e.target.result));
-        let expenses = await new Promise(res => tx.objectStore("expenses").getAll().onsuccess = e => res(e.target.result));
-        let voids = await new Promise(res => tx.objectStore("void_requests").getAll().onsuccess = e => res(e.target.result));
-        let members = await new Promise(res => tx.objectStore("unsynced_members").getAll().onsuccess = e => res(e.target.result));
-        let inbounds = await new Promise(res => tx.objectStore("stock_inbound").getAll().onsuccess = e => res(e.target.result));
-        let cuciLogs = await new Promise(res => tx.objectStore("cuci_tandon").getAll().onsuccess = e => res(e.target.result));
-        let laporLogs = await new Promise(res => tx.objectStore("lapor_masalah").getAll().onsuccess = e => res(e.target.result));
-        let attendances = await new Promise(res => tx.objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
-        let kembalis = await new Promise(res => tx.objectStore("kembali_galon").getAll().onsuccess = e => res(e.target.result));
+        const fetchAll = (storeName) => new Promise(res => tx.objectStore(storeName).getAll().onsuccess = e => res(e.target.result || []));
+
+        const [orders, piutangs, drops, reports, expenses, voids, members, inbounds, cuciLogs, laporLogs, attendances, kembalis] = await Promise.all([
+            fetchAll("orders"), fetchAll("bayar_piutang"), fetchAll("cash_drops"), fetchAll("shift_reports"),
+            fetchAll("expenses"), fetchAll("void_requests"), fetchAll("unsynced_members"), fetchAll("stock_inbound"),
+            fetchAll("cuci_tandon"), fetchAll("lapor_masalah"), fetchAll("attendance"), fetchAll("kembali_galon")
+        ]);
 
         // 2. THEN DO THE INTERNET FETCHES
         for (const order of orders) {
