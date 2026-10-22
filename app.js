@@ -388,7 +388,16 @@ window.syncBackgroundData = async function() {
                     let req = ordStore.get(o.orderId);
                     req.onsuccess = (e) => {
                         let existing = e.target.result;
-                        if (!existing || existing.syncStatus !== "Pending") { ordStore.put(o); }
+                        // 🔥 Protect local orders that are Pending, Syncing, or already marked Terkirim locally!
+                        if (!existing) {
+                            ordStore.put(o);
+                        } else {
+                            let isLocalUnsynced = (existing.syncStatus === "Pending" || existing.syncStatus === "Syncing");
+                            let isAlreadyDeliveredLocally = (String(existing.deliveryStatus || "").startsWith("Terkirim") && o.deliveryStatus === "Pending");
+                            if (!isLocalUnsynced && !isAlreadyDeliveredLocally) {
+                                ordStore.put(o);
+                            }
+                        }
                     };
                 });
             }
@@ -1126,9 +1135,7 @@ window.unlockMenu = function() {
         return alert("⚠️ Format WhatsApp Salah:\nKolom WhatsApp harus diisi dengan nomor telepon yang valid (minimal 8 angka).");
     }
 
-    if (nameRaw !== "" && !/^[a-zA-Z0-9\s.,()\-/'&]+$/.test(nameRaw)) {
-        return alert("⚠️ Format Nama Salah:\nKolom Nama mengandung simbol yang tidak diizinkan.");
-    }
+    // 🔥 Allow all symbols (/, (), ", #, etc.) so cashiers can freely add notes in customer names
 
     // === REGULAR MEMBER CHECK (RAM-First for 0ms Speed) ===
     let phone = phoneRaw;
@@ -1420,7 +1427,10 @@ window.submitPiutang = function() {
     }
 }
 
+window.isFinalizingOrder = false;
 window.finalizeOrder = async function(shouldPrint) {
+    if (window.isFinalizingOrder) return; // 🔒 Prevent double-tap / 17x duplicate spam!
+    if (!window.currentCart || window.currentCart.length === 0) return;
     const cash = Number(document.getElementById("pay-cash").value) || 0; const qris = Number(document.getElementById("pay-qris").value) || 0;
     const transfer = Number(document.getElementById("pay-transfer").value) || 0; const free = Number(document.getElementById("pay-free").value) || 0;
     const debtAmount = Number(document.getElementById("pay-piutang").value) || 0;
@@ -1443,6 +1453,11 @@ window.finalizeOrder = async function(shouldPrint) {
     let hasRedemptions = false;
     document.querySelectorAll(".redeem-input").forEach(input => { if (Number(input.value) > 0) hasRedemptions = true; });
     if (hasRedemptions && debtAmount > 0) return alert("⚠️ TRANSAKSI DITOLAK:\nPelanggan tidak bisa menukar Poin Gratis jika pembayaran menggunakan Piutang.");
+
+    // 🔒 LOCK CHECKOUT IMMEDIATELY ONCE VALIDATION PASSES
+    window.isFinalizingOrder = true;
+    const reviewButtons = document.querySelectorAll("#review-modal button");
+    reviewButtons.forEach(b => b.disabled = true);
 
     let payMethods = []; if(cash > 0) payMethods.push("Tunai"); if(qris > 0) payMethods.push("QRIS"); if(transfer > 0) payMethods.push("Trf.Bank"); if(free > 0) payMethods.push("Gratis"); if(debtAmount > 0) payMethods.push("Piutang");
     const payString = payMethods.length > 0 ? payMethods.join("+") : "Belum Bayar";
@@ -1572,15 +1587,31 @@ window.finalizeOrder = async function(shouldPrint) {
     const txMenu = window.db.transaction(["menu"], "readwrite"); const storeMenu = txMenu.objectStore("menu");
     window.currentCart.forEach(cartItem => { storeMenu.get(cartItem.itemId).onsuccess = (ev) => { const menuItem = ev.target.result; if (menuItem && menuItem.trackStock) { menuItem.currentStock = Math.max(0, menuItem.currentStock - cartItem.qty); storeMenu.put(menuItem); } }; });
 
-    window.db.transaction(["orders"], "readwrite").objectStore("orders").add(orderPayload);
-    
-    if (shouldPrint) {
-        const payloadBytes = await window.buildEscPosReceipt(orderPayload.orderId, orderPayload, (cash+qris+transfer+free), debtAmount, payString, updatedWallet);
-        await window.printViaBluetooth(payloadBytes);
+    try {
+        await new Promise((resolve, reject) => {
+            let txOrd = window.db.transaction(["orders"], "readwrite");
+            txOrd.objectStore("orders").add(orderPayload);
+            txOrd.oncomplete = resolve;
+            txOrd.onerror = reject;
+        });
+
+        // 🔥 CLOSE MODAL & CLEAR CART IMMEDIATELY BEFORE BLUETOOTH PRINTING!
+        // This guarantees the cashier cannot tap the button again while the printer is connecting.
+        window.closeReview(); 
+        window.lockMenu(); 
+        window.renderProductGrid(); 
+        window.runBackgroundSync();
+        if (window.updateLeftBadges) window.updateLeftBadges(); 
+
+        if (shouldPrint) {
+            const payloadBytes = await window.buildEscPosReceipt(orderPayload.orderId, orderPayload, (cash+qris+transfer+free), debtAmount, payString, updatedWallet);
+            await window.printViaBluetooth(payloadBytes);
+        }
+    } finally {
+        window.isFinalizingOrder = false;
+        const reviewBtns = document.querySelectorAll("#review-modal button");
+        reviewBtns.forEach(b => b.disabled = false);
     }
-    
-    window.closeReview(); window.lockMenu(); window.renderProductGrid(); window.runBackgroundSync();
-    if(window.updateLeftBadges) window.updateLeftBadges(); 
 }
 
 window.getDynamicSettings = async function() { return new Promise(res => { let req = window.db.transaction(["settings"], "readonly").objectStore("settings").getAll(); req.onsuccess = e => { let s = {}; e.target.result.forEach(row => s[row.key] = row.value); res(s); }; }); }
@@ -3169,8 +3200,24 @@ window.submitDeliveryDone = function() {
         window.renderPengiriman();
         window.renderPeminjamList(); 
         if (window.updateLeftBadges) window.updateLeftBadges(); 
+
+        // 🔥 INSTANT DIRECT PUSH: Tell the server immediately that this delivery is Done
+        // so it never reappears on the next shift even if the tablet is closed right away!
+        if (navigator.onLine) {
+            fetch(API_URL, {
+                method: "POST",
+                redirect: "follow",
+                headers: { "Content-Type": "text/plain;charset=utf-8" },
+                body: JSON.stringify({
+                    action: "updateDeliveryStatus",
+                    orderId: orderId,
+                    orderStatus: "Completed",
+                    status: "Terkirim (" + window.getWibDate() + ")",
+                    courier: courier
+                })
+            }).catch(() => {});
+        }
         
-        // Jeda 100ms agar UI layar tablet ter-refresh HILANG instan sebelum Sync berjalan
         setTimeout(() => {
             window.runBackgroundSync(); 
         }, 100);
@@ -3288,9 +3335,7 @@ window.saveEditedCustomer = function() {
         return alert("⚠️ Format WhatsApp Salah:\nKolom WhatsApp harus diisi dengan nomor telepon yang valid (angka saja).");
     }
 
-    if (name !== "" && !/^[a-zA-Z0-9\s.,()\-/'&]+$/.test(name)) {
-        return alert("⚠️ Format Nama Salah:\nKolom Nama mengandung simbol yang tidak diizinkan.");
-    }
+    // 🔥 Allow all symbols (/, (), ", #, etc.) in customer names
 
     if (phone.startsWith('62')) phone = '0' + phone.substring(2);
     if (!name || name.toLowerCase() === "walk-in") name = "Walk-in";
