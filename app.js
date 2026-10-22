@@ -104,21 +104,22 @@ window.getStaffFromDB = async function() { return new Promise(resolve => { windo
 
 window.checkAutoCloseShifts = async function() {
     if (!window.db) return;
-    const shifts = await new Promise(res => window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").getAll().onsuccess = e => res(e.target.result));
-    const now = new Date();
-    const nowTime = now.getTime();
+    const shifts = await new Promise(res => window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").getAll().onsuccess = e => res(e.target.result || []));
+    const todayWib = window.getWibDate().split(" ")[0]; // YYYY-MM-DD
+    const nowTime = Date.now();
     
     for (let shift of shifts) {
-        // Safe date parsing across devices
-        const loginDate = new Date(String(shift.loginTime).replace(/-/g, '/')); 
-        let loginTime = loginDate.getTime();
-        if (isNaN(loginTime)) {
-            const fallbackDate = new Date(shift.loginTime);
-            loginTime = fallbackDate.getTime();
-        }
-        
-        // Auto-close if > 12 hours OR if it's no longer the same calendar day (midnight crossed)
-        if (nowTime - loginTime > 12 * 60 * 60 * 1000 || now.getDate() !== (isNaN(loginTime) ? now.getDate() : loginDate.getDate())) { 
+        let shiftDateStr = String(shift.loginTime || "").split(" ")[0];
+        let isDifferentDay = (shiftDateStr && shiftDateStr !== todayWib);
+
+        const loginDate = new Date(String(shift.loginTime).replace(' ', 'T'));
+        let loginTime = isNaN(loginDate.getTime()) ? nowTime : loginDate.getTime();
+
+        // 🔥 NEVER kick out the currently active cashier during the same business day!
+        if (shift.pin === window.currentPin && !isDifferentDay) continue;
+
+        // Only auto-close if midnight crossed (different calendar day) or > 16 hours old
+        if (isDifferentDay || (nowTime - loginTime > 16 * 60 * 60 * 1000)) { 
             await window.forceCloseShift(shift); 
         }
     }
@@ -190,6 +191,61 @@ window.forceCloseShift = async function(shift) {
     txWrite.objectStore("active_shifts").delete(shift.pin);
 }
 
+window.attachPrinterDisconnectListener = function(device) {
+    if (!device || device._hasDisconnectListener) return;
+    device._hasDisconnectListener = true;
+    device.addEventListener('gattserverdisconnected', () => {
+        window.printerCharacteristic = null;
+        let btn = document.getElementById("btn-connect-printer");
+        if (btn) {
+            // Show standby orange instead of alarming red since it will auto-wake on print!
+            btn.innerText = "🖨️ Siap (Standby)";
+            btn.style.background = "#e67e22";
+            btn.style.borderColor = "#e67e22";
+        }
+    });
+};
+
+window.ensurePrinterConnected = async function() {
+    let btn = document.getElementById("btn-connect-printer");
+
+    // 1. If device reference was lost, try recovering it from browser paired devices
+    if (!window.printDevice && navigator.bluetooth && navigator.bluetooth.getDevices) {
+        try {
+            const devices = await navigator.bluetooth.getDevices();
+            if (devices.length > 0) window.printDevice = devices[0];
+        } catch (e) {}
+    }
+
+    if (!window.printDevice) return false;
+    window.attachPrinterDisconnectListener(window.printDevice);
+
+    if (window.printDevice.gatt && window.printDevice.gatt.connected && window.printerCharacteristic) {
+        return true;
+    }
+
+    // 2. Auto-wake sleeping printer with up to 3 retries
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            if (btn) btn.innerText = `⏳ Menyambung (${attempt}/3)...`;
+            const server = await window.printDevice.gatt.connect();
+            const service = await server.getPrimaryService(0x18F0);
+            window.printerCharacteristic = await service.getCharacteristic(0x2AF1);
+
+            if (btn) {
+                btn.innerText = "🖨️ Printer Siap";
+                btn.style.background = "#27ae60";
+                btn.style.borderColor = "#27ae60";
+            }
+            return true;
+        } catch (err) {
+            window.printerCharacteristic = null;
+            await new Promise(r => setTimeout(r, 450));
+        }
+    }
+    return false;
+};
+
 window.connectBluetoothPrinter = async function() {
     let btn = document.getElementById("btn-connect-printer");
     let originalText = btn.innerText;
@@ -200,23 +256,15 @@ window.connectBluetoothPrinter = async function() {
         btn.style.background = "#95a5a6";
         btn.style.borderColor = "#95a5a6";
 
-        // FIXED: Standardized to window.printDevice
         window.printDevice = await navigator.bluetooth.requestDevice({ filters: [{ services: [0x18F0] }], optionalServices: [0x18F0] });
-        const server = await window.printDevice.gatt.connect(); 
-        const service = await server.getPrimaryService(0x18F0);
-        window.printerCharacteristic = await service.getCharacteristic(0x2AF1);
-        
-        alert("Printer Thermal Berhasil Terhubung!");
-        btn.innerText = "🖨️ Printer Siap"; 
-        btn.style.background = "#27ae60"; 
-        btn.style.borderColor = "#27ae60";
-        
-        window.printDevice.addEventListener('gattserverdisconnected', () => {
-            btn.innerText = "🖨️ Terputus"; 
-            btn.style.background = "#e74c3c"; 
-            btn.style.borderColor = "#e74c3c";
-            window.printerCharacteristic = null;
-        });
+        window.attachPrinterDisconnectListener(window.printDevice);
+
+        const connected = await window.ensurePrinterConnected();
+        if (connected) {
+            alert("Printer Thermal Berhasil Terhubung!");
+        } else {
+            throw new Error("Gagal menginisialisasi layanan cetak.");
+        }
     } catch (error) { 
         console.error(error); 
         alert("Gagal koneksi printer: " + error.message); 
@@ -224,48 +272,37 @@ window.connectBluetoothPrinter = async function() {
         btn.style.background = originalBg;
         btn.style.borderColor = originalBg;
     }
-}
+};
 
 window.printViaBluetooth = async function(payloadBytes) {
-    if (!window.printDevice) {
-        alert("⚠️ Printer belum pernah dipasangkan! Klik tombol '🖨️ Printer' di atas sekali saja untuk pairing pertama kalinya.");
-        return;
-    }
-
-    let btn = document.getElementById("btn-connect-printer");
-
-    // 🔥 STICKY PRINTER: If disconnected or cache cleared, wake it up and RE-FETCH characteristics
-    if (!window.printDevice.gatt.connected || !window.printerCharacteristic) {
-        try {
-            if (btn) btn.innerText = "⏳ Membangunkan...";
-            
-            const server = await window.printDevice.gatt.connect();
-            const service = await server.getPrimaryService(0x18F0);
-            window.printerCharacteristic = await service.getCharacteristic(0x2AF1);
-            
-            if (btn) {
-                btn.innerText = "🖨️ Printer Siap";
-                btn.style.background = "#27ae60";
-                btn.style.borderColor = "#27ae60";
-            }
-        } catch (err) {
-            if (btn) {
-                btn.innerText = "🖨️ Terputus";
-                btn.style.background = "#e74c3c";
-                btn.style.borderColor = "#e74c3c";
-            }
-            alert("⚠️ Gagal menyambung ulang ke printer. Pastikan printer dalam keadaan MENYALA.");
-            return;
+    const isReady = await window.ensurePrinterConnected();
+    if (!isReady) {
+        if (!window.printDevice) {
+            alert("⚠️ Printer belum pernah dipasangkan! Klik tombol '🖨️ Printer' di atas untuk pairing.");
+        } else {
+            alert("⚠️ Gagal membangunkan printer. Pastikan printer MENYALA dan berada di dekat tablet, lalu coba lagi.");
         }
+        return false;
     }
 
     try {
-        const CHUNK_SIZE = 20; 
-        // FIXED: Changed payloadUint8Array to payloadBytes to match the parameter
+        // 🔥 64-byte chunks + 20ms pacing prevents Android Bluetooth GATT buffer drops!
+        const CHUNK_SIZE = 64; 
         for (let i = 0; i < payloadBytes.length; i += CHUNK_SIZE) {
             const chunk = payloadBytes.slice(i, i + CHUNK_SIZE);
-            await window.printerCharacteristic.writeValue(chunk);
-            await new Promise(r => setTimeout(r, 10)); 
+            try {
+                if (window.printerCharacteristic.writeValueWithoutResponse) {
+                    await window.printerCharacteristic.writeValueWithoutResponse(chunk);
+                } else {
+                    await window.printerCharacteristic.writeValue(chunk);
+                }
+            } catch (writeErr) {
+                // If connection dropped mid-print, auto-reconnect once and resend chunk!
+                const reconnected = await window.ensurePrinterConnected();
+                if (!reconnected) throw writeErr;
+                await window.printerCharacteristic.writeValue(chunk);
+            }
+            await new Promise(r => setTimeout(r, 20)); 
         }
         return true;
     } catch (error) { 
@@ -273,7 +310,7 @@ window.printViaBluetooth = async function(payloadBytes) {
         alert("Print Gagal: " + error.message); 
         return false; 
     }
-}
+};
 
 window.manualPushSync = async function() {
     if (!navigator.onLine) return alert("Anda sedang offline!");
@@ -494,6 +531,7 @@ window.attemptLogin = async function() {
                 
                 // 🔥 THE FIX: Save the sticky session!
                 localStorage.setItem("activePosPin", staff.pin);
+                localStorage.setItem("activePosName", staff.name);
 
                 await window.checkAutoCloseShifts();
 
@@ -1179,36 +1217,35 @@ window.unlockMenu = function() {
     }
 }; // 🔥 THE FATAL MISSING BRACKET HAS BEEN RESTORED!
 
-window.renderPiutangList = function() {
+window.renderPiutangList = async function() {
     const filter = document.getElementById('search-piutang').value.toLowerCase().trim();
     const container = document.getElementById("piutang-list-container"); container.innerHTML = "";
     
-    window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
-        // 🔥 FRONTEND FILTER: Calculate exact branch Piutang instantly
-        let members = e.target.result.filter(m => {
-            let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : m.piutang;
-            m._tempBranchPiutang = localP; 
-            return localP > 0;
-        });
+    if (!window.globalMembersCache || window.globalMembersCache.length === 0) {
+        await window.loadMembersFromCache();
+    }
 
-        if(window.updateLeftBadges) window.updateLeftBadges(); 
-        if (filter) members = members.filter(m => String(m.name).toLowerCase().includes(filter) || String(m.phone).includes(filter));
-        if (members.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Tidak ada data piutang ditemukan.</div>`; return; }
-        
-        members.forEach(m => {
-            container.innerHTML += `
-                <div style="border:1px solid #bdc3c7; border-left:5px solid #d35400; padding:15px; border-radius:6px; background:#fdf2e9; display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
-                    <div>
-                        <strong style="color:#2c3e50; font-size:16px;">${m.name}</strong> <span style="font-size:14px; color:#7f8c8d;">(${m.phone})</span><br>
-                        💰 <strong style="color:#c0392b; font-size:18px;">Rp ${m._tempBranchPiutang.toLocaleString('id-ID')}</strong>
-                    </div>
-                    <div>
-                        <button onclick="window.triggerBayarPiutang('${m.phone}')" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Lunasi Piutang</button>
-                    </div>
-                </div>`;
-        });
-    };
-}
+    let members = (window.globalMembersCache || []).filter(m => {
+        let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : m.piutang;
+        m._tempBranchPiutang = localP; 
+        return localP > 0;
+    });
+
+    if (window.updateLeftBadges) window.updateLeftBadges(); 
+    if (filter) members = members.filter(m => String(m.name).toLowerCase().includes(filter) || String(m.phone).includes(filter));
+    if (members.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Tidak ada data piutang ditemukan.</div>`; return; }
+    
+    container.innerHTML = members.map(m => `
+        <div style="border:1px solid #bdc3c7; border-left:5px solid #d35400; padding:15px; border-radius:6px; background:#fdf2e9; display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
+            <div>
+                <strong style="color:#2c3e50; font-size:16px;">${m.name}</strong> <span style="font-size:14px; color:#7f8c8d;">(${m.phone})</span><br>
+                💰 <strong style="color:#c0392b; font-size:18px;">Rp ${m._tempBranchPiutang.toLocaleString('id-ID')}</strong>
+            </div>
+            <div>
+                <button onclick="window.triggerBayarPiutang('${m.phone}')" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Lunasi Piutang</button>
+            </div>
+        </div>`).join("");
+};
 
 window.triggerBayarPiutang = function(phone, linkedOrderId = null) {
     window.db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
@@ -3368,45 +3405,40 @@ window.saveEditedCustomer = function() {
 
 window.autoResumeSession = async function() {
     const savedPin = localStorage.getItem("activePosPin");
-    if (!savedPin) return false; // No sticky session found
+    if (!savedPin) return false;
 
     let staffList = await window.getStaffFromDB();
     let staff = staffList.find(s => s.pin === savedPin);
 
-    if (staff) {
-        return new Promise(resolve => {
-            // 🔥 ADDED 'async' HERE:
-            window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staff.pin).onsuccess = async (shiftReq) => {
-                const activeShift = shiftReq.target.result;
-                if (activeShift) {
-                    // Restore the session context instantly
-                    window.currentCashier = staff.name;
-                    window.currentPin = staff.pin;
-                    window.currentShiftId = activeShift.shiftId;
-                    window.currentLoginTime = activeShift.loginTime;
-                    window.currentOutlet = activeShift.outlet;
+    return new Promise(resolve => {
+        window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(savedPin).onsuccess = async (shiftReq) => {
+            const activeShift = shiftReq.target.result;
+            if (activeShift) {
+                // 🔥 Even if staff table is mid-sync, keep the cashier logged in using their saved shift!
+                window.currentCashier = (staff && staff.name) ? staff.name : (localStorage.getItem("activePosName") || "Kasir");
+                window.currentPin = savedPin;
+                window.currentShiftId = activeShift.shiftId;
+                window.currentLoginTime = activeShift.loginTime;
+                window.currentOutlet = activeShift.outlet;
 
-                    // Bypass login screen
-                    document.getElementById("login-screen").classList.add("hidden");
-                    document.getElementById("pos-screen").classList.remove("hidden");
-                    document.getElementById("display-cashier").innerText = window.currentCashier;
-                    document.getElementById("display-outlet").innerText = window.currentOutlet;
+                if (staff && staff.name) localStorage.setItem("activePosName", staff.name);
 
-                    await window.loadMenuFromCache(); // 🔥 Sekarang 'await' akan berfungsi dengan benar
-                    window.loadMenuUI();
-                    window.lockMenu();
-                    resolve(true);
-                } else {
-                    // Shift was closed, clear the sticky login
-                    localStorage.removeItem("activePosPin");
-                    resolve(false);
-                }
-            };
-        });
-    } else {
-        localStorage.removeItem("activePosPin");
-        return false;
-    }
+                document.getElementById("login-screen").classList.add("hidden");
+                document.getElementById("pos-screen").classList.remove("hidden");
+                document.getElementById("display-cashier").innerText = window.currentCashier;
+                document.getElementById("display-outlet").innerText = window.currentOutlet;
+
+                await window.loadMenuFromCache();
+                window.loadMenuUI();
+                window.lockMenu();
+                resolve(true);
+            } else {
+                localStorage.removeItem("activePosPin");
+                localStorage.removeItem("activePosName");
+                resolve(false);
+            }
+        };
+    });
 };
 
 window.openMemberHistoryModal = function() {
