@@ -331,14 +331,23 @@ window.syncCriticalData = async function() {
         const result = await res.json();
         if (result.status === "Success") {
             
-            // 1. Fetch offline/unsynced members safely BEFORE opening the main write transaction
-            const unsyncedList = await new Promise(r => {
-                try {
-                    let req = window.db.transaction(["unsynced_members"], "readonly").objectStore("unsynced_members").getAll();
-                    req.onsuccess = e => r(e.target.result || []);
-                    req.onerror = () => r([]);
-                } catch(err) { r([]); }
-            });
+            // 1. Fetch offline/unsynced members AND pending piutang payments BEFORE opening the main write transaction
+            const [unsyncedList, pendingPiutangList] = await Promise.all([
+                new Promise(r => {
+                    try {
+                        let req = window.db.transaction(["unsynced_members"], "readonly").objectStore("unsynced_members").getAll();
+                        req.onsuccess = e => r(e.target.result || []);
+                        req.onerror = () => r([]);
+                    } catch(err) { r([]); }
+                }),
+                new Promise(r => {
+                    try {
+                        let req = window.db.transaction(["bayar_piutang"], "readonly").objectStore("bayar_piutang").getAll();
+                        req.onsuccess = e => r(e.target.result || []);
+                        req.onerror = () => r([]);
+                    } catch(err) { r([]); }
+                })
+            ]);
 
             // 2. Open the main write transaction
             const tx = window.db.transaction(["staff", "settings", "menu", "members"], "readwrite");
@@ -388,7 +397,31 @@ window.syncCriticalData = async function() {
                 const memT = tx.objectStore("members"); memT.clear();
                 const mergedMap = new Map();
                 
+                // Hitung pembayaran piutang lokal yang masih antre (Pending)
+                const pendingPaidByPhone = {};
+                pendingPiutangList.forEach(bp => {
+                    if (bp.syncStatus === "Pending" && bp.customerPhone) {
+                        let pKey = bp.customerPhone;
+                        let outKey = bp.outlet || window.currentOutlet;
+                        if (!pendingPaidByPhone[pKey]) pendingPaidByPhone[pKey] = {};
+                        pendingPaidByPhone[pKey][outKey] = (pendingPaidByPhone[pKey][outKey] || 0) + (Number(bp.amountPaid) || 0);
+                    }
+                });
+
                 result.data.members.forEach(m => {
+                    // 🔥 Potong piutang server dengan pembayaran lokal yang masih Pending agar piutang tidak muncul kembali!
+                    let basePhone = String(m.phone || "").replace(/-DUP\d+$/, "");
+                    if (pendingPaidByPhone[basePhone]) {
+                        for (let outKey in pendingPaidByPhone[basePhone]) {
+                            let paidAmt = pendingPaidByPhone[basePhone][outKey];
+                            if (m.piutangBreakdown && m.piutangBreakdown[outKey] !== undefined) {
+                                m.piutangBreakdown[outKey] = Math.max(0, m.piutangBreakdown[outKey] - paidAmt);
+                            }
+                            if (!window.currentOutlet || outKey === window.currentOutlet) {
+                                m.piutang = Math.max(0, (m.piutang || 0) - paidAmt);
+                            }
+                        }
+                    }
                     mergedMap.set(m.phone, m);
                     memT.put(m);
                 });
@@ -1431,17 +1464,32 @@ window.submitPiutang = function() {
                 } else if (o.debtAmount > 0 && String(o.paymentMethod).includes("Piutang")) {
                     if (!String(o.paymentMethod).includes("Sebagian")) o.paymentMethod = String(o.paymentMethod).replace("Piutang", "Piutang (Sebagian)");
                 }
-                o.syncStatus = "Pending"; 
+                // 🔥 JANGAN ubah o.syncStatus menjadi "Pending" jika sudah "Synced",
+                // karena syncBayarPiutang di server sudah meng-update tab Transactions secara langsung!
                 store2.put(o);
             }
             tx2.oncomplete = () => {
                 document.getElementById("piutang-modal").classList.add("hidden"); 
-                window.renderPiutangList(); // Meng-update list agar nama langsung hilang
+                window.renderPiutangList(); 
                 if (window.updateLeftBadges) window.updateLeftBadges();
                 
                 alert("Pembayaran Piutang Berhasil Dicatat!"); 
+
+                // 🔥 INSTANT DIRECT PUSH: Langsung kirim pelunasan ke server detik ini juga
+                // agar jika kasir langsung tutup shift, server sudah mencatat pelunasan ini!
+                if (navigator.onLine) {
+                    fetch(API_URL, {
+                        method: "POST",
+                        redirect: "follow",
+                        headers: { "Content-Type": "text/plain;charset=utf-8" },
+                        body: JSON.stringify({ action: "syncBayarPiutang", data: payload })
+                    }).then(r => r.json()).then(res => {
+                        if (res.status === "Success") {
+                            window.db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").delete(payload.payId);
+                        }
+                    }).catch(() => {});
+                }
                 
-                // Mengisolasi proses berat ke belakang layar
                 setTimeout(() => {
                     window.runBackgroundSync();
                     if (window.piutangFromDeliveryOrderId) {
@@ -2621,13 +2669,15 @@ window.executeFinalLogout = async function(netCash) {
     }
 
     if (navigator.onLine) {
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = `Mengirim Laporan Shift...`;
+        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = `Menyinkronkan Transaksi & Shift...`;
         try {
+            // 🔥 Pastikan semua pelunasan piutang & order terkirim ke server SEBELUM menghitung laporan shift dan reload!
+            await window.runBackgroundSync();
             let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) });
             if ((await r.json()).status === "Success") { window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(shiftPayload.shiftId); }
         } catch(e) {}
     }
-    window.location.reload(); 
+    window.location.reload();
 }
 
 window.lockScreen = function() { 
