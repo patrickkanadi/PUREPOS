@@ -469,6 +469,17 @@ window.syncBackgroundData = async function() {
                 result.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
             }
             
+            if (result.data.activeExpenses) {
+                const expStore = tx.objectStore("expenses");
+                result.data.activeExpenses.forEach(ex => {
+                    let req = expStore.get(ex.expenseId);
+                    req.onsuccess = (e) => {
+                        let existing = e.target.result;
+                        if (!existing || existing.syncStatus !== "Pending") { expStore.put(ex); }
+                    };
+                });
+            }
+
             if (result.data.shiftReports) {
                 const srStore = tx.objectStore("shift_reports"); srStore.clear();
                 result.data.shiftReports.forEach(sr => srStore.put(sr));
@@ -1939,31 +1950,47 @@ window.saveExpense = function() {
     document.getElementById("expense-modal").classList.add("hidden"); document.getElementById("exp-amount").value = ""; document.getElementById("exp-category").value = ""; document.getElementById("exp-desc").value = ""; alert("Pengeluaran Berhasil Dicatat!"); window.runBackgroundSync();
 }
 
-window.openHistoryModal = function() { document.getElementById("history-modal").classList.remove("hidden"); window.renderHistoryList('orders'); }
+window.openHistoryModal = async function() {
+    document.getElementById("history-modal").classList.remove("hidden");
+    window.renderHistoryList('orders');
+
+    // 🔥 If cache was just cleared, automatically pull fresh history from the Spreadsheet in the background and refresh the list!
+    if (navigator.onLine) {
+        await window.syncBackgroundData();
+        if (!document.getElementById("history-modal").classList.contains("hidden")) {
+            window.renderHistoryList(window.currentHistoryTab || 'orders');
+        }
+    }
+};
+
+window.currentHistoryTab = 'orders';
+
+window.parseSafeTimeMs = function(rawTs) {
+    if (!rawTs) return 0;
+    let s = String(rawTs).trim();
+    let d = new Date(s.includes(' ') && !s.includes('T') ? s.replace(/-/g, '/') : s);
+    if (!isNaN(d.getTime())) return d.getTime();
+    let d2 = new Date(s);
+    return isNaN(d2.getTime()) ? 0 : d2.getTime();
+};
 
 window.renderHistoryList = function(type) {
-    const container = document.getElementById("history-container"); container.innerHTML = "";
-    
-    // 1. Get strictly today's date format (YYYY-MM-DD)
-    const todayStr = window.getWibDate().split(" ")[0]; 
-    
-    // 2. Calculate exactly yesterday's date format
-    const d = new Date(); 
-    const utc = d.getTime() + (d.getTimezoneOffset() * 60000); 
-    const nd = new Date(utc + (3600000 * 7)); // Current WIB time
-    nd.setDate(nd.getDate() - 1); // Subtract 1 day
-    const pad = n => n < 10 ? '0' + n : n;
-    const yesterdayStr = `${nd.getFullYear()}-${pad(nd.getMonth()+1)}-${pad(nd.getDate())}`;
+    window.currentHistoryTab = type;
+    const container = document.getElementById("history-container");
+    container.innerHTML = "";
 
     if (type === 'orders') {
         window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-            // 🔥 FILTER: Only show orders from TODAY or YESTERDAY in this branch
-            const shiftOrders = e.target.result.filter(o => {
-                const ts = String(o.timestamp);
-                return o.outlet === window.currentOutlet && (ts.startsWith(todayStr) || ts.startsWith(yesterdayStr));
-            }).reverse(); 
+            // 🔥 Show the latest 100 orders for this outlet synced from the Spreadsheet (no fragile date cutoff!)
+            const shiftOrders = (e.target.result || [])
+                .filter(o => !window.currentOutlet || o.outlet === window.currentOutlet)
+                .sort((a, b) => window.parseSafeTimeMs(b.timestamp) - window.parseSafeTimeMs(a.timestamp))
+                .slice(0, 100);
             
-            if(shiftOrders.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada order hari ini atau kemarin di cabang ini.</div>`;
+            if (shiftOrders.length === 0) {
+                container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">⏳ Memuat riwayat transaksi dari Spreadsheet... (Atau belum ada transaksi di cabang ini).</div>`;
+                return;
+            }
             
             shiftOrders.forEach(o => {
                 let badge = o.orderStatus === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : o.orderStatus === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">${o.orderStatus}</span>`; 
@@ -1972,42 +1999,50 @@ window.renderHistoryList = function(type) {
                 let btnPrint = `<button onclick="window.reprintOrder('${o.orderId}')" style="background:#2980b9; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">🖨️ Cetak</button>`;
                 let btnDetail = `<button onclick="window.showOrderDetail('${o.orderId}')" style="background:#f39c12; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">👁️ Detail</button>`;
                 
-                container.innerHTML += `<div class="history-row"><div><strong>${o.customerName}</strong><br><small style="color:#7f8c8d;">${window.formatDateReadable(o.timestamp)} | Rp ${o.grandTotal.toLocaleString('id-ID')}</small>${piutangBadge}</div><div style="display:flex; align-items:center; gap:8px;">${badge} ${btnDetail} ${btnPrint} ${btnVoid}</div></div>`;
+                container.innerHTML += `<div class="history-row"><div><strong>${o.customerName}</strong> <small style="color:#95a5a6;">(${o.orderId})</small><br><small style="color:#7f8c8d;">${window.formatDateReadable(o.timestamp)} | Rp ${(o.grandTotal || 0).toLocaleString('id-ID')}</small>${piutangBadge}</div><div style="display:flex; align-items:center; gap:8px;">${badge} ${btnDetail} ${btnPrint} ${btnVoid}</div></div>`;
             });
         };
     } else if (type === 'expenses') {
         window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (e) => {
-            // Expenses also filtered to TODAY and YESTERDAY
-            const shiftExpenses = e.target.result.filter(exp => {
-                const ts = String(exp.timestamp);
-                return exp.outlet === window.currentOutlet && (ts.startsWith(todayStr) || ts.startsWith(yesterdayStr));
-            }).reverse();
+            // 🔥 Show the latest 100 expenses for this outlet synced from the Spreadsheet
+            const shiftExpenses = (e.target.result || [])
+                .filter(exp => !window.currentOutlet || exp.outlet === window.currentOutlet)
+                .sort((a, b) => window.parseSafeTimeMs(b.timestamp) - window.parseSafeTimeMs(a.timestamp))
+                .slice(0, 100);
             
-            if(shiftExpenses.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada pengeluaran hari ini atau kemarin.</div>`;
+            if (shiftExpenses.length === 0) {
+                container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Belum ada riwayat pengeluaran di cabang ini.</div>`;
+                return;
+            }
             
             shiftExpenses.forEach(exp => {
                 let badge = exp.status === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : exp.status === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">Aktif</span>`;
                 let btn = (exp.status !== "Voided" && exp.status !== "Void Pending") ? `<button onclick="window.requestVoid('expenses', '${exp.expenseId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Batal/Void</button>` : '';
-                container.innerHTML += `<div class="history-row"><div><strong>${exp.category}</strong><br><small style="color:#7f8c8d;">${window.formatDateReadable(exp.timestamp)} | Rp ${exp.amount.toLocaleString('id-ID')}</small><br><small>${exp.description}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div></div>`;
+                container.innerHTML += `<div class="history-row"><div><strong>${exp.category}</strong><br><small style="color:#7f8c8d;">${window.formatDateReadable(exp.timestamp)} | Rp ${(exp.amount || 0).toLocaleString('id-ID')}</small><br><small>${exp.description}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div>`;
             });
         };
     } else if (type === 'shifts') {
         window.db.transaction(["shift_reports"], "readonly").objectStore("shift_reports").getAll().onsuccess = (e) => {
-            // Shift history loads last 50 normally since they span longer times (you rarely have 50 shifts in one week)
-            const shifts = e.target.result.filter(s => s.outlet === window.currentOutlet).reverse().slice(0, 50);
-            if(shifts.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada histori shift di cabang ini.</div>`;
+            const shifts = (e.target.result || [])
+                .filter(s => !window.currentOutlet || s.outlet === window.currentOutlet)
+                .sort((a, b) => window.parseSafeTimeMs(b.logoutTime) - window.parseSafeTimeMs(a.logoutTime))
+                .slice(0, 50);
+
+            if (shifts.length === 0) {
+                container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Belum ada histori shift di cabang ini.</div>`;
+                return;
+            }
             
             shifts.forEach(s => {
                 let pGiven = (s.piutangGiven || 0) > 0 ? `<br><small style="color:#c0392b;">Piutang KLR: Rp ${(s.piutangGiven).toLocaleString('id-ID')}</small>` : '';
                 let pPaid = (s.piutangPaid || 0) > 0 ? `<br><small style="color:#8e44ad;">Piutang MSK: Rp ${(s.piutangPaid).toLocaleString('id-ID')}</small>` : '';
-                
                 let viewBtn = `<button onclick="window.viewHistoricalShift('${s.shiftId}')" style="background:#2980b9; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold; margin-top:5px;">👁️ Detail Shift</button>`;
                 
-                container.innerHTML += `<div class="history-row" style="align-items:flex-start;"><div><strong>Shift: ${s.shiftId}</strong><br><small style="color:#7f8c8d;">Kasir: ${s.cashier} | Keluar: ${window.formatDateReadable(s.logoutTime)}</small>${pGiven}${pPaid}<br>${viewBtn}</div><div style="text-align:right;"><strong>Omset: Rp ${s.totalOmset.toLocaleString('id-ID')}</strong><br><small style="color:#27ae60;">Uang Laci: Rp ${s.netCash.toLocaleString('id-ID')}</small></div></div>`;
+                container.innerHTML += `<div class="history-row" style="align-items:flex-start;"><div><strong>Shift: ${s.shiftId}</strong><br><small style="color:#7f8c8d;">Kasir: ${s.cashier} | Keluar: ${window.formatDateReadable(s.logoutTime)}</small>${pGiven}${pPaid}<br>${viewBtn}</div><div style="text-align:right;"><strong>Omset: Rp ${(s.totalOmset || 0).toLocaleString('id-ID')}</strong><br><small style="color:#27ae60;">Uang Laci: Rp ${(s.netCash || 0).toLocaleString('id-ID')}</small></div></div>`;
             });
         };
     }
-}
+};
 
 window.viewHistoricalShift = function(shiftId) {
     window.db.transaction(["local_shift_history"], "readonly").objectStore("local_shift_history").get(shiftId).onsuccess = (e) => {
