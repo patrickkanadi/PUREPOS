@@ -469,17 +469,6 @@ window.syncBackgroundData = async function() {
                 result.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
             }
             
-            if (result.data.activeExpenses) {
-                const expStore = tx.objectStore("expenses");
-                result.data.activeExpenses.forEach(ex => {
-                    let req = expStore.get(ex.expenseId);
-                    req.onsuccess = (e) => {
-                        let existing = e.target.result;
-                        if (!existing || existing.syncStatus !== "Pending") { expStore.put(ex); }
-                    };
-                });
-            }
-
             if (result.data.shiftReports) {
                 const srStore = tx.objectStore("shift_reports"); srStore.clear();
                 result.data.shiftReports.forEach(sr => srStore.put(sr));
@@ -1955,33 +1944,24 @@ window.openHistoryModal = function() { document.getElementById("history-modal").
 window.renderHistoryList = function(type) {
     const container = document.getElementById("history-container"); container.innerHTML = "";
     
-    // 1. Ambil tanggal Hari Ini & Kemarin dalam format YYYY-MM-DD (WIB)
+    // 1. Get strictly today's date format (YYYY-MM-DD)
     const todayStr = window.getWibDate().split(" ")[0]; 
+    
+    // 2. Calculate exactly yesterday's date format
     const d = new Date(); 
     const utc = d.getTime() + (d.getTimezoneOffset() * 60000); 
-    const nd = new Date(utc + (3600000 * 7));
-    nd.setDate(nd.getDate() - 1);
+    const nd = new Date(utc + (3600000 * 7)); // Current WIB time
+    nd.setDate(nd.getDate() - 1); // Subtract 1 day
     const pad = n => n < 10 ? '0' + n : n;
     const yesterdayStr = `${nd.getFullYear()}-${pad(nd.getMonth()+1)}-${pad(nd.getDate())}`;
 
-    // 🔥 Helper: Konversi segala format tanggal (lokal maupun server) ke YYYY-MM-DD WIB
-    const isTodayOrYesterday = (rawTs) => {
-        if (!rawTs) return false;
-        const s = String(rawTs).trim();
-        if (s.startsWith(todayStr) || s.startsWith(yesterdayStr)) return true;
-        const parsed = new Date(s.includes(' ') && !s.includes('T') ? s.replace(/-/g, '/') : s);
-        if (isNaN(parsed.getTime())) return false;
-        const pUtc = parsed.getTime() + (parsed.getTimezoneOffset() * 60000);
-        const pWib = new Date(pUtc + (3600000 * 7));
-        const dateKey = `${pWib.getFullYear()}-${pad(pWib.getMonth()+1)}-${pad(pWib.getDate())}`;
-        return dateKey === todayStr || dateKey === yesterdayStr;
-    };
-
     if (type === 'orders') {
         window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
+            // 🔥 FILTER: Only show orders from TODAY or YESTERDAY in this branch
             const shiftOrders = e.target.result.filter(o => {
-                return o.outlet === window.currentOutlet && isTodayOrYesterday(o.timestamp);
-            }).sort((a, b) => new Date(String(b.timestamp).replace(' ', 'T')) - new Date(String(a.timestamp).replace(' ', 'T')));
+                const ts = String(o.timestamp);
+                return o.outlet === window.currentOutlet && (ts.startsWith(todayStr) || ts.startsWith(yesterdayStr));
+            }).reverse(); 
             
             if(shiftOrders.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada order hari ini atau kemarin di cabang ini.</div>`;
             
@@ -1997,16 +1977,18 @@ window.renderHistoryList = function(type) {
         };
     } else if (type === 'expenses') {
         window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (e) => {
+            // Expenses also filtered to TODAY and YESTERDAY
             const shiftExpenses = e.target.result.filter(exp => {
-                return exp.outlet === window.currentOutlet && isTodayOrYesterday(exp.timestamp);
-            }).sort((a, b) => new Date(String(b.timestamp).replace(' ', 'T')) - new Date(String(a.timestamp).replace(' ', 'T')));
+                const ts = String(exp.timestamp);
+                return exp.outlet === window.currentOutlet && (ts.startsWith(todayStr) || ts.startsWith(yesterdayStr));
+            }).reverse();
             
             if(shiftExpenses.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada pengeluaran hari ini atau kemarin.</div>`;
             
             shiftExpenses.forEach(exp => {
                 let badge = exp.status === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : exp.status === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">Aktif</span>`;
                 let btn = (exp.status !== "Voided" && exp.status !== "Void Pending") ? `<button onclick="window.requestVoid('expenses', '${exp.expenseId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Batal/Void</button>` : '';
-                container.innerHTML += `<div class="history-row"><div><strong>${exp.category}</strong><br><small style="color:#7f8c8d;">${window.formatDateReadable(exp.timestamp)} | Rp ${exp.amount.toLocaleString('id-ID')}</small><br><small>${exp.description}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div>`;
+                container.innerHTML += `<div class="history-row"><div><strong>${exp.category}</strong><br><small style="color:#7f8c8d;">${window.formatDateReadable(exp.timestamp)} | Rp ${exp.amount.toLocaleString('id-ID')}</small><br><small>${exp.description}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div></div>`;
             });
         };
     } else if (type === 'shifts') {
