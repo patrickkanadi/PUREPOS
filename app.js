@@ -217,21 +217,18 @@ window.setPrinterButtonState = function(state) {
     }
 };
 
-// 🔥 1. DETAK JANTUNG (KEEP-ALIVE): Mencegah printer mati/tidur sendiri!
 window.startPrinterKeepAlive = function() {
     if (window.printerKeepAliveTimer) clearInterval(window.printerKeepAliveTimer);
     window.printerKeepAliveTimer = setInterval(async () => {
         if (window.isPrintingNow || window.isReconnectingPrinter) return;
         if (window.printDevice && window.printDevice.gatt && window.printDevice.gatt.connected && window.printerCharacteristic) {
             try {
-                // Kirim 1 byte kosong (NUL) agar timer tidur printer ter-reset tanpa menggerakkan kertas
                 await window.printerCharacteristic.writeValue(new Uint8Array([0x00]));
             } catch (e) {}
         }
-    }, 20000); // Setiap 20 detik
+    }, 20000);
 };
 
-// 🔥 2. FUNGSI SAMBUNG ULANG OTOMATIS (Tanpa watchAdvertisements agar 100% bebas crash!)
 window.reconnectExistingPrinter = async function(maxAttempts = 3, silent = false) {
     if (!window.printDevice) return false;
     if (window.printDevice.gatt && window.printDevice.gatt.connected && window.printerCharacteristic) {
@@ -247,16 +244,28 @@ window.reconnectExistingPrinter = async function(maxAttempts = 3, silent = false
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
                 const server = await window.printDevice.gatt.connect();
-                const service = await server.getPrimaryService(0x18F0);
-                window.printerCharacteristic = await service.getCharacteristic(0x2AF1);
+                await new Promise(r => setTimeout(r, 600));
+
+                let service = null;
+                try {
+                    service = await server.getPrimaryService(0x18F0);
+                } catch (e1) {
+                    let services = await server.getPrimaryServices();
+                    if (services && services.length > 0) service = services[0];
+                }
+
+                if (!service) throw new Error("Layanan printer tidak ditemukan.");
+                let characteristics = await service.getCharacteristics();
+                window.printerCharacteristic = characteristics.find(c => c.properties.write || c.properties.writeWithoutResponse) || characteristics[0];
+
+                if (!window.printerCharacteristic) throw new Error("Karakteristik printer tidak ditemukan.");
 
                 window.setPrinterButtonState("ready");
                 window.startPrinterKeepAlive();
                 return true;
             } catch (err) {
                 window.printerCharacteristic = null;
-                // Beri jeda 800ms agar chip Bluetooth printer sempat bangun dari mode tidur
-                await new Promise(r => setTimeout(r, 800));
+                await new Promise(r => setTimeout(r, 1000));
             }
         }
         window.setPrinterButtonState("standby");
@@ -272,7 +281,6 @@ window.attachPrinterDisconnectListener = function(device) {
     device.addEventListener('gattserverdisconnected', () => {
         window.printerCharacteristic = null;
         window.setPrinterButtonState("standby");
-        // Coba sambung kembali secara otomatis di latar belakang 2 detik setelah terputus
         setTimeout(() => {
             if (!window.isPrintingNow && window.printDevice && (!window.printDevice.gatt || !window.printDevice.gatt.connected)) {
                 window.reconnectExistingPrinter(2, true);
@@ -281,37 +289,49 @@ window.attachPrinterDisconnectListener = function(device) {
     });
 };
 
-window.window.connectBluetoothPrinter = async function() {
+window.connectBluetoothPrinter = async function() {
     try {
         window.setPrinterButtonState("connecting");
 
-        // 🔥 WAJIB BARIS PERTAMA (Tanpa 'await' lain sebelumnya) agar Chrome Android
-        // tidak pernah memunculkan error "Must be handling a user gesture"!
+        // 🔥 UNIVERSAL DISCOVERY: acceptAllDevices ensures no printer is rejected by strict UUID filters
         const device = await navigator.bluetooth.requestDevice({
-            filters: [{ services: [0x18F0] }],
-            optionalServices: [0x18F0]
+            acceptAllDevices: true,
+            optionalServices: [0x18F0, 0xff00, 0xfee7, 0x1800, 0x1801]
         });
 
         window.printDevice = device;
         window.attachPrinterDisconnectListener(window.printDevice);
 
-        // Lakukan koneksi GATT (dengan cadangan 2x percobaan jika printer baru bangun tidur)
         let connected = false;
-        for (let attempt = 1; attempt <= 2; attempt++) {
+        for (let attempt = 1; attempt <= 3; attempt++) {
             try {
                 const server = await window.printDevice.gatt.connect();
-                const service = await server.getPrimaryService(0x18F0);
-                window.printerCharacteristic = await service.getCharacteristic(0x2AF1);
+                await new Promise(r => setTimeout(r, 600));
+
+                let service = null;
+                try {
+                    service = await server.getPrimaryService(0x18F0);
+                } catch (e1) {
+                    let services = await server.getPrimaryServices();
+                    if (services && services.length > 0) service = services[0];
+                }
+
+                if (!service) throw new Error("Layanan printer tidak ditemukan.");
+                let characteristics = await service.getCharacteristics();
+                window.printerCharacteristic = characteristics.find(c => c.properties.write || c.properties.writeWithoutResponse) || characteristics[0];
+
+                if (!window.printerCharacteristic) throw new Error("Karakteristik printer tidak ditemukan.");
+
                 connected = true;
                 break;
             } catch (connErr) {
                 window.printerCharacteristic = null;
-                await new Promise(r => setTimeout(r, 600));
+                await new Promise(r => setTimeout(r, 800));
             }
         }
 
         if (!connected) {
-            throw new Error("Printer ditemukan tetapi gagal membuka jalur cetak. Pastikan printer menyala dan tidak sedang terhubung ke HP/tablet lain.");
+            throw new Error("Printer ditemukan tetapi gagal membuka jalur cetak. Pastikan printer menyala.");
         }
 
         window.setPrinterButtonState("ready");
@@ -319,12 +339,7 @@ window.window.connectBluetoothPrinter = async function() {
         alert("✅ Printer Thermal Berhasil Terhubung!");
     } catch (error) {
         console.error(error);
-        if (window.printDevice && window.printDevice.gatt && window.printDevice.gatt.connected && window.printerCharacteristic) {
-            window.setPrinterButtonState("ready");
-        } else {
-            window.setPrinterButtonState(window.printDevice ? "standby" : "default");
-        }
-        // Jangan tampilkan alert jika kasir hanya menekan tombol Batal di popup Bluetooth
+        window.setPrinterButtonState(window.printDevice ? "standby" : "default");
         if (error && error.name !== "NotFoundError") {
             alert("Gagal koneksi printer: " + error.message);
         }
@@ -332,7 +347,6 @@ window.window.connectBluetoothPrinter = async function() {
 };
 
 window.printViaBluetooth = async function(payloadBytes) {
-    // Jika referensi device hilang setelah refresh, ambil kembali dari memori izin browser
     if (!window.printDevice && navigator.bluetooth && navigator.bluetooth.getDevices) {
         try {
             const devices = await navigator.bluetooth.getDevices();
@@ -344,30 +358,27 @@ window.printViaBluetooth = async function(payloadBytes) {
     }
 
     if (!window.printDevice) {
-        alert("⚠️ Printer belum dipasangkan! Klik tombol '🖨️ Printer' di bagian atas layar sekali saja untuk menyambungkan.");
+        alert("⚠️ Printer belum dipasangkan! Klik tombol '🖨️ Printer' di atas sekali saja untuk menyambungkan.");
         return false;
     }
 
     window.isPrintingNow = true;
 
     try {
-        // Bangunkan dan sambungkan ulang secara otomatis (hingga 4x percobaan) sebelum mencetak
         if (!window.printDevice.gatt.connected || !window.printerCharacteristic) {
             const connected = await window.reconnectExistingPrinter(4, false);
             if (!connected) {
-                alert("⚠️ Printer tidak merespons. Pastikan printer dalam keadaan MENYALA dan dekat dengan tablet, lalu coba lagi.");
+                alert("⚠️ Printer tidak merespons. Pastikan printer MENYALA, lalu klik tombol printer di atas.");
                 return false;
             }
         }
 
-        // Kirim data struk dengan ukuran paket aman (20 byte, jeda 12ms)
         const CHUNK_SIZE = 20;
         for (let i = 0; i < payloadBytes.length; i += CHUNK_SIZE) {
             const chunk = payloadBytes.slice(i, i + CHUNK_SIZE);
             try {
                 await window.printerCharacteristic.writeValue(chunk);
             } catch (writeErr) {
-                // Jika koneksi terputus di tengah cetak, otomatis sambung ulang 1x dan lanjutkan!
                 const recovered = await window.reconnectExistingPrinter(2, true);
                 if (!recovered) throw writeErr;
                 await window.printerCharacteristic.writeValue(chunk);
