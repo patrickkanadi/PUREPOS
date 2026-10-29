@@ -281,42 +281,50 @@ window.attachPrinterDisconnectListener = function(device) {
     });
 };
 
-window.connectBluetoothPrinter = async function() {
+window.window.connectBluetoothPrinter = async function() {
     try {
-        // 🔥 Jika printer sudah ada di memori dan sedang terhubung, beri tahu kasir
-        if (window.printDevice && window.printDevice.gatt && window.printDevice.gatt.connected && window.printerCharacteristic) {
-            window.setPrinterButtonState("ready");
-            alert("✅ Printer sudah terhubung dan siap digunakan!");
-            return;
-        }
-
-        // 🔥 Jika printer sudah pernah di-pair (ada di window.printDevice) tapi terputus,
-        // coba sambung langsung TANPA membuka popup pencarian yang merepotkan!
-        if (window.printDevice) {
-            const reconnected = await window.reconnectExistingPrinter(2, false);
-            if (reconnected) {
-                return; // Langsung hijau ("🖨️ Printer Siap") tanpa popup!
-            }
-        }
-
-        // Jika belum pernah dipairing atau gagal bangun, barulah buka popup pilihan Bluetooth
         window.setPrinterButtonState("connecting");
-        window.printDevice = await navigator.bluetooth.requestDevice({
+
+        // 🔥 WAJIB BARIS PERTAMA (Tanpa 'await' lain sebelumnya) agar Chrome Android
+        // tidak pernah memunculkan error "Must be handling a user gesture"!
+        const device = await navigator.bluetooth.requestDevice({
             filters: [{ services: [0x18F0] }],
             optionalServices: [0x18F0]
         });
+
+        window.printDevice = device;
         window.attachPrinterDisconnectListener(window.printDevice);
 
-        const server = await window.printDevice.gatt.connect();
-        const service = await server.getPrimaryService(0x18F0);
-        window.printerCharacteristic = await service.getCharacteristic(0x2AF1);
+        // Lakukan koneksi GATT (dengan cadangan 2x percobaan jika printer baru bangun tidur)
+        let connected = false;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+                const server = await window.printDevice.gatt.connect();
+                const service = await server.getPrimaryService(0x18F0);
+                window.printerCharacteristic = await service.getCharacteristic(0x2AF1);
+                connected = true;
+                break;
+            } catch (connErr) {
+                window.printerCharacteristic = null;
+                await new Promise(r => setTimeout(r, 600));
+            }
+        }
+
+        if (!connected) {
+            throw new Error("Printer ditemukan tetapi gagal membuka jalur cetak. Pastikan printer menyala dan tidak sedang terhubung ke HP/tablet lain.");
+        }
 
         window.setPrinterButtonState("ready");
         window.startPrinterKeepAlive();
         alert("✅ Printer Thermal Berhasil Terhubung!");
     } catch (error) {
         console.error(error);
-        window.setPrinterButtonState(window.printDevice ? "standby" : "default");
+        if (window.printDevice && window.printDevice.gatt && window.printDevice.gatt.connected && window.printerCharacteristic) {
+            window.setPrinterButtonState("ready");
+        } else {
+            window.setPrinterButtonState(window.printDevice ? "standby" : "default");
+        }
+        // Jangan tampilkan alert jika kasir hanya menekan tombol Batal di popup Bluetooth
         if (error && error.name !== "NotFoundError") {
             alert("Gagal koneksi printer: " + error.message);
         }
@@ -2502,7 +2510,8 @@ window.restorePrinterConnection = async function() {
             if (devices.length > 0) {
                 window.printDevice = devices[0];
                 window.attachPrinterDisconnectListener(window.printDevice);
-                window.setPrinterButtonState("ready");
+                // Coba sambungkan diam-diam saat booting; jika berhasil otomatis hijau, jika belum tetap oranye
+                await window.reconnectExistingPrinter(1, true);
             }
         } catch (err) {
             console.log("Browser tidak mendukung restore Bluetooth otomatis.");
