@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbw1w3B11VMGefnoh8A0TXVu5Hhrbrfi5HqcxYVNVZwb1Tgx_LlDMXVEEQQdKxdis37v/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 22; // 🔥 Keep at 22 so IndexedDB never blocks!
-const APP_VERSION = "2.2"; 
+const DB_VERSION = 23; // 🔥 Keep at 22 so IndexedDB never blocks!
+const APP_VERSION = "2.3"; 
 window.db = null;
 
 // Core State
@@ -1564,6 +1564,17 @@ window.finalizeOrder = async function(shouldPrint) {
     const reviewButtons = document.querySelectorAll("#review-modal button");
     reviewButtons.forEach(b => b.disabled = true);
 
+    // 🔥 Jika kasir klik "🖨️ Cetak Struk" tapi printer belum tersambung / terputus,
+    // langsung buka koneksi printer SEKARANG (selagi sentuhan jari masih aktif) sebelum menyimpan order!
+    if (shouldPrint && (!window.printDevice || !window.printDevice.gatt || !window.printDevice.gatt.connected || !window.printerCharacteristic)) {
+        const isConnectedNow = await window.connectBluetoothPrinter(true);
+        if (!isConnectedNow) {
+            window.isFinalizingOrder = false;
+            reviewButtons.forEach(b => b.disabled = false);
+            return; // Biarkan jendela pembayaran tetap terbuka jika kasir batal memilih printer
+        }
+    }
+
     let payMethods = []; if(cash > 0) payMethods.push("Tunai"); if(qris > 0) payMethods.push("QRIS"); if(transfer > 0) payMethods.push("Trf.Bank"); if(free > 0) payMethods.push("Gratis"); if(debtAmount > 0) payMethods.push("Piutang");
     const payString = payMethods.length > 0 ? payMethods.join("+") : "Belum Bayar";
 
@@ -2159,6 +2170,10 @@ window.showOrderDetail = function(orderId) {
 }
 
 window.reprintOrder = async function(orderId) {
+    if (!window.printDevice || !window.printDevice.gatt || !window.printDevice.gatt.connected || !window.printerCharacteristic) {
+        const ok = await window.connectBluetoothPrinter(true);
+        if (!ok) return;
+    }
     const order = await new Promise(res => window.db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = e => res(e.target.result));
     if (!order) return alert("Order tidak ditemukan di memori tablet lokal.");
     const deposit = (order.cashAmount || 0) + (order.qrisAmount || 0) + (order.transferAmount || 0) + (order.freeAmount || 0);
@@ -2440,23 +2455,10 @@ window.fallbackLocalShiftReport = function() {
 }
 
 window.restorePrinterConnection = async function() {
-    if (navigator.bluetooth && navigator.bluetooth.getDevices) {
-        try {
-            const devices = await navigator.bluetooth.getDevices();
-            if (devices.length > 0) {
-                window.printDevice = devices[0];
-                if (!window.printDevice._hasListener) {
-                    window.printDevice._hasListener = true;
-                    window.printDevice.addEventListener('gattserverdisconnected', () => {
-                        window.printerCharacteristic = null;
-                    });
-                }
-                window.setPrinterButtonState("ready");
-            }
-        } catch (err) {
-            console.log("Browser tidak mendukung restore Bluetooth otomatis.");
-        }
-    }
+    // Nyalakan pelindung layar agar tablet tidak tidur saat POS terbuka
+    window.requestPosWakeLock();
+    // Jangan ubah tombol menjadi hijau sebelum benar-benar terhubung via GATT
+    window.setPrinterButtonState("default");
 };
 
 window.submitNewMember = async function() {
