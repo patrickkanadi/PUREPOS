@@ -2236,12 +2236,9 @@ window.reprintOrder = async function(orderId) {
         if (!ok) return;
     }
     const order = await new Promise(res => window.db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = e => res(e.target.result));
-    if (!window.printDevice || !window.printDevice.gatt || !window.printDevice.gatt.connected || !window.printerCharacteristic) {
-        const ok = await window.connectBluetoothPrinter(true);
-        if (!ok) return;
-    }
-    const order = await new Promise(res => window.db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = e => res(e.target.result));
+    
     if (!order) return alert("Order tidak ditemukan di memori tablet lokal.");
+    
     const deposit = (order.cashAmount || 0) + (order.qrisAmount || 0) + (order.transferAmount || 0) + (order.freeAmount || 0);
     let updatedWallet = {}; try { updatedWallet = JSON.parse(order.finalStoredRewards || "{}"); } catch(e){}
     const payloadBytes = await window.buildEscPosReceipt(order.orderId, order, deposit, (order.debtAmount || 0), order.paymentMethod, updatedWallet);
