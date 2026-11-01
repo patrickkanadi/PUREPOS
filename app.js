@@ -1625,17 +1625,6 @@ window.finalizeOrder = async function(shouldPrint) {
         }
     }
 
-    // 🔥 Jika kasir klik "🖨️ Cetak Struk" tapi printer belum tersambung / terputus,
-    // langsung buka koneksi printer SEKARANG (selagi sentuhan jari masih aktif) sebelum menyimpan order!
-    if (shouldPrint && (!window.printDevice || !window.printDevice.gatt || !window.printDevice.gatt.connected || !window.printerCharacteristic)) {
-        const isConnectedNow = await window.connectBluetoothPrinter(true);
-        if (!isConnectedNow) {
-            window.isFinalizingOrder = false;
-            reviewButtons.forEach(b => b.disabled = false);
-            return; // Biarkan jendela pembayaran tetap terbuka jika kasir batal memilih printer
-        }
-    }
-
     let payMethods = []; if(cash > 0) payMethods.push("Tunai"); if(qris > 0) payMethods.push("QRIS"); if(transfer > 0) payMethods.push("Trf.Bank"); if(free > 0) payMethods.push("Gratis"); if(debtAmount > 0) payMethods.push("Piutang");
     const payString = payMethods.length > 0 ? payMethods.join("+") : "Belum Bayar";
 
