@@ -2441,81 +2441,6 @@ window.submitCashDrop = function() {
     });
 }
 
-window.fallbackLocalShiftReport = function() {
-    const today = window.getWibDate().split(" ")[0];
-    window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (ev) => {
-        let pendingOuts = ev.target.result.filter(l => l.date === today && !l.clockOut && l.staffName !== window.currentCashier);
-        let currentHour = new Date(window.getWibDate().replace(' ', 'T')).getHours();
-        if (pendingOuts.length > 0) {
-            let msg = "Terdapat staff yang belum Clock-Out:\n";
-            pendingOuts.forEach(p => msg += `- ${p.staffName}\n`);
-            if (currentHour >= 20) {
-                alert(msg + "\nKarena sudah lewat jam 20:00, sistem otomatis melakukan Clock-Out untuk mereka sekarang.");
-                pendingOuts.forEach(p => window.clockOutStaff(p.logId, window.getWibDate()));
-            } else {
-                let forceOut = prompt(msg + "\nMasukkan waktu Clock-Out manual (HH:MM) atau biarkan kosong jika masih bekerja:", "");
-                if (forceOut && forceOut.includes(":")) {
-                    pendingOuts.forEach(p => window.clockOutStaff(p.logId, `${today} ${forceOut}:00`));
-                }
-            }
-        }
-
-        setTimeout(() => {
-            let tCust = 0; let tOrders = 0; let tOmset = 0; let tCash = 0; let tQris = 0; let tTransfer = 0; let tFree = 0; let tExpense = 0; let tPiutangGiven = 0; let tPiutangPaidCash = 0; let foodSummary = {};
-            document.getElementById("meter-water").value = "";
-            
-            window.db.transaction(["orders", "expenses", "bayar_piutang"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-                const validOrders = e.target.result.filter(o => o.shiftId === window.currentShiftId && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending");
-                validOrders.forEach(o => {
-                    tOrders++; if(o.customerPhone && o.customerPhone !== "-") tCust++; tOmset += o.grandTotal;
-                    tCash += (o.cashAmount || 0); tQris += (o.qrisAmount || 0); tTransfer += (o.transferAmount || 0); tFree += (o.freeAmount || 0); 
-                    tPiutangGiven += (o.debtAmount || 0);
-                    if (o.items) o.items.forEach(i => { 
-                        let key = i.itemId || i.name;
-                        if(!foodSummary[key]) foodSummary[key] = { name: i.name, qty: 0, nominal: 0 }; 
-                        foodSummary[key].qty += i.qty;
-                        foodSummary[key].nominal += (i.qty * (i.price || i.originalPrice || 0)); 
-                    });
-                });
-                
-                window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (ex) => {
-                    const shiftExpenses = ex.target.result.filter(exp => exp.shiftId === window.currentShiftId && exp.status === "Active"); shiftExpenses.forEach(exp => { tExpense += (exp.amount || 0); });
-                    window.db.transaction(["bayar_piutang"], "readonly").objectStore("bayar_piutang").getAll().onsuccess = (bpRes) => {
-                        const shiftPiutangs = bpRes.target.result.filter(bp => bp.shiftId === window.currentShiftId); shiftPiutangs.forEach(bp => { tPiutangPaidCash += (bp.cashAmount || 0); });
-                        
-                        window.calculateLiveDrawer((liveDrawer) => {
-                            document.getElementById("sr-orders").innerText = tOrders; document.getElementById("sr-customers").innerText = tCust; document.getElementById("sr-omset").innerText = `Rp ${tOmset.toLocaleString('id-ID')}`;
-                            document.getElementById("sr-cash").innerText = `Rp ${tCash.toLocaleString('id-ID')}`; document.getElementById("sr-qris").innerText = `Rp ${tQris.toLocaleString('id-ID')}`; document.getElementById("sr-transfer").innerText = `Rp ${tTransfer.toLocaleString('id-ID')}`;
-                            document.getElementById("sr-free").innerText = `Rp ${tFree.toLocaleString('id-ID')}`; document.getElementById("sr-expense").innerText = `Rp ${tExpense.toLocaleString('id-ID')}`;
-                            document.getElementById("sr-piutang-given").innerText = `Rp ${tPiutangGiven.toLocaleString('id-ID')}`; document.getElementById("sr-piutang-paid").innerText = `Rp ${tPiutangPaidCash.toLocaleString('id-ID')}`;
-                            document.getElementById("sr-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`; 
-                            
-                            let itemsHtml = ""; 
-                            for (const [key, val] of Object.entries(foodSummary || {})) { 
-                                let qty = typeof val === 'object' ? val.qty : val;
-                                let name = typeof val === 'object' && val.name ? val.name : key;
-                                itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; 
-                            }
-                            let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual.</div>";
-                            
-                            document.getElementById("shift-report-modal").classList.remove("hidden");
-                            window.currentShiftData = { shiftId: window.currentShiftId, loginTime: window.currentLoginTime, totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree, totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, logoutTime: window.getWibDate() };
-
-                            let btnPrintHist = document.getElementById("btn-print-history"); 
-                            if (btnPrintHist) { 
-                                btnPrintHist.classList.remove("hidden"); 
-                                btnPrintHist.disabled = false;
-                                btnPrintHist.innerText = "🖨️ Cetak Laporan";
-                                btnPrintHist.style.background = "#2980b9";
-                                btnPrintHist.onclick = window.printShiftReport; 
-                            }
-                        });
-                    };
-                };
-            };
-        }, 300);
-    };
-}
 
 window.restorePrinterConnection = async function() {
     window.requestPosWakeLock();
@@ -2610,9 +2535,106 @@ window.submitNewMember = async function() {
     }
 };
 
+window.fallbackLocalShiftReport = function() {
+    const today = window.getWibDate().split(" ")[0];
+    window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (ev) => {
+        let pendingOuts = ev.target.result.filter(l => l.date === today && !l.clockOut && l.staffName !== window.currentCashier);
+        let currentHour = new Date(window.getWibDate().replace(' ', 'T')).getHours();
+        if (pendingOuts.length > 0) {
+            let msg = "Terdapat staff yang belum Clock-Out:\n";
+            pendingOuts.forEach(p => msg += `- ${p.staffName}\n`);
+            if (currentHour >= 20) {
+                alert(msg + "\nKarena sudah lewat jam 20:00, sistem otomatis melakukan Clock-Out untuk mereka sekarang.");
+                pendingOuts.forEach(p => window.clockOutStaff(p.logId, window.getWibDate()));
+            } else {
+                let forceOut = prompt(msg + "\nMasukkan waktu Clock-Out manual (HH:MM) atau biarkan kosong jika masih bekerja:", "");
+                if (forceOut && forceOut.includes(":")) {
+                    pendingOuts.forEach(p => window.clockOutStaff(p.logId, `${today} ${forceOut}:00`));
+                }
+            }
+        }
+
+        setTimeout(() => {
+            let tCust = 0, tOrders = 0, tOmset = 0, tCash = 0, tQris = 0, tTransfer = 0, tFree = 0, tExpense = 0, tPiutangGiven = 0, tPiutangPaidCash = 0;
+            let foodSummary = {};
+            document.getElementById("meter-water").value = "";
+
+            const isSameDayAndCashier = (recordTs, recordCashier, recordOutlet, recordShiftId) => {
+                if (recordShiftId && window.currentShiftId && recordShiftId === window.currentShiftId) return true;
+                if (recordOutlet && window.currentOutlet && recordOutlet !== window.currentOutlet) return false;
+                if (recordCashier && window.currentCashier && recordCashier !== window.currentCashier) return false;
+                let ms = window.parseSafeTimeMs ? window.parseSafeTimeMs(recordTs) : new Date(recordTs).getTime();
+                if (!ms) return false;
+                let d = new Date(ms + (new Date().getTimezoneOffset() * 60000) + (3600000 * 7));
+                let pad = n => n < 10 ? '0' + n : n;
+                let dStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+                return dStr === today;
+            };
+            
+            window.db.transaction(["orders", "expenses", "bayar_piutang"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
+                const validOrders = (e.target.result || []).filter(o => o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && isSameDayAndCashier(o.timestamp, o.cashier, o.outlet, o.shiftId));
+                validOrders.forEach(o => {
+                    tOrders++; if(o.customerPhone && o.customerPhone !== "-") tCust++; tOmset += (Number(o.grandTotal) || 0);
+                    tCash += (Number(o.cashAmount) || 0); tQris += (Number(o.qrisAmount) || 0); tTransfer += (Number(o.transferAmount) || 0); tFree += (Number(o.freeAmount) || 0); 
+                    tPiutangGiven += (Number(o.debtAmount) || 0);
+                    if (o.items && o.items.length > 0) {
+                        o.items.forEach(i => { 
+                            let key = i.name || i.itemId;
+                            if(!foodSummary[key]) foodSummary[key] = { name: i.name, qty: 0, nominal: 0 }; 
+                            foodSummary[key].qty += (Number(i.qty) || 0);
+                            foodSummary[key].nominal += ((Number(i.qty) || 0) * (Number(i.price || i.originalPrice) || 0)); 
+                        });
+                    }
+                });
+                
+                window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (ex) => {
+                    const shiftExpenses = (ex.target.result || []).filter(exp => exp.status === "Active" && isSameDayAndCashier(exp.timestamp, exp.cashier, exp.outlet, exp.shiftId));
+                    shiftExpenses.forEach(exp => { tExpense += (Number(exp.amount) || 0); });
+                    window.db.transaction(["bayar_piutang"], "readonly").objectStore("bayar_piutang").getAll().onsuccess = (bpRes) => {
+                        const shiftPiutangs = (bpRes.target.result || []).filter(bp => isSameDayAndCashier(bp.timestamp, bp.cashier, bp.outlet, bp.shiftId));
+                        shiftPiutangs.forEach(bp => {
+                            tPiutangPaidCash += (Number(bp.cashAmount) || 0);
+                            tQris += (Number(bp.qrisAmount) || 0);
+                            tTransfer += (Number(bp.transferAmount) || 0);
+                        });
+                        
+                        window.calculateLiveDrawer((liveDrawer) => {
+                            document.getElementById("sr-orders").innerText = tOrders; document.getElementById("sr-customers").innerText = tCust; document.getElementById("sr-omset").innerText = `Rp ${tOmset.toLocaleString('id-ID')}`;
+                            document.getElementById("sr-cash").innerText = `Rp ${tCash.toLocaleString('id-ID')}`; document.getElementById("sr-qris").innerText = `Rp ${tQris.toLocaleString('id-ID')}`; document.getElementById("sr-transfer").innerText = `Rp ${tTransfer.toLocaleString('id-ID')}`;
+                            document.getElementById("sr-free").innerText = `Rp ${tFree.toLocaleString('id-ID')}`; document.getElementById("sr-expense").innerText = `Rp ${tExpense.toLocaleString('id-ID')}`;
+                            document.getElementById("sr-piutang-given").innerText = `Rp ${tPiutangGiven.toLocaleString('id-ID')}`; document.getElementById("sr-piutang-paid").innerText = `Rp ${tPiutangPaidCash.toLocaleString('id-ID')}`;
+                            document.getElementById("sr-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`; 
+                            
+                            let itemsHtml = ""; 
+                            for (const [key, val] of Object.entries(foodSummary || {})) { 
+                                let qty = typeof val === 'object' ? val.qty : val;
+                                let name = typeof val === 'object' && val.name ? val.name : key;
+                                itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; 
+                            }
+                            let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual.</div>";
+                            
+                            document.getElementById("shift-report-modal").classList.remove("hidden");
+                            window.currentShiftData = { shiftId: window.currentShiftId, loginTime: window.currentLoginTime, totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree, totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, logoutTime: window.getWibDate() };
+
+                            let btnPrintHist = document.getElementById("btn-print-history"); 
+                            if (btnPrintHist) { 
+                                btnPrintHist.classList.remove("hidden"); 
+                                btnPrintHist.disabled = false;
+                                btnPrintHist.innerText = "🖨️ Cetak Laporan";
+                                btnPrintHist.style.background = "#2980b9";
+                                btnPrintHist.onclick = window.printShiftReport; 
+                            }
+                        });
+                    };
+                };
+            };
+        }, 300);
+    };
+};
+
 window.openCurrentShiftReport = async function() {
     if (!navigator.onLine) {
-        alert("⚠️ Anda sedang offline. Sistem akan menggunakan data lokal (mungkin kurang akurat jika cache pernah terhapus).");
+        alert("⚠️ Anda sedang offline. Sistem akan menggunakan data lokal.");
         return window.fallbackLocalShiftReport();
     }
 
@@ -2638,15 +2660,21 @@ window.openCurrentShiftReport = async function() {
             let meterContainer = document.getElementById("meter-water-container"); if(meterContainer) meterContainer.classList.remove("hidden");
             let btnEndShift = document.getElementById("btn-end-shift"); if(btnEndShift) btnEndShift.classList.remove("hidden");
             
+            // 🔥 Reset ALL fields cleanly before loading
             document.getElementById("meter-water").value = "";
             document.getElementById("sr-orders").innerText = "-"; 
             document.getElementById("sr-customers").innerText = "-";
             document.getElementById("sr-omset").innerText = "Rp -";
             document.getElementById("sr-cash").innerText = "Rp -";
+            document.getElementById("sr-qris").innerText = "Rp -";
+            document.getElementById("sr-transfer").innerText = "Rp -";
+            document.getElementById("sr-piutang-paid").innerText = "Rp -";
+            document.getElementById("sr-free").innerText = "Rp -";
+            document.getElementById("sr-expense").innerText = "Rp -";
+            document.getElementById("sr-piutang-given").innerText = "Rp -";
             document.getElementById("sr-net").innerText = "Rp -";
-            document.getElementById("sr-items-list").innerHTML = "<div style='padding:15px; text-align:center; color:#e67e22; font-weight:bold;'><i>⏳ Menarik data akurat langsung dari Server...</i></div>";
+            document.getElementById("sr-items-list").innerHTML = "<div style='padding:15px; text-align:center; color:#e67e22; font-weight:bold;'><i>⏳ Menyinkronkan & menarik data akurat dari Server...</i></div>";
             
-            // Tampilkan tombol cetak tapi buat abu-abu (loading)
             let btnPrintHist = document.getElementById("btn-print-history");
             if (btnPrintHist) {
                 btnPrintHist.classList.remove("hidden");
@@ -2658,42 +2686,47 @@ window.openCurrentShiftReport = async function() {
             document.getElementById("shift-report-modal").classList.remove("hidden");
             
             try {
+                // 🔥 1. Push any unsynced local orders / piutang payments to the server FIRST!
+                await window.runBackgroundSync();
+
                 let url = API_URL + `?type=shiftSummary&outlet=${encodeURIComponent(window.currentOutlet)}&cashier=${encodeURIComponent(window.currentCashier)}`;
-                let res = await fetch(url, { method: "GET" });
+                let res = await fetch(url, { method: "GET", redirect: "follow" });
                 let result = await res.json();
                 
-                if (result.status === "Success" && result.data.shiftSummary) {
+                if (result.status === "Success" && result.data && result.data.shiftSummary) {
                     let d = result.data.shiftSummary;
-                    window.currentShiftId = d.shiftId; // Force align shift ID with server
-                    window.currentLoginTime = d.loginTime;
+                    // 🔥 Keep the cashier's real active shiftId (do NOT overwrite window.currentShiftId with a temporary preview ID!)
+                    let activeShiftId = window.currentShiftId || d.shiftId;
+                    let activeLoginTime = d.loginTime || window.currentLoginTime;
                     
                     window.currentShiftData = {
-                        shiftId: d.shiftId, loginTime: d.loginTime, totalCustomers: d.totalCustomers, 
-                        totalOrders: d.totalOrders, totalOmset: d.totalOmset, totalCash: d.totalCash, 
-                        totalQris: d.totalQris, totalTransfer: d.totalTransfer, totalFree: d.totalFree, 
-                        totalExpenses: d.totalExpenses, netCash: d.netCash, foodSummary: d.foodSummary, 
-                        piutangGiven: d.piutangGiven, piutangPaid: d.piutangPaid, logoutTime: window.getWibDate()
+                        shiftId: activeShiftId, loginTime: activeLoginTime, totalCustomers: d.totalCustomers || 0, 
+                        totalOrders: d.totalOrders || 0, totalOmset: d.totalOmset || 0, totalCash: d.totalCash || 0, 
+                        totalQris: d.totalQris || 0, totalTransfer: d.totalTransfer || 0, totalFree: d.totalFree || 0, 
+                        totalExpenses: d.totalExpenses || 0, netCash: d.netCash || 0, foodSummary: d.foodSummary || {}, 
+                        piutangGiven: d.piutangGiven || 0, piutangPaid: d.piutangPaid || 0, logoutTime: window.getWibDate()
                     };
                     
-                    document.getElementById("sr-orders").innerText = d.totalOrders; 
-                    document.getElementById("sr-customers").innerText = d.totalCustomers; 
-                    document.getElementById("sr-omset").innerText = `Rp ${d.totalOmset.toLocaleString('id-ID')}`;
-                    document.getElementById("sr-cash").innerText = `Rp ${d.totalCash.toLocaleString('id-ID')}`; 
-                    document.getElementById("sr-qris").innerText = `Rp ${d.totalQris.toLocaleString('id-ID')}`; 
-                    document.getElementById("sr-transfer").innerText = `Rp ${d.totalTransfer.toLocaleString('id-ID')}`;
-                    document.getElementById("sr-free").innerText = `Rp ${d.totalFree.toLocaleString('id-ID')}`; 
-                    document.getElementById("sr-expense").innerText = `Rp ${d.totalExpenses.toLocaleString('id-ID')}`;
-                    document.getElementById("sr-piutang-given").innerText = `Rp ${d.piutangGiven.toLocaleString('id-ID')}`; 
-                    document.getElementById("sr-piutang-paid").innerText = `Rp ${d.piutangPaid.toLocaleString('id-ID')}`;
-                    document.getElementById("sr-net").innerText = `Rp ${d.netCash.toLocaleString('id-ID')}`; 
+                    document.getElementById("sr-orders").innerText = (d.totalOrders || 0); 
+                    document.getElementById("sr-customers").innerText = (d.totalCustomers || 0); 
+                    document.getElementById("sr-omset").innerText = `Rp ${(d.totalOmset || 0).toLocaleString('id-ID')}`;
+                    document.getElementById("sr-cash").innerText = `Rp ${(d.totalCash || 0).toLocaleString('id-ID')}`; 
+                    document.getElementById("sr-qris").innerText = `Rp ${(d.totalQris || 0).toLocaleString('id-ID')}`; 
+                    document.getElementById("sr-transfer").innerText = `Rp ${(d.totalTransfer || 0).toLocaleString('id-ID')}`;
+                    document.getElementById("sr-free").innerText = `Rp ${(d.totalFree || 0).toLocaleString('id-ID')}`; 
+                    document.getElementById("sr-expense").innerText = `Rp ${(d.totalExpenses || 0).toLocaleString('id-ID')}`;
+                    document.getElementById("sr-piutang-given").innerText = `Rp ${(d.piutangGiven || 0).toLocaleString('id-ID')}`; 
+                    document.getElementById("sr-piutang-paid").innerText = `Rp ${(d.piutangPaid || 0).toLocaleString('id-ID')}`;
+                    document.getElementById("sr-net").innerText = `Rp ${(d.netCash || 0).toLocaleString('id-ID')}`; 
                     
                     let itemsHtml = ""; 
                     for (const [key, val] of Object.entries(d.foodSummary || {})) { 
-                        itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${key}</span><strong>${val.qty}</strong></div>`; 
+                        let qty = typeof val === 'object' ? val.qty : val;
+                        let name = typeof val === 'object' && val.name ? val.name : key;
+                        itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; 
                     }
                     document.getElementById("sr-items-list").innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual hari ini.</div>";
                     
-                    let btnPrintHist = document.getElementById("btn-print-history"); 
                     if (btnPrintHist) { 
                         btnPrintHist.disabled = false;
                         btnPrintHist.innerText = "🖨️ Cetak Laporan";
@@ -2709,7 +2742,7 @@ window.openCurrentShiftReport = async function() {
             }
         }, 300);
     };
-}
+};
 
 window.openShiftReport = window.openCurrentShiftReport; 
 
