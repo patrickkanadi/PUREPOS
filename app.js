@@ -2678,7 +2678,7 @@ window.openCurrentShiftReport = async function() {
                 // 🔥 1. Push any unsynced local orders / piutang payments to the server FIRST!
                 await window.runBackgroundSync();
 
-                let url = API_URL + `?type=shiftSummary&outlet=${encodeURIComponent(window.currentOutlet)}&cashier=${encodeURIComponent(window.currentCashier)}`;
+                let url = API_URL + `?type=shiftSummary&outlet=${encodeURIComponent(window.currentOutlet)}&cashier=${encodeURIComponent(window.currentCashier)}&loginTime=${encodeURIComponent(window.currentLoginTime || "")}&shiftId=${encodeURIComponent(window.currentShiftId || "")}`;
                 let res = await fetch(url, { method: "GET", redirect: "follow" });
                 let result = await res.json();
                 
