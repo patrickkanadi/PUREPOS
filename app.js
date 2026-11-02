@@ -2073,7 +2073,7 @@ window.renderHistoryList = function(type) {
             shiftOrders.forEach(o => {
                 let badge = o.orderStatus === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : o.orderStatus === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">${o.orderStatus}</span>`; 
                 let piutangBadge = (o.debtAmount || 0) > 0 ? `<br><span style="font-size:12px; color:#c0392b; font-weight:bold;">⚠️ Piutang: Rp ${(o.debtAmount).toLocaleString('id-ID')}</span>` : '';
-                let btnVoid = (o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending") ? `<button onclick="window.requestVoid('orders', '${o.orderId}')" style="background:#e74c3c; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">Batal</button>` : '';
+                let btnVoid = o.orderStatus === "Voided" ? '' : `<button onclick="window.requestVoid('orders', '${o.orderId}')" style="background:${o.orderStatus === 'Void Pending' ? '#8e44ad' : '#e74c3c'}; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">${o.orderStatus === 'Void Pending' ? '🔑 PIN Admin' : 'Batal'}</button>`;
                 let btnPrint = `<button onclick="window.reprintOrder('${o.orderId}')" style="background:#2980b9; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">🖨️ Cetak</button>`;
                 let btnDetail = `<button onclick="window.showOrderDetail('${o.orderId}')" style="background:#f39c12; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">👁️ Detail</button>`;
                 
@@ -2095,7 +2095,7 @@ window.renderHistoryList = function(type) {
             
             shiftExpenses.forEach(exp => {
                 let badge = exp.status === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : exp.status === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">Aktif</span>`;
-                let btn = (exp.status !== "Voided" && exp.status !== "Void Pending") ? `<button onclick="window.requestVoid('expenses', '${exp.expenseId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Batal/Void</button>` : '';
+                let btn = exp.status === "Voided" ? '' : `<button onclick="window.requestVoid('expenses', '${exp.expenseId}')" style="background:${exp.status === 'Void Pending' ? '#8e44ad' : '#e74c3c'}; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">${exp.status === 'Void Pending' ? '🔑 PIN Admin' : 'Batal/Void'}</button>`;
                 container.innerHTML += `<div class="history-row"><div><strong>${exp.category}</strong><br><small style="color:#7f8c8d;">${window.formatDateReadable(exp.timestamp)} | Rp ${(exp.amount || 0).toLocaleString('id-ID')}</small><br><small>${exp.description}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div>`;
             });
         };
