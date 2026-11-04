@@ -497,12 +497,13 @@ window.syncCriticalData = async function() {
                 });
                 
                 // Keep unsynced local members alive so they are never wiped out!
-                unsyncedList.forEach(um => {
-                    if (!mergedMap.has(um.phone)) {
-                        mergedMap.set(um.phone, um);
-                        memT.put(um);
-                    }
-                });
+                // 🔄 Ganti menjadi:
+                    unsyncedList.forEach(um => {
+                        let srv = mergedMap.get(um.phone) || {};
+                        let merged = { ...srv, ...um }; // Data lokal menimpa data server yang belum sinkron
+                        mergedMap.set(um.phone, merged);
+                        memT.put(merged);
+                    });
                 window.globalMembersCache = Array.from(mergedMap.values());
             }
         }
@@ -532,10 +533,12 @@ window.syncBackgroundData = async function() {
                         if (!existing) {
                             ordStore.put(o);
                         } else {
+                            // 🔄 Ganti bagian pemeriksaan di syncBackgroundData menjadi:
                             let isLocalUnsynced = (existing.syncStatus === "Pending" || existing.syncStatus === "Syncing");
-                            // 🔥 JANGAN PERNAH menimpa pesanan yang di tablet sudah "Terkirim" kembali menjadi "Pending"
                             let isAlreadyDeliveredLocally = existing && String(existing.deliveryStatus || "").startsWith("Terkirim");
-                            if (!isLocalUnsynced && !isAlreadyDeliveredLocally) {
+                            let isDebtReducedLocally = (existing.debtAmount !== undefined && o.debtAmount !== undefined && existing.debtAmount < o.debtAmount);
+                            
+                            if (!isLocalUnsynced && !isAlreadyDeliveredLocally && !isDebtReducedLocally) {
                                 ordStore.put(o);
                             }
                         }
@@ -1768,43 +1771,7 @@ window.finalizeOrder = async function(shouldPrint) {
             window.activeCustomerProfile.rentalBreakdown.push({ logId: localRentLogId, orderId: currentOrderId, sisa: rentBottleQty, date: window.getWibDate(), outlet: window.currentOutlet });
         }
 
-        // 🔄 UBAH INI: Pastikan custAddress ikut tersimpan!
-        window.saveMemberToDB(
-            window.activeCustomerProfile.phone, 
-            window.activeCustomerProfile.name, 
-            updatedWallet, 
-            window.activeCustomerProfile.bottlesBorrowed + rentBottleQty, 
-            newPiutang, 
-            window.activeCustomerProfile.firstOutlet, 
-            window.activeCustomerProfile.recentOutlets,
-            custAddress // 🔥 Tambahkan custAddress di sini!
-        );
-    } else if (custPhone !== "-") {
-        let fOut = window.activeCustomerProfile ? window.activeCustomerProfile.firstOutlet : window.currentOutlet; 
-        let rOut = window.activeCustomerProfile ? window.activeCustomerProfile.recentOutlets : window.currentOutlet;
         
-        window.saveMemberToDB(
-            custPhone, 
-            custName, 
-            {}, 
-            rentBottleQty, 
-            debtAmount, 
-            fOut, 
-            rOut,
-            custAddress // 🔥 Tambahkan custAddress di sini!
-        );
-    }
-        
-        if (localRentLogId && window.activeCustomerProfile) {
-            if (!window.activeCustomerProfile.rentalBreakdown) window.activeCustomerProfile.rentalBreakdown = [];
-            // 🔥 Use currentOrderId instead of "ORD-" + Date.now()
-            window.activeCustomerProfile.rentalBreakdown.push({ logId: localRentLogId, orderId: currentOrderId, sisa: rentBottleQty, date: window.getWibDate(), outlet: window.currentOutlet });
-        }
-
-        window.saveMemberToDB(custPhone, custName, {}, rentBottleQty, debtAmount, fOut, rOut);
-    }
-
-    let isDelivery = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
     let finalStatus = isDelivery ? "Proses Kirim" : "Completed";
 
     const orderPayload = {
