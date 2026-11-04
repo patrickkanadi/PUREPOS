@@ -16,6 +16,7 @@ window.currentCashier = ""; window.currentPin = ""; window.currentShiftId = ""; 
 window.globalMenuData = []; window.globalMembersCache = []; window.currentCategory = "";
 window.outletStocks = {}; window.isLoggingOut = false; window.currentVoidTarget = { type: null, id: null };
 window.isMenuLocked = true; window.isSyncing = false; window.loyaltyEnabled = false; 
+window.historyHours = 24; // 🔥 Default 24 jam jika belum diatur di Settings
 
 // Advanced Promos (From Laundry POS)
 window.promoRules = {};
@@ -456,6 +457,7 @@ window.syncCriticalData = async function() {
                     }
                 }
                 window.loyaltyEnabled = String(result.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
+                window.historyHours = Number(result.data.settings["History_Hours"] || result.data.settings["Riwayat_Hours"]) || 24;
                 
                 const rawOutlets = result.data.settings["Outlet_List"] || "Pusat"; 
                 const outletArray = rawOutlets.split(",").map(s => s.trim()); 
@@ -2128,15 +2130,18 @@ window.openHistoryModal = async function() {
     }
 };
 
-window.isTodayWib = function(rawTs) {
+window.isWithinHistoryHours = function(rawTs) {
     let ms = window.parseSafeTimeMs(rawTs);
     if (!ms) return false;
-    let todayWib = window.getWibDate().split(" ")[0]; // YYYY-MM-DD
-    let d = new Date(ms + (new Date().getTimezoneOffset() * 60000) + (3600000 * 7));
-    let pad = n => n < 10 ? '0' + n : n;
-    let rowDateWib = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-    return rowDateWib === todayWib;
+    let maxHours = Number(window.historyHours) || 24;
+    let maxDiffMs = maxHours * 60 * 60 * 1000;
+    let diff = Date.now() - ms;
+    // Toleransi jam maju 10 menit (-600000ms) dan batas maksimal ke belakang sesuai setting
+    return diff >= -600000 && diff <= maxDiffMs;
 };
+
+// Pertahankan fungsi isTodayWib untuk kompatibilitas
+window.isTodayWib = window.isWithinHistoryHours;
 
 window.currentHistoryTab = 'orders';
 
@@ -2153,16 +2158,17 @@ window.renderHistoryList = function(type) {
     window.currentHistoryTab = type;
     const container = document.getElementById("history-container");
     container.innerHTML = "";
+    const activeHours = Number(window.historyHours) || 24;
 
     if (type === 'orders') {
         window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-            // 🔥 HANYA TAMPILKAN RIWAYAT HARI INI (Anti-Ngelag & Akurat)
+            // 🔥 TAMPILKAN SESUAI BATAS JAM DARI SETTINGS (Default 24 Jam)
             const shiftOrders = (e.target.result || [])
-                .filter(o => (!window.currentOutlet || o.outlet === window.currentOutlet) && (window.isTodayWib(o.timestamp) || o.orderStatus === "Void Pending"))
+                .filter(o => (!window.currentOutlet || o.outlet === window.currentOutlet) && (window.isWithinHistoryHours(o.timestamp) || o.orderStatus === "Void Pending"))
                 .sort((a, b) => window.parseSafeTimeMs(b.timestamp) - window.parseSafeTimeMs(a.timestamp));
             
             if (shiftOrders.length === 0) {
-                container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Belum ada transaksi hari ini di cabang ${window.currentOutlet}.</div>`;
+                container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Belum ada transaksi dalam ${activeHours} jam terakhir di cabang ${window.currentOutlet}.<br><small>(Gunakan tombol <b>🔍 Riwayat</b> di pojok atas untuk mencari transaksi lama)</small></div>`;
                 return;
             }
             
@@ -2180,11 +2186,11 @@ window.renderHistoryList = function(type) {
     } else if (type === 'expenses') {
         window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (e) => {
             const shiftExpenses = (e.target.result || [])
-                .filter(exp => (!window.currentOutlet || exp.outlet === window.currentOutlet) && (window.isTodayWib(exp.timestamp) || exp.status === "Void Pending"))
+                .filter(exp => (!window.currentOutlet || exp.outlet === window.currentOutlet) && (window.isWithinHistoryHours(exp.timestamp) || exp.status === "Void Pending"))
                 .sort((a, b) => window.parseSafeTimeMs(b.timestamp) - window.parseSafeTimeMs(a.timestamp));
             
             if (shiftExpenses.length === 0) {
-                container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Belum ada pengeluaran hari ini di cabang ${window.currentOutlet}.</div>`;
+                container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Belum ada pengeluaran dalam ${activeHours} jam terakhir di cabang ${window.currentOutlet}.</div>`;
                 return;
             }
             
@@ -4053,12 +4059,15 @@ window.onload = async () => {
     await window.restorePrinterConnection();
     
     const settings = await window.getDynamicSettings();
-    if (settings["Outlet_List"]) {
-        const outletArray = String(settings["Outlet_List"]).split(",").map(s => s.trim()); 
-        if (selectBox) { 
-            selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); 
+    if (settings) {
+        if (settings["Outlet_List"]) {
+            const outletArray = String(settings["Outlet_List"]).split(",").map(s => s.trim()); 
+            if (selectBox) { 
+                selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); 
+            }
         }
         window.loyaltyEnabled = String(settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
+        window.historyHours = Number(settings["History_Hours"] || settings["Riwayat_Hours"]) || 24;
     }
 
     await window.checkAutoCloseShifts(); 
