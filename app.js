@@ -1418,16 +1418,20 @@ window.renderPiutangList = async function() {
     if (filter) members = members.filter(m => String(m.name).toLowerCase().includes(filter) || String(m.phone).includes(filter));
     if (members.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Tidak ada data piutang ditemukan.</div>`; return; }
     
-    container.innerHTML = members.map(m => `
+    container.innerHTML = members.map(m => {
+        let dispPhone = String(m.phone || "").startsWith("TANPA-WA") ? "Tanpa WA" : String(m.phone || "").replace(/-DUP\d+$/, "");
+        let safePhoneKey = String(m.phone || "").replace(/'/g, "\\'");
+        return `
         <div style="border:1px solid #bdc3c7; border-left:5px solid #d35400; padding:15px; border-radius:6px; background:#fdf2e9; display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
             <div>
-                <strong style="color:#2c3e50; font-size:16px;">${m.name}</strong> <span style="font-size:14px; color:#7f8c8d;">(${m.phone})</span><br>
+                <strong style="color:#2c3e50; font-size:16px;">${m.name}</strong> <span style="font-size:14px; color:#7f8c8d;">(${dispPhone})</span><br>
                 💰 <strong style="color:#c0392b; font-size:18px;">Rp ${m._tempBranchPiutang.toLocaleString('id-ID')}</strong>
             </div>
             <div>
-                <button onclick="window.triggerBayarPiutang('${m.phone}')" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Lunasi Piutang</button>
+                <button onclick="window.triggerBayarPiutang('${safePhoneKey}')" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Lunasi Piutang</button>
             </div>
-        </div>`).join("");
+        </div>`;
+    }).join("");
 };
 
 window.triggerBayarPiutang = function(phone, linkedOrderId = null) {
