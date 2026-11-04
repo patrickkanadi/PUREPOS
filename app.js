@@ -729,11 +729,13 @@ window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localP
     let lockedQueue = window.isCustomerLocked(phone);
     if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan pesanan di sana terlebih dahulu.`); }
 
-    document.getElementById("cust-phone").value = phone; 
+    // Jika member tanpa WA, kolom input dibiarkan kosong agar kasir tidak bingung
+    document.getElementById("cust-phone").value = String(phone).startsWith("TANPA-WA") ? "" : phone; 
     document.getElementById("cust-name").value = name; 
-    document.getElementById("cust-address").value = address || ""; 
+    document.getElementById("cust-address").value = (address && address !== "-") ? address : ""; 
     
     let wallet = {}; try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
+    // Simpan phone ID asli (termasuk TANPA-WA-xx) agar riwayat & poin tersimpan utuh
     window.activeCustomerProfile = { phone: phone, name: name, address: address, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed, piutang: localPiutang, firstOutlet: firstOutlet, recentOutlets: recentOutlets, lastPurchase: lastPurchase, avgRO: avgRO, avgStd: avgStd, frequency: frequency };
     window.updatePromoBanner(window.activeCustomerProfile);
 };
@@ -790,8 +792,9 @@ window.handleAutocomplete = function(e) {
                 let nameStr = String(m.name || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let fOut = String(m.firstOutlet || "").replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
                 let rOutStr = String(m.recentOutlets || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                let rawPhoneDisplay = String(m.phone || "").startsWith("TANPA-WA") ? "-" : String(m.phone || "").replace(/-DUP\d+$/, "");
-                let safePhone = rawPhoneDisplay.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                let rawPhoneDisplay = String(m.phone || "").startsWith("TANPA-WA") ? "Tanpa WA" : String(m.phone || "").replace(/-DUP\d+$/, "");
+                // Kirim ID asli m.phone agar tidak hilang saat dipilih
+                let safePhoneKey = String(m.phone || "-").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let safeAddress = String(m.address || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 
                 let localPiutang = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : (m.piutang || 0);
@@ -801,7 +804,7 @@ window.handleAutocomplete = function(e) {
                     ? `<span style="color:#d35400; font-weight:bold;">🏠 ${m.address}</span>`
                     : `<span style="color:#95a5a6; font-style:italic;">🏠 Alamat belum diisi</span>`;
 
-                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')" style="padding:10px 14px; border-bottom:1px solid #f0f3f4; cursor:pointer;">
+                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhoneKey}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')" style="padding:10px 14px; border-bottom:1px solid #f0f3f4; cursor:pointer;">
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
                         <div class="autocomplete-name" style="font-size:14.5px; font-weight:bold; color:#2c3e50;">
                             👤 ${m.name} 
@@ -984,8 +987,10 @@ window.reviewOrder = function() {
     // --- NEW: SMART INTERCEPT FOR DELIVERY INFO ---
     let isDelivery = window.currentCart.some(i => i.name.toLowerCase().includes("ongkos kirim") || (i.category && i.category.toLowerCase().includes("ongkos kirim")));
     if (isDelivery) {
-        let custPhoneRaw = document.getElementById("cust-phone") ? document.getElementById("cust-phone").value.trim() : "";
-        let custNameRaw = document.getElementById("cust-name") ? document.getElementById("cust-name").value.trim() : "";
+        let custPhoneRaw = document.getElementById("cust-phone").value.trim(); 
+        // Jika member tanpa WA dipilih dari database, pertahankan ID uniknya agar riwayat belanja tersimpan
+        let custPhone = (window.activeCustomerProfile && window.activeCustomerProfile.phone) ? window.activeCustomerProfile.phone : (custPhoneRaw || "-");
+        const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
         let custAddressRaw = document.getElementById("cust-address") ? document.getElementById("cust-address").value.trim() : "";
         
         if (!custNameRaw || custNameRaw.toLowerCase() === "walk-in" || custPhoneRaw.length < 5 || custPhoneRaw === "-" || !custAddressRaw || custAddressRaw === "-") {
@@ -2141,14 +2146,13 @@ window.renderHistoryList = function(type) {
 
     if (type === 'orders') {
         window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-            // 🔥 HANYA TAMPILKAN RIWAYAT HARI INI (Sesuai permintaan BB & K4 agar cepat & tidak ngelag)
-            // Kecuali transaksi lama yang statusnya masih 'Void Pending' agar tetap bisa dipantau
+            // 🔥 HANYA TAMPILKAN RIWAYAT HARI INI (Anti-Ngelag & Akurat)
             const shiftOrders = (e.target.result || [])
                 .filter(o => (!window.currentOutlet || o.outlet === window.currentOutlet) && (window.isTodayWib(o.timestamp) || o.orderStatus === "Void Pending"))
                 .sort((a, b) => window.parseSafeTimeMs(b.timestamp) - window.parseSafeTimeMs(a.timestamp));
             
             if (shiftOrders.length === 0) {
-                container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Belum ada transaksi hari ini di cabang ${window.currentOutlet}.<br><small>(Gunakan tombol <b>🔍 Riwayat</b> di pojok atas untuk mencari arsip hari sebelumnya)</small></div>`;
+                container.innerHTML = `<div style="padding:20px; text-align:center; color:#7f8c8d;">Belum ada transaksi hari ini di cabang ${window.currentOutlet}.</div>`;
                 return;
             }
             
@@ -2165,7 +2169,6 @@ window.renderHistoryList = function(type) {
         };
     } else if (type === 'expenses') {
         window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (e) => {
-            // 🔥 HANYA TAMPILKAN PENGELUARAN HARI INI
             const shiftExpenses = (e.target.result || [])
                 .filter(exp => (!window.currentOutlet || exp.outlet === window.currentOutlet) && (window.isTodayWib(exp.timestamp) || exp.status === "Void Pending"))
                 .sort((a, b) => window.parseSafeTimeMs(b.timestamp) - window.parseSafeTimeMs(a.timestamp));
@@ -2536,14 +2539,17 @@ window.submitNewMember = async function() {
     let name = document.getElementById("new-mem-name").value.trim() || "Tanpa Nama";
     let address = document.getElementById("new-mem-address").value.trim();
 
-    if (!phone) return alert("⚠️ Nomor WA wajib diisi!");
-    
-    // 🔥 Standardized to 08xxx so it matches syncCriticalData & unlockMenu
-    let formatPhone = phone.replace(/\D/g, '');
-    if (formatPhone.startsWith("62")) formatPhone = "0" + formatPhone.substring(2);
-    if (formatPhone.length > 0 && !formatPhone.startsWith("0")) formatPhone = "0" + formatPhone;
-
-    if (formatPhone.length < 8) return alert("⚠️ Nomor WA tidak valid!");
+    let formatPhone = "";
+    if (!phone) {
+        let confirmNoWa = confirm(`Nomor WhatsApp kosong.\n\nApakah Anda ingin mendaftarkan "${name}" sebagai Member Tanpa WA?`);
+        if (!confirmNoWa) return;
+        formatPhone = "TANPA-WA-" + Date.now().toString().slice(-6);
+    } else {
+        formatPhone = phone.replace(/\D/g, '');
+        if (formatPhone.startsWith("62")) formatPhone = "0" + formatPhone.substring(2);
+        if (formatPhone.length > 0 && !formatPhone.startsWith("0")) formatPhone = "0" + formatPhone;
+        if (formatPhone.length < 8) return alert("⚠️ Nomor WA tidak valid (minimal 8 angka)!");
+    }
 
     let btn = document.querySelector("#add-member-modal button:nth-child(2)");
     let originalText = btn ? btn.innerText : "Simpan Member";
