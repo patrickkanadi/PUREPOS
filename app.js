@@ -233,19 +233,8 @@ window.setPrinterButtonState = function(state) {
 
 // 2. Collision-free Keep-Alive Heartbeat (every 18s) so printer never enters deep sleep
 window.startPrinterKeepAlive = function() {
+    // Dimatikan demi stabilitas Android Bluetooth stack
     if (window.printerKeepAliveTimer) clearInterval(window.printerKeepAliveTimer);
-    window.printerKeepAliveTimer = setInterval(async () => {
-        if (window.isPrintingNow || window.isGattBusy || window.isFinalizingOrder) return;
-        if (window.printDevice && window.printDevice.gatt && window.printDevice.gatt.connected && window.printerCharacteristic) {
-            window.isGattBusy = true;
-            try {
-                await window.printerCharacteristic.writeValue(new Uint8Array([0x00]));
-            } catch (e) {
-            } finally {
-                window.isGattBusy = false;
-            }
-        }
-    }, 18000);
 };
 
 window.attachPrinterListener = function(device) {
@@ -295,8 +284,15 @@ window.connectBluetoothPrinter = async function(silentAlert = false) {
         window.setPrinterButtonState("connecting");
 
         const device = await navigator.bluetooth.requestDevice({
-            filters: [{ services: [0x18F0] }],
-            optionalServices: [0x18F0]
+            acceptAllDevices: true,
+            optionalServices: [
+                0x18F0,
+                0xE781,
+                '000018f0-0000-1000-8000-00805f9b34fb',
+                '0000ffe0-0000-1000-8000-00805f9b34fb',
+                '49535343-fe7d-4ae5-8fa9-9fafd205e455',
+                'e7810a71-73ae-499d-8c15-faa9aef0c3f2'
+            ]
         });
 
         window.printDevice = device;
@@ -309,13 +305,9 @@ window.connectBluetoothPrinter = async function(silentAlert = false) {
         return true;
     } catch (error) {
         console.error("Printer Connect Error:", error);
-        if (window.printDevice && window.printDevice.gatt && window.printDevice.gatt.connected && window.printerCharacteristic) {
-            window.setPrinterButtonState("ready");
-            return true;
-        }
         window.setPrinterButtonState(window.printDevice ? "standby" : "default");
-        if (error && error.name !== "NotFoundError") {
-            alert("Gagal koneksi printer: " + error.message);
+        if (error && error.name !== "NotFoundError" && !silentAlert) {
+            alert("Koneksi printer dibatalkan atau belum siap.");
         }
         return false;
     }
@@ -522,7 +514,8 @@ window.syncBackgroundData = async function() {
                             ordStore.put(o);
                         } else {
                             let isLocalUnsynced = (existing.syncStatus === "Pending" || existing.syncStatus === "Syncing");
-                            let isAlreadyDeliveredLocally = (String(existing.deliveryStatus || "").startsWith("Terkirim") && o.deliveryStatus === "Pending");
+                            // 🔥 JANGAN PERNAH menimpa pesanan yang di tablet sudah "Terkirim" kembali menjadi "Pending"
+                            let isAlreadyDeliveredLocally = existing && String(existing.deliveryStatus || "").startsWith("Terkirim");
                             if (!isLocalUnsynced && !isAlreadyDeliveredLocally) {
                                 ordStore.put(o);
                             }
@@ -589,6 +582,18 @@ window.syncMasterData = async function() {
     }
 }
 
+window.resetAllPosSessions = function() {
+    window.posSessions = [{ cart: [], customer: null }, { cart: [], customer: null }, { cart: [], customer: null }];
+    window.activeSessionIndex = 0;
+    window.currentCart = window.posSessions[0].cart;
+    window.activeCustomerProfile = null;
+    window.lockMenu();
+    for (let i = 0; i < 3; i++) {
+        let btn = document.getElementById(`tab-btn-${i}`);
+        if (btn) btn.innerHTML = `🛒 Antrean ${i+1}`;
+    }
+};
+
 window.attemptLogin = async function() {
     const pinInput = document.getElementById("cashier-pin").value.trim();
     if (!pinInput) return alert("Masukkan PIN!");
@@ -614,6 +619,7 @@ window.attemptLogin = async function() {
             window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staff.pin).onsuccess = async (shiftReq) => {
                 const activeShift = shiftReq.target.result;
                 window.currentCashier = staff.name; window.currentPin = staff.pin; 
+                window.resetAllPosSessions(); // 🔥 Bersihkan sisa keranjang kasir sebelumnya!
                 
                 const dropdownSelection = document.getElementById("login-outlet").value;
                 const fallbackOutlet = document.getElementById("login-outlet").options.length > 1 ? document.getElementById("login-outlet").options[1].value : "Pusat";
@@ -717,12 +723,9 @@ window.handleAutocomplete = function(e) {
     clearTimeout(posAutocompleteTimer);
     posAutocompleteTimer = setTimeout(async () => {
         const val = String(rawVal || "").toLowerCase().trim();
-        const digitsOnly = val.replace(/\D/g, '').replace(/^(62|0)/, ''); // Smart phone core: "0812", "62812", "812" -> "812"
-        const rawDigits = val.replace(/\D/g, '');
         const resBox = document.getElementById("autocomplete-results");
         if (!resBox) return;
 
-        // Ensure RAM cache is loaded
         if (!window.globalMembersCache || window.globalMembersCache.length === 0) {
             await window.loadMembersFromCache();
         }
@@ -730,29 +733,46 @@ window.handleAutocomplete = function(e) {
         let matches = [];
 
         if (val.length === 0) {
-            matches = members.slice().sort((a, b) => (b.spent || 0) - (a.spent || 0)).slice(0, 20);
+            // Tampilkan 25 pelanggan teratas cabang ini terlebih dahulu
+            matches = members.slice().sort((a, b) => {
+                let aHere = (a.firstOutlet === window.currentOutlet || (a.recentOutlets || "").includes(window.currentOutlet)) ? 1 : 0;
+                let bHere = (b.firstOutlet === window.currentOutlet || (b.recentOutlets || "").includes(window.currentOutlet)) ? 1 : 0;
+                if (aHere !== bHere) return bHere - aHere;
+                return (b.spent || 0) - (a.spent || 0);
+            }).slice(0, 25);
         } else {
+            // 🔥 MULTI-TOKEN SEARCH: Bisa cari Nama + Alamat/Jalan sekaligus (contoh: "budi mawar" atau "agus blok b")
+            const tokens = val.split(/\s+/).filter(Boolean);
+            const digitsOnly = val.replace(/\D/g, '').replace(/^(62|0)/, '');
+
             matches = members.filter(m => {
                 let mName = String(m.name || "").toLowerCase();
-                let mPhoneRaw = String(m.phone || "").toLowerCase();
-                let mPhoneCore = mPhoneRaw.replace(/\D/g, '').replace(/^(62|0)/, '');
+                let mPhone = String(m.phone || "").toLowerCase();
+                let mAddress = String(m.address || "").toLowerCase();
+                let mPhoneCore = mPhone.replace(/\D/g, '').replace(/^(62|0)/, '');
 
-                let nameHit = mName.includes(val);
-                let phoneHit = (rawDigits.length > 0 && mPhoneRaw.includes(rawDigits)) || (digitsOnly.length > 0 && mPhoneCore.includes(digitsOnly));
-                return nameHit || phoneHit;
+                // Cek nomor telepon langsung
+                if (digitsOnly.length >= 3 && mPhoneCore.includes(digitsOnly)) return true;
+
+                // Cek apakah SEMUA kata kunci cocok pada kombinasi Nama + Alamat
+                return tokens.every(t => mName.includes(t) || mAddress.includes(t) || mPhone.includes(t));
             });
 
-            // Sort: Exact/StartsWith name or phone matches first so duplicate names group together cleanly!
+            // Urutkan: Cabang aktif kasir SELALU di atas, lalu kecocokan nama terdekat
             matches.sort((a, b) => {
+                let aHere = (a.firstOutlet === window.currentOutlet || (a.recentOutlets || "").includes(window.currentOutlet)) ? 1 : 0;
+                let bHere = (b.firstOutlet === window.currentOutlet || (b.recentOutlets || "").includes(window.currentOutlet)) ? 1 : 0;
+                if (aHere !== bHere) return bHere - aHere;
+
                 let aName = String(a.name || "").toLowerCase();
                 let bName = String(b.name || "").toLowerCase();
                 let aStarts = aName.startsWith(val) ? 1 : 0;
                 let bStarts = bName.startsWith(val) ? 1 : 0;
                 if (aStarts !== bStarts) return bStarts - aStarts;
-                if (aName === bName) return String(a.phone).localeCompare(String(b.phone));
+
                 return (b.spent || 0) - (a.spent || 0);
             });
-            matches = matches.slice(0, 40); // Show up to 40 so all duplicate names with different WA numbers appear
+            matches = matches.slice(0, 40);
         }
 
         if (matches.length > 0) {
@@ -761,28 +781,40 @@ window.handleAutocomplete = function(e) {
                 let nameStr = String(m.name || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let fOut = String(m.firstOutlet || "").replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
                 let rOutStr = String(m.recentOutlets || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                let rOutList = rOutStr ? rOutStr.split(",").map(s => s.trim()) : [];
-                let lOut = rOutList.length > 0 ? rOutList[rOutList.length - 1] : "-";
                 let rawPhoneDisplay = String(m.phone || "").startsWith("TANPA-WA") ? "-" : String(m.phone || "").replace(/-DUP\d+$/, "");
                 let safePhone = rawPhoneDisplay.replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let safeAddress = String(m.address || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 
+                let isHere = (m.firstOutlet === window.currentOutlet || (m.recentOutlets || "").includes(window.currentOutlet));
+                let branchBadge = isHere 
+                    ? `<span style="font-size:11px; background:#d4efdf; color:#1e8449; border:1px solid #27ae60; padding:2px 7px; border-radius:10px; font-weight:bold;">⭐ Cabang Ini</span>`
+                    : `<span style="font-size:11px; background:#ebf5fb; color:#2980b9; padding:2px 6px; border-radius:10px;">Cabang Lain (${fOut || "-"})</span>`;
+
                 let localPiutang = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : (m.piutang || 0);
-                
-                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')">
+                let piutangBadge = localPiutang > 0 ? `<span style="font-size:11px; background:#fadbd8; color:#922b21; padding:2px 6px; border-radius:10px; font-weight:bold; margin-left:6px;">Hutang: Rp ${localPiutang.toLocaleString('id-ID')}</span>` : '';
+
+                let addressDisplay = (m.address && m.address !== "-")
+                    ? `<span style="color:#d35400; font-weight:bold;">🏠 ${m.address}</span>`
+                    : `<span style="color:#95a5a6; font-style:italic;">🏠 Alamat belum diisi</span>`;
+
+                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')" style="padding:10px 12px; border-bottom:1px solid #f0f3f4; cursor:pointer;">
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
-                        <div class="autocomplete-name">👤 ${m.name} <span style="font-size:13px; background:#e8f8f5; color:#117a65; border:1px solid #16a085; padding:2px 8px; border-radius:12px; margin-left:6px; font-weight:bold;">📱 ${rawPhoneDisplay}</span></div>
-                        <div style="font-size:11px; background:#ecf0f1; color:#2c3e50; padding:2px 6px; border-radius:4px;">📍 Awal: ${fOut !== "Unknown" && fOut !== "" ? fOut : "-"} | Akhir: ${lOut}</div>
+                        <div class="autocomplete-name" style="font-size:14.5px; font-weight:bold; color:#2c3e50;">
+                            👤 ${m.name} 
+                            <span style="font-size:12.5px; background:#e8f8f5; color:#117a65; border:1px solid #16a085; padding:1px 7px; border-radius:10px; margin-left:6px;">📱 ${rawPhoneDisplay}</span>
+                            ${piutangBadge}
+                        </div>
+                        <div>${branchBadge}</div>
                     </div>
-                    <div style="font-size:12px; color:#7f8c8d; margin-top:4px;">🏠 ${m.address && m.address !== "-" ? m.address : "Alamat belum diisi"}</div>
+                    <div style="font-size:12.5px; margin-top:4px;">${addressDisplay}</div>
                 </div>`;
             }).join("");
             resBox.classList.remove("hidden");
         } else { 
-            resBox.innerHTML = `<div style="padding:15px; color:#7f8c8d; text-align:center; font-style:italic;">Tidak ada member ditemukan untuk "${rawVal}"</div>`;
+            resBox.innerHTML = `<div style="padding:15px; color:#7f8c8d; text-align:center; font-style:italic;">Tidak ada pelanggan ditemukan untuk "${rawVal}". Klik "Tambah Member" jika pelanggan baru.</div>`;
             resBox.classList.remove("hidden"); 
         }
-    }, 80);
+    }, 70);
 };
 
 window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rOut) {
@@ -3305,7 +3337,10 @@ window.markDeliveryDone = async function(orderId) {
             if (m) {
                 // 🔥 THE FIX: Prevent silent crash! Force piutang amount to be AT LEAST the order's debt, 
                 // in case the background sync temporarily overwrote it with '0'.
-                m.piutang = Math.max((m.piutang || 0), order.debtAmount);
+                // Jangan paksa naikkan piutang jika order sebenarnya sudah lunas
+                if ((order.debtAmount || 0) > 0) {
+                    m.piutang = Math.max((m.piutang || 0), order.debtAmount);
+                }    
                 window.openPiutangModal(m, orderId);
             } else {
                 window.openPiutangModal(fallbackMember, orderId);
@@ -3553,17 +3588,13 @@ window.saveEditedCustomer = function() {
         return alert("⚠️ Format WhatsApp Salah:\nKolom WhatsApp harus diisi dengan nomor telepon yang valid (angka saja).");
     }
 
-    // 🔥 Allow all symbols (/, (), ", #, etc.) in customer names
-
     if (phone.startsWith('62')) phone = '0' + phone.substring(2);
     if (!name || name.toLowerCase() === "walk-in") name = "Walk-in";
     
-    // 1. Update Hidden Form Inputs
     document.getElementById("cust-phone").value = phone;
     document.getElementById("cust-name").value = name;
     if(document.getElementById("cust-address")) document.getElementById("cust-address").value = address;
     
-    // 2. Safely Update Profile & Session state
     if (!window.activeCustomerProfile) {
         window.activeCustomerProfile = { phone: phone, name: name, address: address, wallet: {}, bottlesBorrowed: 0, piutang: 0, firstOutlet: window.currentOutlet, recentOutlets: window.currentOutlet };
     } else {
@@ -3573,16 +3604,27 @@ window.saveEditedCustomer = function() {
     }
     window.posSessions[window.activeSessionIndex].customer = window.activeCustomerProfile;
     
-    // 3. Refresh Active Banner UI
     document.getElementById("active-cust-name").innerText = name; 
     document.getElementById("active-cust-phone").innerText = phone && phone !== "-" ? `(${phone})` : "";
     document.getElementById("edit-customer-modal").classList.add("hidden");
+
+    // 🔥 SIMPAN KE DATABASE & SINKRONKAN KE GOOGLE SHEETS
+    if (phone && phone !== "-") {
+        window.saveMemberToDB(phone, name, window.activeCustomerProfile.wallet, window.activeCustomerProfile.bottlesBorrowed, window.activeCustomerProfile.piutang, window.activeCustomerProfile.firstOutlet, window.activeCustomerProfile.recentOutlets);
+        if (navigator.onLine) {
+            fetch(API_URL, {
+                method: "POST",
+                redirect: "follow",
+                headers: { "Content-Type": "text/plain;charset=utf-8" },
+                body: JSON.stringify({ action: "syncMember", data: { phone: phone, name: name, address: address, outlet: window.currentOutlet } })
+            }).catch(() => {});
+        }
+    }
     
-    // 4. Resume Checkout if Intercepted!
     if (window.isCheckoutIntercept) {
         window.reviewOrder();
     }
-}
+};
 
 window.autoResumeSession = async function() {
     const savedPin = localStorage.getItem("activePosPin");
