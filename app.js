@@ -258,24 +258,24 @@ window.wakeAndConnectGatt = async function() {
     }
 
     window.setPrinterButtonState("connecting");
-    const candidates = [
-        { service: 0x18F0, char: 0x2AF1 },
-        { service: 0xE781, char: 0xECF6 },
-        { service: '0000ffe0-0000-1000-8000-00805f9b34fb', char: '0000ffe1-0000-1000-8000-00805f9b34fb' },
-        { service: '49535343-fe7d-4ae5-8fa9-9fafd205e455', char: '49535343-8841-43f4-a8d4-ecbe34729bb3' }
-    ];
-
     for (let attempt = 1; attempt <= 3; attempt++) {
         try {
             const server = await window.printDevice.gatt.connect();
-            await new Promise(r => setTimeout(r, 250));
+            await new Promise(r => setTimeout(r, 300));
 
-            for (let c of candidates) {
+            // Telusuri primary services secara aman tanpa hardcode UUID yang bisa bikin crash
+            const services = await server.getPrimaryServices();
+            for (const service of services) {
                 try {
-                    const service = await server.getPrimaryService(c.service);
-                    window.printerCharacteristic = await service.getCharacteristic(c.char);
+                    const characteristics = await service.getCharacteristics();
+                    for (const char of characteristics) {
+                        if (char.properties.write || char.properties.writeWithoutResponse) {
+                            window.printerCharacteristic = char;
+                            break;
+                        }
+                    }
                     if (window.printerCharacteristic) break;
-                } catch(e) {}
+                } catch (e) {}
             }
 
             if (window.printerCharacteristic) {
@@ -336,18 +336,16 @@ window.printViaBluetooth = async function(payloadBytes) {
 
     window.isPrintingNow = true;
     try {
-        // Wait up to 500ms if a keep-alive ping is finishing
         let waitCount = 0;
         while (window.isGattBusy && waitCount < 10) {
             await new Promise(r => setTimeout(r, 50));
             waitCount++;
         }
 
-        // Automatically wake up & reconnect if sleeping (NO POPUP NEEDED!)
         if (!window.printDevice.gatt.connected || !window.printerCharacteristic) {
             const wokeUp = await window.wakeAndConnectGatt();
             if (!wokeUp) {
-                alert("⚠️ Printer tidak merespons. Pastikan printer MENYALA, lalu cetak ulang dari menu 📋 Riwayat.");
+                alert("⚠️ Printer tidak merespons. Pastikan printer MENYALA.");
                 return false;
             }
         }
@@ -356,21 +354,28 @@ window.printViaBluetooth = async function(payloadBytes) {
         for (let i = 0; i < payloadBytes.length; i += CHUNK_SIZE) {
             const chunk = payloadBytes.slice(i, i + CHUNK_SIZE);
             try {
-                await window.printerCharacteristic.writeValue(chunk);
+                if (window.printerCharacteristic.properties.writeWithoutResponse) {
+                    await window.printerCharacteristic.writeValueWithoutResponse(chunk);
+                } else {
+                    await window.printerCharacteristic.writeValue(chunk);
+                }
             } catch (writeErr) {
-                // Mid-print hiccup recovery: reconnect once and resend chunk
                 const recovered = await window.wakeAndConnectGatt();
                 if (!recovered) throw writeErr;
-                await window.printerCharacteristic.writeValue(chunk);
+                if (window.printerCharacteristic.properties.writeWithoutResponse) {
+                    await window.printerCharacteristic.writeValueWithoutResponse(chunk);
+                } else {
+                    await window.printerCharacteristic.writeValue(chunk);
+                }
             }
-            await new Promise(r => setTimeout(r, 12));
+            await new Promise(r => setTimeout(r, 15));
         }
         return true;
     } catch (error) {
         console.error("Print Error:", error);
         window.printerCharacteristic = null;
         window.setPrinterButtonState("standby");
-        alert("Print Gagal: Pastikan printer menyala dan kertas cukup, lalu cetak ulang dari 📋 Riwayat.");
+        alert("Print Gagal: Periksa koneksi printer atau kertas struk.");
         return false;
     } finally {
         window.isPrintingNow = false;
@@ -747,51 +752,37 @@ window.handleAutocomplete = function(e) {
         const members = window.globalMembersCache || [];
         let matches = [];
 
-        if (val.length === 0) {
-            // Tampilkan 25 pelanggan teratas cabang ini terlebih dahulu
-            matches = members.slice().sort((a, b) => {
-                let aHere = (a.firstOutlet === window.currentOutlet || (a.recentOutlets || "").includes(window.currentOutlet)) ? 1 : 0;
-                let bHere = (b.firstOutlet === window.currentOutlet || (b.recentOutlets || "").includes(window.currentOutlet)) ? 1 : 0;
-                if (aHere !== bHere) return bHere - aHere;
-                return (b.spent || 0) - (a.spent || 0);
-            }).slice(0, 25);
-        } else {
-            // 🔥 MULTI-TOKEN SEARCH: Bisa cari Nama + Alamat/Jalan sekaligus (contoh: "budi mawar" atau "agus blok b")
-            const tokens = val.split(/\s+/).filter(Boolean);
-            const digitsOnly = val.replace(/\D/g, '').replace(/^(62|0)/, '');
+        const tokens = val.split(/\s+/).filter(Boolean);
+        const digitsOnly = val.replace(/\D/g, '').replace(/^(62|0)/, '');
 
+        if (val.length === 0) {
+            matches = members.slice().sort((a, b) => (b.spent || 0) - (a.spent || 0)).slice(0, 30);
+        } else {
             matches = members.filter(m => {
                 let mName = String(m.name || "").toLowerCase();
                 let mPhone = String(m.phone || "").toLowerCase();
                 let mAddress = String(m.address || "").toLowerCase();
                 let mPhoneCore = mPhone.replace(/\D/g, '').replace(/^(62|0)/, '');
 
-                // Cek nomor telepon langsung
                 if (digitsOnly.length >= 3 && mPhoneCore.includes(digitsOnly)) return true;
-
-                // Cek apakah SEMUA kata kunci cocok pada kombinasi Nama + Alamat
                 return tokens.every(t => mName.includes(t) || mAddress.includes(t) || mPhone.includes(t));
-            });
-
-            // Urutkan: Cabang aktif kasir SELALU di atas, lalu kecocokan nama terdekat
-            matches.sort((a, b) => {
-                let aHere = (a.firstOutlet === window.currentOutlet || (a.recentOutlets || "").includes(window.currentOutlet)) ? 1 : 0;
-                let bHere = (b.firstOutlet === window.currentOutlet || (b.recentOutlets || "").includes(window.currentOutlet)) ? 1 : 0;
-                if (aHere !== bHere) return bHere - aHere;
-
-                let aName = String(a.name || "").toLowerCase();
-                let bName = String(b.name || "").toLowerCase();
-                let aStarts = aName.startsWith(val) ? 1 : 0;
-                let bStarts = bName.startsWith(val) ? 1 : 0;
-                if (aStarts !== bStarts) return bStarts - aStarts;
-
-                return (b.spent || 0) - (a.spent || 0);
-            });
-            matches = matches.slice(0, 40);
+            }).slice(0, 40);
         }
 
+        // Pisahkan menjadi 2 grup seperti Majoo
+        let localBranchMembers = [];
+        let otherBranchMembers = [];
+
+        matches.forEach(m => {
+            let isHere = (m.firstOutlet === window.currentOutlet || (m.recentOutlets || "").includes(window.currentOutlet));
+            if (isHere) localBranchMembers.push(m);
+            else otherBranchMembers.push(m);
+        });
+
         if (matches.length > 0) {
-            resBox.innerHTML = matches.map(m => {
+            let html = "";
+
+            const renderCard = (m, isLocal) => {
                 let wStr = JSON.stringify(m.wallet || {}).replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
                 let nameStr = String(m.name || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let fOut = String(m.firstOutlet || "").replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
@@ -800,33 +791,41 @@ window.handleAutocomplete = function(e) {
                 let safePhone = rawPhoneDisplay.replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let safeAddress = String(m.address || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 
-                let isHere = (m.firstOutlet === window.currentOutlet || (m.recentOutlets || "").includes(window.currentOutlet));
-                let branchBadge = isHere 
-                    ? `<span style="font-size:11px; background:#d4efdf; color:#1e8449; border:1px solid #27ae60; padding:2px 7px; border-radius:10px; font-weight:bold;">⭐ Cabang Ini</span>`
-                    : `<span style="font-size:11px; background:#ebf5fb; color:#2980b9; padding:2px 6px; border-radius:10px;">Cabang Lain (${fOut || "-"})</span>`;
-
                 let localPiutang = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : (m.piutang || 0);
-                let piutangBadge = localPiutang > 0 ? `<span style="font-size:11px; background:#fadbd8; color:#922b21; padding:2px 6px; border-radius:10px; font-weight:bold; margin-left:6px;">Hutang: Rp ${localPiutang.toLocaleString('id-ID')}</span>` : '';
+                let piutangBadge = localPiutang > 0 ? `<span style="font-size:11px; background:#fadbd8; color:#922b21; padding:2px 7px; border-radius:10px; font-weight:bold; margin-left:6px;">Hutang: Rp ${localPiutang.toLocaleString('id-ID')}</span>` : '';
 
                 let addressDisplay = (m.address && m.address !== "-")
                     ? `<span style="color:#d35400; font-weight:bold;">🏠 ${m.address}</span>`
                     : `<span style="color:#95a5a6; font-style:italic;">🏠 Alamat belum diisi</span>`;
 
-                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')" style="padding:10px 12px; border-bottom:1px solid #f0f3f4; cursor:pointer;">
+                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhone}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')" style="padding:10px 14px; border-bottom:1px solid #f0f3f4; cursor:pointer;">
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
                         <div class="autocomplete-name" style="font-size:14.5px; font-weight:bold; color:#2c3e50;">
                             👤 ${m.name} 
-                            <span style="font-size:12.5px; background:#e8f8f5; color:#117a65; border:1px solid #16a085; padding:1px 7px; border-radius:10px; margin-left:6px;">📱 ${rawPhoneDisplay}</span>
+                            <span style="font-size:12px; background:#e8f8f5; color:#117a65; border:1px solid #16a085; padding:1px 7px; border-radius:10px; margin-left:6px;">📱 ${rawPhoneDisplay}</span>
                             ${piutangBadge}
                         </div>
-                        <div>${branchBadge}</div>
                     </div>
                     <div style="font-size:12.5px; margin-top:4px;">${addressDisplay}</div>
                 </div>`;
-            }).join("");
+            };
+
+            // GRUP 1: CABANG INI
+            if (localBranchMembers.length > 0) {
+                html += `<div style="background:#eafaf1; padding:6px 12px; font-size:12px; font-weight:bold; color:#1e8449; border-bottom:1px solid #d4efdf;">⭐ PELANGGAN CABANG ${window.currentOutlet.toUpperCase()} (${localBranchMembers.length})</div>`;
+                localBranchMembers.forEach(m => html += renderCard(m, true));
+            }
+
+            // GRUP 2: CABANG LAIN
+            if (otherBranchMembers.length > 0) {
+                html += `<div style="background:#ebf5fb; padding:6px 12px; font-size:12px; font-weight:bold; color:#2980b9; border-bottom:1px solid #d6eaf8;">🌐 PELANGGAN CABANG LAIN (${otherBranchMembers.length})</div>`;
+                otherBranchMembers.forEach(m => html += renderCard(m, false));
+            }
+
+            resBox.innerHTML = html;
             resBox.classList.remove("hidden");
         } else { 
-            resBox.innerHTML = `<div style="padding:15px; color:#7f8c8d; text-align:center; font-style:italic;">Tidak ada pelanggan ditemukan untuk "${rawVal}". Klik "Tambah Member" jika pelanggan baru.</div>`;
+            resBox.innerHTML = `<div style="padding:15px; color:#7f8c8d; text-align:center; font-style:italic;">Tidak ada pelanggan ditemukan untuk "${rawVal}".</div>`;
             resBox.classList.remove("hidden"); 
         }
     }, 70);
@@ -1769,9 +1768,32 @@ window.finalizeOrder = async function(shouldPrint) {
             window.activeCustomerProfile.rentalBreakdown.push({ logId: localRentLogId, orderId: currentOrderId, sisa: rentBottleQty, date: window.getWibDate(), outlet: window.currentOutlet });
         }
 
-        window.saveMemberToDB(window.activeCustomerProfile.phone, window.activeCustomerProfile.name, updatedWallet, window.activeCustomerProfile.bottlesBorrowed + rentBottleQty, newPiutang, window.activeCustomerProfile.firstOutlet, window.activeCustomerProfile.recentOutlets);
+        // 🔄 UBAH INI: Pastikan custAddress ikut tersimpan!
+        window.saveMemberToDB(
+            window.activeCustomerProfile.phone, 
+            window.activeCustomerProfile.name, 
+            updatedWallet, 
+            window.activeCustomerProfile.bottlesBorrowed + rentBottleQty, 
+            newPiutang, 
+            window.activeCustomerProfile.firstOutlet, 
+            window.activeCustomerProfile.recentOutlets,
+            custAddress // 🔥 Tambahkan custAddress di sini!
+        );
     } else if (custPhone !== "-") {
-        let fOut = window.activeCustomerProfile ? window.activeCustomerProfile.firstOutlet : window.currentOutlet; let rOut = window.activeCustomerProfile ? window.activeCustomerProfile.recentOutlets : window.currentOutlet;
+        let fOut = window.activeCustomerProfile ? window.activeCustomerProfile.firstOutlet : window.currentOutlet; 
+        let rOut = window.activeCustomerProfile ? window.activeCustomerProfile.recentOutlets : window.currentOutlet;
+        
+        window.saveMemberToDB(
+            custPhone, 
+            custName, 
+            {}, 
+            rentBottleQty, 
+            debtAmount, 
+            fOut, 
+            rOut,
+            custAddress // 🔥 Tambahkan custAddress di sini!
+        );
+    }
         
         if (localRentLogId && window.activeCustomerProfile) {
             if (!window.activeCustomerProfile.rentalBreakdown) window.activeCustomerProfile.rentalBreakdown = [];
@@ -2897,15 +2919,52 @@ window.runBackgroundSync = async function() {
         ]);
 
         // 2. THEN DO THE INTERNET FETCHES
+        // 🔄 UBAH BARIS INI:
         for (const order of orders) {
-            if (order.syncStatus === "Pending") {
-                await new Promise(res => { let tx = window.db.transaction(["orders"], "readwrite"); let st = tx.objectStore("orders"); st.get(order.orderId).onsuccess = e => { let o = e.target.result; if(o){ o.syncStatus = "Syncing"; st.put(o); } res(); }; });
+            // Tangkap status "Pending" MAUPUN "Syncing" yang sempat macet akibat refresh/jaringan putus!
+            if (order.syncStatus === "Pending" || order.syncStatus === "Syncing") {
+                await new Promise(res => { 
+                    let tx = window.db.transaction(["orders"], "readwrite"); 
+                    let st = tx.objectStore("orders"); 
+                    st.get(order.orderId).onsuccess = e => { 
+                        let o = e.target.result; 
+                        if(o){ o.syncStatus = "Syncing"; st.put(o); } 
+                        res(); 
+                    }; 
+                });
                 try { 
-                    let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncOrder", data: order }) }); 
+                    let r = await fetch(API_URL, {
+                        method: "POST", 
+                        redirect: "follow",  
+                        headers: { "Content-Type": "text/plain;charset=utf-8" }, 
+                        body: JSON.stringify({ action: "syncOrder", data: order }) 
+                    }); 
                     let isSuccess = (await r.json()).status === "Success";
-                    await new Promise(res => { let tx = window.db.transaction(["orders"], "readwrite"); let st = tx.objectStore("orders"); st.get(order.orderId).onsuccess = e => { let o = e.target.result; if(o && o.syncStatus === "Syncing"){ o.syncStatus = isSuccess ? "Synced" : "Pending"; st.put(o); } res(); }; });
+                    await new Promise(res => { 
+                        let tx = window.db.transaction(["orders"], "readwrite"); 
+                        let st = tx.objectStore("orders"); 
+                        st.get(order.orderId).onsuccess = e => { 
+                            let o = e.target.result; 
+                            if(o && o.syncStatus === "Syncing"){ 
+                                o.syncStatus = isSuccess ? "Synced" : "Pending"; 
+                                st.put(o); 
+                            } 
+                            res(); 
+                        }; 
+                    });
                 } catch(e) { 
-                    await new Promise(res => { let tx = window.db.transaction(["orders"], "readwrite"); let st = tx.objectStore("orders"); st.get(order.orderId).onsuccess = e => { let o = e.target.result; if(o && o.syncStatus === "Syncing"){ o.syncStatus = "Pending"; st.put(o); } res(); }; });
+                    await new Promise(res => { 
+                        let tx = window.db.transaction(["orders"], "readwrite"); 
+                        let st = tx.objectStore("orders"); 
+                        st.get(order.orderId).onsuccess = e => { 
+                            let o = e.target.result; 
+                            if(o && o.syncStatus === "Syncing"){ 
+                                o.syncStatus = "Pending"; 
+                                st.put(o); 
+                            } 
+                            res(); 
+                        }; 
+                    });
                 }
             }
         }
@@ -2928,7 +2987,17 @@ window.runBackgroundSync = async function() {
             } catch(e) {}
         }
         for (const mem of members) {
-            try { let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncMember", data: mem }) }); if ((await r.json()).status === "Success") { window.db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); } } catch(e) {}
+            try { 
+                let r = await fetch(API_URL, {
+                    method: "POST", 
+                    redirect: "follow",  
+                    headers: { "Content-Type": "text/plain;charset=utf-8" }, 
+                    body: JSON.stringify({ action: "addMember", data: mem }) // 🔥 Gunakan addMember agar server menambah/memperbarui
+                }); 
+                if ((await r.json()).status === "Success") { 
+                    window.db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); 
+                } 
+            } catch(e) {}
         }
         for (const inb of inbounds) {
             if (inb.syncStatus === "Pending") { try { let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncInbound", data: inb }) }); if ((await r.json()).status === "Success") { window.db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").delete(inb.logId); } } catch(e) {} }
@@ -3652,7 +3721,6 @@ window.autoResumeSession = async function() {
         window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(savedPin).onsuccess = async (shiftReq) => {
             const activeShift = shiftReq.target.result;
             if (activeShift) {
-                // 🔥 Even if staff table is mid-sync, keep the cashier logged in using their saved shift!
                 window.currentCashier = (staff && staff.name) ? staff.name : (localStorage.getItem("activePosName") || "Kasir");
                 window.currentPin = savedPin;
                 window.currentShiftId = activeShift.shiftId;
@@ -3666,9 +3734,12 @@ window.autoResumeSession = async function() {
                 document.getElementById("display-cashier").innerText = window.currentCashier;
                 document.getElementById("display-outlet").innerText = window.currentOutlet;
 
+                // 🔥 BERSIHKAN TOTAL SEMUA ANTREAN & RESET KE FORM BERSIH
+                window.resetAllPosSessions();
+                window.showNewOrder();
+
                 await window.loadMenuFromCache();
                 window.loadMenuUI();
-                window.lockMenu();
                 resolve(true);
             } else {
                 localStorage.removeItem("activePosPin");
