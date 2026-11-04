@@ -60,9 +60,9 @@ window.formatDateReadable = function(dateInput) {
     if (!dateInput) return "-";
     try {
         let safeDate = dateInput;
-        if (typeof safeDate === 'string' && safeDate.includes(' ') && !safeDate.includes('T')) { safeDate = safeDate.replace(' ', 'T'); }
+        if (typeof safeDate === 'string' && safeDate.includes(' ') && !safeDate.includes('T')) { safeDate = safeDate.replace(/-/g, '/'); }
         const d = new Date(safeDate);
-        if(isNaN(d)) return dateInput;
+        if(isNaN(d.getTime())) return dateInput;
         const months = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Ags", "Sep", "Okt", "Nov", "Des"];
         const pad = n => n < 10 ? '0' + n : n;
         return `${pad(d.getDate())} ${months[d.getMonth()]} ${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -769,7 +769,7 @@ window.handleAutocomplete = function(e) {
                 let mName = String(m.name || "").toLowerCase();
                 let mPhone = String(m.phone || "").toLowerCase();
                 let mAddress = String(m.address || "").toLowerCase();
-                let mPhoneCore = mPhone.replace(/\D/g, '').replace(/^(62|0)/, '');
+                let mPhoneCore = mPhone.replace(/-dup\d+$/i, '').replace(/\D/g, '').replace(/^(62|0)/, '');
 
                 if (digitsOnly.length >= 3 && mPhoneCore.includes(digitsOnly)) return true;
                 return tokens.every(t => mName.includes(t) || mAddress.includes(t) || mPhone.includes(t));
@@ -1343,13 +1343,13 @@ window.unlockMenu = function() {
     // 🔥 Allow all symbols (/, (), ", #, etc.) so cashiers can freely add notes in customer names
 
     // === REGULAR MEMBER CHECK (RAM-First for 0ms Speed) ===
-    let isTanpaWaProfile = window.activeCustomerProfile && window.activeCustomerProfile.phone && String(window.activeCustomerProfile.phone).startsWith("TANPA-WA");
+    let isTanpaWaProfile = (!phoneRaw || phoneRaw === "-") && window.activeCustomerProfile && window.activeCustomerProfile.phone && String(window.activeCustomerProfile.phone).startsWith("TANPA-WA");
     let phone = isTanpaWaProfile ? window.activeCustomerProfile.phone : phoneRaw;
     let name = nameRaw || "Pelanggan";
     let searchPhone = phone;
 
     if (!isTanpaWaProfile) {
-        searchPhone = phone.replace(/\D/g, ''); 
+        searchPhone = phone.replace(/-DUP\d+$/i, '').replace(/\D/g, ''); 
         if (searchPhone.startsWith('62')) searchPhone = '0' + searchPhone.substring(2);
         if (searchPhone.length > 0 && !searchPhone.startsWith('0')) searchPhone = '0' + searchPhone;
         if (!searchPhone) searchPhone = "-";
@@ -1360,17 +1360,22 @@ window.unlockMenu = function() {
             let localPiutang = member.piutangBreakdown ? (member.piutangBreakdown[window.currentOutlet] || 0) : (member.piutang || 0);
             window.activeCustomerProfile = { ...member, piutang: localPiutang }; 
             name = member.name; 
+            searchPhone = member.phone;
             document.getElementById("cust-name").value = name; 
             if (addressRaw !== "") window.activeCustomerProfile.address = addressRaw;
             window.updatePromoBanner(window.activeCustomerProfile); 
         } else { 
+            if (searchPhone === "-" && name && name.toLowerCase() !== "walk-in") {
+                searchPhone = "TANPA-WA-" + Date.now().toString().slice(-6);
+            }
             window.activeCustomerProfile = { phone: searchPhone, name: name, address: addressRaw, wallet: {}, bottlesBorrowed: 0, piutang: 0, firstOutlet: window.currentOutlet, recentOutlets: window.currentOutlet }; 
             window.updatePromoBanner(window.activeCustomerProfile); 
         }
 
+        let displayPhoneBanner = String(searchPhone).startsWith("TANPA-WA") ? "(Tanpa WA)" : (searchPhone !== "-" ? `(${String(searchPhone).replace(/-DUP\d+$/, "")})` : "");
         window.posSessions[window.activeSessionIndex].customer = window.activeCustomerProfile;
         document.getElementById("active-cust-name").innerText = name; 
-        document.getElementById("active-cust-phone").innerText = searchPhone.startsWith("TANPA-WA") ? "(Tanpa WA)" : (searchPhone !== "-" ? `(${searchPhone})` : "");
+        document.getElementById("active-cust-phone").innerText = displayPhoneBanner;
         document.getElementById("customer-input-section").classList.add("hidden"); 
         document.getElementById("active-customer-banner").classList.remove("hidden"); 
         
@@ -1378,6 +1383,12 @@ window.unlockMenu = function() {
         document.getElementById("glass-overlay").style.opacity = "0"; 
         setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
     };
+
+    // Jika sudah dipilih dari Autocomplete dan nama/nomor masih cocok, gunakan profil tersebut secara langsung
+    if (window.activeCustomerProfile && String(window.activeCustomerProfile.name || "").toLowerCase() === name.toLowerCase() && (String(window.activeCustomerProfile.phone).replace(/-DUP\d+$/, "") === searchPhone || isTanpaWaProfile)) {
+        applyUnlockedMember(window.activeCustomerProfile);
+        return;
+    }
 
     // Check RAM cache first
     let cachedMember = (window.globalMembersCache || []).find(m => m.phone === searchPhone || (searchPhone === "-" && String(m.name || "").toLowerCase() === name.toLowerCase()));
@@ -1387,7 +1398,7 @@ window.unlockMenu = function() {
         const tx = window.db.transaction(["members"], "readonly");
         tx.objectStore("members").get(searchPhone).onsuccess = (ev) => applyUnlockedMember(ev.target.result);
     }
-}; // 🔥 THE FATAL MISSING BRACKET HAS BEEN RESTORED!
+};
 
 window.renderPiutangList = async function() {
     const filter = document.getElementById('search-piutang').value.toLowerCase().trim();
@@ -3279,6 +3290,8 @@ window.renderPeminjamList = function() {
                     }
                 });
 
+                let safeMemName = String(m.name || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                let safeMemPhone = String(m.phone || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let breakdownHtml = combinedBreakdown.map(r => {
                     return `
                     <div style="display:flex; justify-content:space-between; align-items:center; background:#fff; padding:10px; border-radius:4px; margin-top:8px; border:1px solid #d6eaf8;">
@@ -3289,7 +3302,7 @@ window.renderPeminjamList = function() {
                         </div>
                         <div style="display:flex; gap:5px; align-items:center;">
                             <input type="number" id="ret-qty-${r.logId}" placeholder="Jml" min="1" max="${r.sisa}" style="width:60px; padding:6px; border:1px solid #ccc; border-radius:4px; font-size:13px;">
-                            <button onclick="window.submitReturnGalon('${m.phone}', '${m.name}', '${r.logId}', '${r.orderId}', ${r.sisa})" style="background:#27ae60; color:white; border:none; padding:6px 10px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:12px;">Simpan</button>
+                            <button onclick="window.submitReturnGalon('${safeMemPhone}', '${safeMemName}', '${r.logId}', '${r.orderId}', ${r.sisa})" style="background:#27ae60; color:white; border:none; padding:6px 10px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:12px;">Simpan</button>
                         </div>
                     </div>
                     `;
@@ -3719,9 +3732,16 @@ window.saveEditedCustomer = function() {
     if (finalPhone.startsWith('62')) finalPhone = '0' + finalPhone.substring(2);
     if (!name || name.toLowerCase() === "walk-in") name = "Walk-in";
     
-    // Pertahankan ID unik TANPA-WA jika kasir mengosongkan nomor telepon
-    if (!finalPhone && window.activeCustomerProfile && String(window.activeCustomerProfile.phone).startsWith("TANPA-WA")) {
-        finalPhone = window.activeCustomerProfile.phone;
+    if (finalPhone && !finalPhone.startsWith("TANPA-WA") && !finalPhone.startsWith("0")) {
+        finalPhone = "0" + finalPhone;
+    }
+    // Pertahankan atau buat ID unik TANPA-WA jika pelanggan memiliki nama tapi tanpa nomor WA
+    if (!finalPhone) {
+        if (window.activeCustomerProfile && String(window.activeCustomerProfile.phone).startsWith("TANPA-WA")) {
+            finalPhone = window.activeCustomerProfile.phone;
+        } else if (name && name !== "Walk-in") {
+            finalPhone = "TANPA-WA-" + Date.now().toString().slice(-6);
+        }
     }
     
     document.getElementById("cust-phone").value = String(finalPhone).startsWith("TANPA-WA") ? "" : finalPhone;
