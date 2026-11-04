@@ -297,11 +297,10 @@ window.connectBluetoothPrinter = async function(silentAlert = false) {
     try {
         window.setPrinterButtonState("connecting");
 
+        // ✅ PERBAIKAN:
         const device = await navigator.bluetooth.requestDevice({
             acceptAllDevices: true,
             optionalServices: [
-                0x18F0,
-                0xE781, // ⚠️ 0xE781 bukan 16-bit UUID standar Bluetooth SIG
                 '000018f0-0000-1000-8000-00805f9b34fb',
                 '0000ffe0-0000-1000-8000-00805f9b34fb',
                 '49535343-fe7d-4ae5-8fa9-9fafd205e455',
@@ -685,7 +684,8 @@ window.attemptLogin = async function() {
                 const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
                 const hasClockedInToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier);
                 if (!hasClockedInToday) {
-                    let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", syncStatus: "Pending" };
+                    // ✅ PERBAIKAN:
+                    let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", outlet: window.currentOutlet, syncStatus: "Pending" };
                     window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
                 }
             };
@@ -1791,12 +1791,14 @@ window.finalizeOrder = async function(shouldPrint) {
             window.activeCustomerProfile.rentalBreakdown.push({ logId: localRentLogId, orderId: currentOrderId, sisa: rentBottleQty, date: window.getWibDate(), outlet: window.currentOutlet });
         }
 
+        // ✅ PERBAIKAN:
+        let totalBottles = (window.activeCustomerProfile ? (window.activeCustomerProfile.bottlesBorrowed || 0) : 0) + rentBottleQty;
         window.saveMemberToDB(
             custPhone, 
             custName, 
-            {}, 
-            rentBottleQty, 
-            debtAmount, 
+            window.activeCustomerProfile ? (window.activeCustomerProfile.wallet || {}) : {}, 
+            totalBottles, 
+            newPiutang, 
             fOut, 
             rOut,
             custAddress
