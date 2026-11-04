@@ -985,15 +985,18 @@ window.reviewOrder = function() {
     if (window.currentCart.length === 0) return alert("Keranjang masih kosong!");
     
     // --- NEW: SMART INTERCEPT FOR DELIVERY INFO ---
-    let isDelivery = window.currentCart.some(i => i.name.toLowerCase().includes("ongkos kirim") || (i.category && i.category.toLowerCase().includes("ongkos kirim")));
+    let isDelivery = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || (i.category && String(i.category).toLowerCase().includes("kirim")) || (i.subCategory && String(i.subCategory).toLowerCase().includes("kirim")));
     if (isDelivery) {
-        let custPhoneRaw = document.getElementById("cust-phone").value.trim(); 
-        // Jika member tanpa WA dipilih dari database, pertahankan ID uniknya agar riwayat belanja tersimpan
-        let custPhone = (window.activeCustomerProfile && window.activeCustomerProfile.phone) ? window.activeCustomerProfile.phone : (custPhoneRaw || "-");
-        const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
-        let custAddressRaw = document.getElementById("cust-address") ? document.getElementById("cust-address").value.trim() : "";
+        let custPhoneRaw = document.getElementById("cust-phone") ? document.getElementById("cust-phone").value.trim() : ""; 
+        let custName = document.getElementById("cust-name") ? document.getElementById("cust-name").value.trim() : "";
+        let custAddress = document.getElementById("cust-address") ? document.getElementById("cust-address").value.trim() : "";
+        let effectivePhone = (window.activeCustomerProfile && window.activeCustomerProfile.phone) ? window.activeCustomerProfile.phone : custPhoneRaw;
         
-        if (!custNameRaw || custNameRaw.toLowerCase() === "walk-in" || custPhoneRaw.length < 5 || custPhoneRaw === "-" || !custAddressRaw || custAddressRaw === "-") {
+        let isPhoneMissing = (!effectivePhone || effectivePhone === "-" || (!effectivePhone.startsWith("TANPA-WA") && effectivePhone.replace(/\D/g, '').length < 8));
+        let isNameMissing = (!custName || custName.toLowerCase() === "walk-in");
+        let isAddressMissing = (!custAddress || custAddress === "-");
+
+        if (isNameMissing || isPhoneMissing || isAddressMissing) {
             alert("⚠️ Data Pengiriman Belum Lengkap.\nSilakan lengkapi Nama, WhatsApp, dan Alamat pelanggan di menu berikutnya.");
             return window.openEditCustomer(true); // Open edit modal and pause checkout
         }
@@ -1333,12 +1336,17 @@ window.unlockMenu = function() {
     // 🔥 Allow all symbols (/, (), ", #, etc.) so cashiers can freely add notes in customer names
 
     // === REGULAR MEMBER CHECK (RAM-First for 0ms Speed) ===
-    let phone = phoneRaw;
+    let isTanpaWaProfile = window.activeCustomerProfile && window.activeCustomerProfile.phone && String(window.activeCustomerProfile.phone).startsWith("TANPA-WA");
+    let phone = isTanpaWaProfile ? window.activeCustomerProfile.phone : phoneRaw;
     let name = nameRaw || "Pelanggan";
-    let searchPhone = phone.replace(/\D/g, ''); 
-    if (searchPhone.startsWith('62')) searchPhone = '0' + searchPhone.substring(2);
-    if (searchPhone.length > 0 && !searchPhone.startsWith('0')) searchPhone = '0' + searchPhone;
-    if (!searchPhone) searchPhone = "-";
+    let searchPhone = phone;
+
+    if (!isTanpaWaProfile) {
+        searchPhone = phone.replace(/\D/g, ''); 
+        if (searchPhone.startsWith('62')) searchPhone = '0' + searchPhone.substring(2);
+        if (searchPhone.length > 0 && !searchPhone.startsWith('0')) searchPhone = '0' + searchPhone;
+        if (!searchPhone) searchPhone = "-";
+    }
 
     let applyUnlockedMember = (member) => {
         if (member) { 
@@ -1355,9 +1363,9 @@ window.unlockMenu = function() {
 
         window.posSessions[window.activeSessionIndex].customer = window.activeCustomerProfile;
         document.getElementById("active-cust-name").innerText = name; 
-        document.getElementById("active-cust-phone").innerText = searchPhone !== "-" ? `(${searchPhone})` : "";
+        document.getElementById("active-cust-phone").innerText = searchPhone.startsWith("TANPA-WA") ? "(Tanpa WA)" : (searchPhone !== "-" ? `(${searchPhone})` : "");
         document.getElementById("customer-input-section").classList.add("hidden"); 
-        document.getElementById("active-customer-banner").classList.remove("hidden");
+        document.getElementById("active-customer-banner").classList.remove("hidden"); 
         
         window.isMenuLocked = false; 
         document.getElementById("glass-overlay").style.opacity = "0"; 
@@ -1647,7 +1655,9 @@ window.finalizeOrder = async function(shouldPrint) {
     
     const totalAccounted = cash + qris + transfer + free + debtAmount; const remaining = window.cartGrandTotal - totalAccounted; 
 
-    let custPhoneRaw = document.getElementById("cust-phone").value.trim(); let custPhone = custPhoneRaw || "-";
+    let custPhoneRaw = document.getElementById("cust-phone").value.trim(); 
+    // 🔥 Jika member tanpa WA dipilih dari database, pertahankan ID uniknya agar riwayat belanja & poin tersimpan
+    let custPhone = (window.activeCustomerProfile && window.activeCustomerProfile.phone) ? window.activeCustomerProfile.phone : (custPhoneRaw || "-");
     const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
     const custAddress = document.getElementById("cust-address").value.trim() || "";
     const orderNotes = document.getElementById("order-notes") ? document.getElementById("order-notes").value.trim() : "";
@@ -2202,7 +2212,7 @@ window.renderHistoryList = function(type) {
                 let viewBtn = `<button onclick="window.viewHistoricalShift('${s.shiftId}')" style="background:#2980b9; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold; margin-top:5px;">👁️ Detail Shift</button>`;
                 
                 return `<div class="history-row" style="align-items:flex-start;"><div><strong>Shift: ${s.shiftId}</strong><br><small style="color:#7f8c8d;">Kasir: ${s.cashier} | Keluar: ${window.formatDateReadable(s.logoutTime)}</small>${pGiven}${pPaid}<br>${viewBtn}</div><div style="text-align:right;"><strong>Omset: Rp ${(s.totalOmset || 0).toLocaleString('id-ID')}</strong><br><small style="color:#27ae60;">Uang Laci: Rp ${(s.netCash || 0).toLocaleString('id-ID')}</small></div></div>`;
-            }).join("");
+            });
         };
     }
 };
@@ -3673,53 +3683,61 @@ window.clockOutStaff = function(logId, manualTime = null) {
 }
 
 window.openEditCustomer = function(isCheckoutIntercept = false) {
-    document.getElementById("edit-cust-phone").value = document.getElementById("cust-phone").value || (window.activeCustomerProfile ? window.activeCustomerProfile.phone : "") || "";
+    let currentP = document.getElementById("cust-phone").value || (window.activeCustomerProfile ? window.activeCustomerProfile.phone : "") || "";
+    // Jangan tampilkan string teknis TANPA-WA di form input kasir
+    document.getElementById("edit-cust-phone").value = String(currentP).startsWith("TANPA-WA") ? "" : currentP;
     document.getElementById("edit-cust-name").value = document.getElementById("cust-name").value || (window.activeCustomerProfile ? window.activeCustomerProfile.name : "") || "";
     document.getElementById("edit-cust-address").value = document.getElementById("cust-address") ? document.getElementById("cust-address").value : (window.activeCustomerProfile ? window.activeCustomerProfile.address : "") || "";
     
     window.isCheckoutIntercept = isCheckoutIntercept;
     document.getElementById("edit-customer-modal").classList.remove("hidden");
-}
+};
 
 window.saveEditedCustomer = function() {
-    let phone = document.getElementById("edit-cust-phone").value.trim();
+    let phoneInput = document.getElementById("edit-cust-phone").value.trim();
     let name = document.getElementById("edit-cust-name").value.trim();
     let address = document.getElementById("edit-cust-address").value.trim();
     
-    let cleanedPhone = phone.replace(/\D/g, '');
-    if (phone !== "" && (cleanedPhone.length < 8 || !/^\d+$/.test(cleanedPhone))) {
-        return alert("⚠️ Format WhatsApp Salah:\nKolom WhatsApp harus diisi dengan nomor telepon yang valid (angka saja).");
+    let cleanedPhone = phoneInput.replace(/\D/g, '');
+    if (phoneInput !== "" && (cleanedPhone.length < 8 || !/^\d+$/.test(cleanedPhone))) {
+        return alert("⚠️ Format WhatsApp Salah:\nKolom WhatsApp harus diisi dengan nomor telepon yang valid (minimal 8 angka).");
     }
 
-    if (phone.startsWith('62')) phone = '0' + phone.substring(2);
+    let finalPhone = phoneInput;
+    if (finalPhone.startsWith('62')) finalPhone = '0' + finalPhone.substring(2);
     if (!name || name.toLowerCase() === "walk-in") name = "Walk-in";
     
-    document.getElementById("cust-phone").value = phone;
+    // Pertahankan ID unik TANPA-WA jika kasir mengosongkan nomor telepon
+    if (!finalPhone && window.activeCustomerProfile && String(window.activeCustomerProfile.phone).startsWith("TANPA-WA")) {
+        finalPhone = window.activeCustomerProfile.phone;
+    }
+    
+    document.getElementById("cust-phone").value = String(finalPhone).startsWith("TANPA-WA") ? "" : finalPhone;
     document.getElementById("cust-name").value = name;
     if(document.getElementById("cust-address")) document.getElementById("cust-address").value = address;
     
     if (!window.activeCustomerProfile) {
-        window.activeCustomerProfile = { phone: phone, name: name, address: address, wallet: {}, bottlesBorrowed: 0, piutang: 0, firstOutlet: window.currentOutlet, recentOutlets: window.currentOutlet };
+        window.activeCustomerProfile = { phone: finalPhone, name: name, address: address, wallet: {}, bottlesBorrowed: 0, piutang: 0, firstOutlet: window.currentOutlet, recentOutlets: window.currentOutlet };
     } else {
-        window.activeCustomerProfile.phone = phone;
+        window.activeCustomerProfile.phone = finalPhone;
         window.activeCustomerProfile.name = name;
         window.activeCustomerProfile.address = address;
     }
     window.posSessions[window.activeSessionIndex].customer = window.activeCustomerProfile;
     
     document.getElementById("active-cust-name").innerText = name; 
-    document.getElementById("active-cust-phone").innerText = phone && phone !== "-" ? `(${phone})` : "";
+    document.getElementById("active-cust-phone").innerText = String(finalPhone).startsWith("TANPA-WA") ? "(Tanpa WA)" : (finalPhone && finalPhone !== "-" ? `(${finalPhone})` : "");
     document.getElementById("edit-customer-modal").classList.add("hidden");
 
-    // 🔥 SIMPAN KE DATABASE & SINKRONKAN KE GOOGLE SHEETS
-    if (phone && phone !== "-") {
-        window.saveMemberToDB(phone, name, window.activeCustomerProfile.wallet, window.activeCustomerProfile.bottlesBorrowed, window.activeCustomerProfile.piutang, window.activeCustomerProfile.firstOutlet, window.activeCustomerProfile.recentOutlets, address);
+    // Simpan ke IndexedDB lokal dan sinkronkan ke server
+    if (finalPhone && finalPhone !== "-") {
+        window.saveMemberToDB(finalPhone, name, window.activeCustomerProfile.wallet, window.activeCustomerProfile.bottlesBorrowed, window.activeCustomerProfile.piutang, window.activeCustomerProfile.firstOutlet, window.activeCustomerProfile.recentOutlets, address);
         if (navigator.onLine) {
             fetch(API_URL, {
                 method: "POST",
                 redirect: "follow",
                 headers: { "Content-Type": "text/plain;charset=utf-8" },
-                body: JSON.stringify({ action: "syncMember", data: { phone: phone, name: name, address: address, outlet: window.currentOutlet } })
+                body: JSON.stringify({ action: "syncMember", data: { phone: finalPhone, name: name, address: address, outlet: window.currentOutlet } })
             }).catch(() => {});
         }
     }
