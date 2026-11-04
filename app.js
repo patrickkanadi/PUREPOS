@@ -731,8 +731,8 @@ window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localP
     let lockedQueue = window.isCustomerLocked(phone);
     if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan pesanan di sana terlebih dahulu.`); }
 
-    // Jika member tanpa WA, kolom input dibiarkan kosong agar kasir tidak bingung
-    document.getElementById("cust-phone").value = String(phone).startsWith("TANPA-WA") ? "" : phone; 
+    // Jika member tanpa WA, kolom input dibiarkan kosong; bersihkan juga akhiran -DUP jika ada
+    document.getElementById("cust-phone").value = String(phone).startsWith("TANPA-WA") ? "" : String(phone).replace(/-DUP\d+$/, "");
     document.getElementById("cust-name").value = name; 
     document.getElementById("cust-address").value = (address && address !== "-") ? address : ""; 
     
@@ -1150,13 +1150,18 @@ window.switchCart = function(index) {
     window.renderCart();
     
     if (window.activeCustomerProfile) {
+        let pRaw = String(window.activeCustomerProfile.phone || "");
+        let isNoWa = pRaw.startsWith("TANPA-WA");
+        let cleanDisplayP = isNoWa ? "" : pRaw.replace(/-DUP\d+$/, "");
+
         document.getElementById("cust-name").value = window.activeCustomerProfile.name; 
-        document.getElementById("cust-phone").value = window.activeCustomerProfile.phone || "";
+        document.getElementById("cust-phone").value = cleanDisplayP;
         
         let addressField = document.getElementById("cust-address"); 
-        if (addressField) addressField.value = window.activeCustomerProfile.address || "";
+        if (addressField) addressField.value = (window.activeCustomerProfile.address && window.activeCustomerProfile.address !== "-") ? window.activeCustomerProfile.address : "";
         
-        document.getElementById("active-cust-name").innerText = window.activeCustomerProfile.name; document.getElementById("active-cust-phone").innerText = window.activeCustomerProfile.phone !== "-" ? `(${window.activeCustomerProfile.phone})` : "";
+        document.getElementById("active-cust-name").innerText = window.activeCustomerProfile.name; 
+        document.getElementById("active-cust-phone").innerText = isNoWa ? "(Tanpa WA)" : (cleanDisplayP && cleanDisplayP !== "-" ? `(${cleanDisplayP})` : "");
         document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
         window.isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; document.getElementById("glass-overlay").style.pointerEvents = "none";
         window.updatePromoBanner(window.activeCustomerProfile);
@@ -1658,8 +1663,8 @@ window.finalizeOrder = async function(shouldPrint) {
     const totalAccounted = cash + qris + transfer + free + debtAmount; const remaining = window.cartGrandTotal - totalAccounted; 
 
     let custPhoneRaw = document.getElementById("cust-phone").value.trim(); 
-    // 🔥 Jika member tanpa WA dipilih dari database, pertahankan ID uniknya agar riwayat belanja & poin tersimpan
-    let custPhone = (window.activeCustomerProfile && window.activeCustomerProfile.phone) ? window.activeCustomerProfile.phone : (custPhoneRaw || "-");
+    // 🔥 Jika member tanpa WA dipilih dari database, pertahankan ID uniknya; bersihkan akhiran -DUP agar jurnal server bersih
+    let custPhone = (window.activeCustomerProfile && window.activeCustomerProfile.phone) ? String(window.activeCustomerProfile.phone).replace(/-DUP\d+$/, "") : (custPhoneRaw || "-");
     const custName = document.getElementById("cust-name").value.trim() || "Walk-in";
     const custAddress = document.getElementById("cust-address").value.trim() || "";
     const orderNotes = document.getElementById("order-notes") ? document.getElementById("order-notes").value.trim() : "";
@@ -2135,9 +2140,10 @@ window.isWithinHistoryHours = function(rawTs) {
     if (!ms) return false;
     let maxHours = Number(window.historyHours) || 24;
     let maxDiffMs = maxHours * 60 * 60 * 1000;
-    let diff = Date.now() - ms;
-    // Toleransi jam maju 10 menit (-600000ms) dan batas maksimal ke belakang sesuai setting
-    return diff >= -600000 && diff <= maxDiffMs;
+    let nowWibMs = window.parseSafeTimeMs(window.getWibDate()) || Date.now();
+    let diff = nowWibMs - ms;
+    // Toleransi selisih jam perangkat 1 jam (-3600000ms) dan batas maksimal ke belakang sesuai setting
+    return diff >= -3600000 && diff <= maxDiffMs;
 };
 
 // Pertahankan fungsi isTodayWib untuk kompatibilitas
@@ -3798,9 +3804,10 @@ window.openMemberHistoryModal = function() {
     let dropList = document.getElementById("hist-autocomplete-list");
     if (dropList) dropList.classList.add("hidden");
     
-    // Auto-fill phone jika ada pelanggan yang sedang aktif di POS
+    // Auto-fill nomor WA (atau nama jika member Tanpa WA) saat ada pelanggan aktif di POS
     if (window.activeCustomerProfile && window.activeCustomerProfile.phone && window.activeCustomerProfile.phone !== "-") {
-        queryInput.value = window.activeCustomerProfile.phone;
+        let p = String(window.activeCustomerProfile.phone);
+        queryInput.value = p.startsWith("TANPA-WA") ? (window.activeCustomerProfile.name || "") : p.replace(/-DUP\d+$/, "");
     } else {
         queryInput.value = "";
     }
