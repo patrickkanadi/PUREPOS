@@ -301,7 +301,7 @@ window.connectBluetoothPrinter = async function(silentAlert = false) {
             acceptAllDevices: true,
             optionalServices: [
                 0x18F0,
-                0xE781,
+                0xE781, // ⚠️ 0xE781 bukan 16-bit UUID standar Bluetooth SIG
                 '000018f0-0000-1000-8000-00805f9b34fb',
                 '0000ffe0-0000-1000-8000-00805f9b34fb',
                 '49535343-fe7d-4ae5-8fa9-9fafd205e455',
@@ -1767,11 +1767,44 @@ window.finalizeOrder = async function(shouldPrint) {
         
         if (localRentLogId) {
             if (!window.activeCustomerProfile.rentalBreakdown) window.activeCustomerProfile.rentalBreakdown = [];
-            // 🔥 Use currentOrderId instead of "ORD-" + Date.now()
             window.activeCustomerProfile.rentalBreakdown.push({ logId: localRentLogId, orderId: currentOrderId, sisa: rentBottleQty, date: window.getWibDate(), outlet: window.currentOutlet });
         }
 
+        // 🔥 Simpan profil member yang loyalitasnya aktif
+        window.saveMemberToDB(
+            window.activeCustomerProfile.phone, 
+            window.activeCustomerProfile.name, 
+            updatedWallet, 
+            (window.activeCustomerProfile.bottlesBorrowed || 0) + rentBottleQty, 
+            newPiutang, 
+            window.activeCustomerProfile.firstOutlet, 
+            window.activeCustomerProfile.recentOutlets,
+            custAddress
+        );
+    } else if (custPhone !== "-") {
+        // 🔥 Simpan pelanggan biasa (non-loyalty) yang pinjam galon / berhutang / punya alamat
+        let fOut = window.activeCustomerProfile ? window.activeCustomerProfile.firstOutlet : window.currentOutlet; 
+        let rOut = window.activeCustomerProfile ? window.activeCustomerProfile.recentOutlets : window.currentOutlet;
         
+        if (localRentLogId && window.activeCustomerProfile) {
+            if (!window.activeCustomerProfile.rentalBreakdown) window.activeCustomerProfile.rentalBreakdown = [];
+            window.activeCustomerProfile.rentalBreakdown.push({ logId: localRentLogId, orderId: currentOrderId, sisa: rentBottleQty, date: window.getWibDate(), outlet: window.currentOutlet });
+        }
+
+        window.saveMemberToDB(
+            custPhone, 
+            custName, 
+            {}, 
+            rentBottleQty, 
+            debtAmount, 
+            fOut, 
+            rOut,
+            custAddress
+        );
+    }
+
+    // 🔥 Deklarasikan isDelivery sebelum digunakan
+    let isDelivery = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
     let finalStatus = isDelivery ? "Proses Kirim" : "Completed";
 
     const orderPayload = {
