@@ -258,20 +258,34 @@ window.wakeAndConnectGatt = async function() {
     }
 
     window.setPrinterButtonState("connecting");
+    const candidates = [
+        { service: 0x18F0, char: 0x2AF1 },
+        { service: 0xE781, char: 0xECF6 },
+        { service: '0000ffe0-0000-1000-8000-00805f9b34fb', char: '0000ffe1-0000-1000-8000-00805f9b34fb' },
+        { service: '49535343-fe7d-4ae5-8fa9-9fafd205e455', char: '49535343-8841-43f4-a8d4-ecbe34729bb3' }
+    ];
+
     for (let attempt = 1; attempt <= 3; attempt++) {
         try {
             const server = await window.printDevice.gatt.connect();
-            await new Promise(r => setTimeout(r, 250)); // Let Android GATT stabilize
-            const service = await server.getPrimaryService(0x18F0);
-            window.printerCharacteristic = await service.getCharacteristic(0x2AF1);
+            await new Promise(r => setTimeout(r, 250));
 
-            window.setPrinterButtonState("ready");
-            window.startPrinterKeepAlive();
-            window.requestPosWakeLock();
-            return true;
+            for (let c of candidates) {
+                try {
+                    const service = await server.getPrimaryService(c.service);
+                    window.printerCharacteristic = await service.getCharacteristic(c.char);
+                    if (window.printerCharacteristic) break;
+                } catch(e) {}
+            }
+
+            if (window.printerCharacteristic) {
+                window.setPrinterButtonState("ready");
+                window.requestPosWakeLock();
+                return true;
+            }
         } catch (err) {
             window.printerCharacteristic = null;
-            await new Promise(r => setTimeout(r, 450));
+            await new Promise(r => setTimeout(r, 400));
         }
     }
     window.setPrinterButtonState("standby");
@@ -649,6 +663,7 @@ window.attemptLogin = async function() {
                 document.getElementById("pos-screen").classList.remove("hidden");
                 document.getElementById("display-cashier").innerText = window.currentCashier; 
                 document.getElementById("display-outlet").innerText = window.currentOutlet;
+                window.resetAllPosSessions(); // 🔥 Cleans queues 1, 2, and 3 on auto-resume!
                 
                 await window.loadMenuFromCache(); // 🔥 Muat seketika dari memori lokal (0.1 detik)
                 window.loadMenuUI();
@@ -817,11 +832,12 @@ window.handleAutocomplete = function(e) {
     }, 70);
 };
 
-window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rOut) {
+window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rOut, address) {
     if(!phone || phone === "-") return; 
     window.db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
-        let mem = e.target.result || { phone: phone, name: name, wallet: {}, spent: 0, bottlesBorrowed: 0, piutang: 0, firstOutlet: fOut || window.currentOutlet, recentOutlets: rOut || window.currentOutlet }; 
+        let mem = e.target.result || { phone: phone, name: name, address: address || "", wallet: {}, spent: 0, bottlesBorrowed: 0, piutang: 0, firstOutlet: fOut || window.currentOutlet, recentOutlets: rOut || window.currentOutlet }; 
         mem.name = name; 
+        if(address !== undefined && address !== "") mem.address = address;
         if(wallet !== undefined) mem.wallet = wallet; 
         if(bottles !== undefined) mem.bottlesBorrowed = bottles; 
         if(fOut !== undefined) mem.firstOutlet = fOut; 
@@ -833,7 +849,6 @@ window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rO
             mem.piutangBreakdown[window.currentOutlet] = piutang; 
         }
 
-        // 🔥 Update RAM cache immediately so autocomplete & badges stay in sync in 0ms
         if (window.globalMembersCache) {
             let idx = window.globalMembersCache.findIndex(x => x.phone === phone);
             if (idx > -1) window.globalMembersCache[idx] = mem;
@@ -843,7 +858,7 @@ window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rO
         window.db.transaction(["members"], "readwrite").objectStore("members").put(mem);
         window.db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").put(mem);
     };
-}
+};
 
 window.loadMembersFromCache = async function() {
     return new Promise(resolve => {
@@ -3610,7 +3625,7 @@ window.saveEditedCustomer = function() {
 
     // 🔥 SIMPAN KE DATABASE & SINKRONKAN KE GOOGLE SHEETS
     if (phone && phone !== "-") {
-        window.saveMemberToDB(phone, name, window.activeCustomerProfile.wallet, window.activeCustomerProfile.bottlesBorrowed, window.activeCustomerProfile.piutang, window.activeCustomerProfile.firstOutlet, window.activeCustomerProfile.recentOutlets);
+        window.saveMemberToDB(phone, name, window.activeCustomerProfile.wallet, window.activeCustomerProfile.bottlesBorrowed, window.activeCustomerProfile.piutang, window.activeCustomerProfile.firstOutlet, window.activeCustomerProfile.recentOutlets, address);
         if (navigator.onLine) {
             fetch(API_URL, {
                 method: "POST",
