@@ -249,34 +249,65 @@ window.attachPrinterListener = function(device) {
 };
 
 // 3. Helper to open GATT channel with 3 automatic wake-up retries (No popup needed!)
-window.wakeAndConnectGatt = async function() {
+window.wakeAndConnectGatt = async function(forceReconnect = false) {
     if (!window.printDevice) return false;
     window.attachPrinterListener(window.printDevice);
 
-    if (window.printDevice.gatt && window.printDevice.gatt.connected && window.printerCharacteristic) {
+    if (forceReconnect) {
+        window.printerCharacteristic = null;
+        try {
+            if (window.printDevice.gatt && window.printDevice.gatt.connected) {
+                window.printDevice.gatt.disconnect();
+                await new Promise(r => setTimeout(r, 250));
+            }
+        } catch (e) {}
+    } else if (window.printDevice.gatt && window.printDevice.gatt.connected && window.printerCharacteristic) {
         window.setPrinterButtonState("ready");
         return true;
     }
+
+    // Daftar UUID characteristic TX/Write utama pada printer thermal Bluetooth
+    const preferredCharUuids = [
+        '00002af1-0000-1000-8000-00805f9b34fb',
+        '0000ffe1-0000-1000-8000-00805f9b34fb',
+        '0000ff02-0000-1000-8000-00805f9b34fb',
+        '49535343-8841-43f4-a8d4-ecbe34729bb3',
+        'bef8d6c9-9c21-4c9e-b632-bd58c1009f9f',
+        '0000ae01-0000-1000-8000-00805f9b34fb'
+    ];
 
     window.setPrinterButtonState("connecting");
     for (let attempt = 1; attempt <= 3; attempt++) {
         try {
             const server = await window.printDevice.gatt.connect();
-            await new Promise(r => setTimeout(r, 300));
+            await new Promise(r => setTimeout(r, 350));
 
-            // Telusuri primary services secara aman tanpa hardcode UUID yang bisa bikin crash
             const services = await server.getPrimaryServices();
+            let fallbackChar = null;
+
             for (const service of services) {
+                let sUuid = String(service.uuid || "").toLowerCase();
+                // Lewati service sistem Generic Access (1800), Generic Attribute (1801), & Device Info (180a)
+                if (sUuid.startsWith("00001800") || sUuid.startsWith("00001801") || sUuid.startsWith("0000180a")) continue;
+
                 try {
                     const characteristics = await service.getCharacteristics();
                     for (const char of characteristics) {
                         if (char.properties.write || char.properties.writeWithoutResponse) {
-                            window.printerCharacteristic = char;
-                            break;
+                            let cUuid = String(char.uuid || "").toLowerCase();
+                            if (preferredCharUuids.includes(cUuid)) {
+                                window.printerCharacteristic = char;
+                                break;
+                            }
+                            if (!fallbackChar) fallbackChar = char;
                         }
                     }
                     if (window.printerCharacteristic) break;
                 } catch (e) {}
+            }
+
+            if (!window.printerCharacteristic && fallbackChar) {
+                window.printerCharacteristic = fallbackChar;
             }
 
             if (window.printerCharacteristic) {
@@ -286,7 +317,7 @@ window.wakeAndConnectGatt = async function() {
             }
         } catch (err) {
             window.printerCharacteristic = null;
-            await new Promise(r => setTimeout(r, 400));
+            await new Promise(r => setTimeout(r, 450));
         }
     }
     window.setPrinterButtonState("standby");
@@ -298,19 +329,21 @@ window.connectBluetoothPrinter = async function(silentAlert = false) {
     try {
         window.setPrinterButtonState("connecting");
 
-        // ✅ PERBAIKAN:
         const device = await navigator.bluetooth.requestDevice({
             acceptAllDevices: true,
             optionalServices: [
                 '000018f0-0000-1000-8000-00805f9b34fb',
                 '0000ffe0-0000-1000-8000-00805f9b34fb',
+                '0000ff00-0000-1000-8000-00805f9b34fb',
+                '0000ae00-0000-1000-8000-00805f9b34fb',
+                '0000fee7-0000-1000-8000-00805f9b34fb',
                 '49535343-fe7d-4ae5-8fa9-9fafd205e455',
                 'e7810a71-73ae-499d-8c15-faa9aef0c3f2'
             ]
         });
 
         window.printDevice = device;
-        const ok = await window.wakeAndConnectGatt();
+        const ok = await window.wakeAndConnectGatt(true);
         if (!ok) {
             throw new Error("Gagal membuka jalur cetak. Pastikan printer menyala dan tidak terhubung ke HP lain.");
         }
@@ -328,13 +361,28 @@ window.connectBluetoothPrinter = async function(silentAlert = false) {
 };
 
 // 5. Silent Auto-Wake Printing Engine
+window.writeChunkToPrinter = async function(char, chunk) {
+    // Gunakan metode utama, dan jika ditolak oleh firmware printer, otomatis fallback ke metode satunya
+    if (char.properties.writeWithoutResponse) {
+        try {
+            await char.writeValueWithoutResponse(chunk);
+            return;
+        } catch (e) {
+            if (!char.properties.write) throw e;
+        }
+    }
+    await char.writeValue(chunk);
+};
+
 window.printViaBluetooth = async function(payloadBytes) {
     if (!window.printDevice) {
-        alert("⚠️ Printer belum dipilih! Klik tombol '🖨️ Printer' di atas.");
-        return false;
+        const paired = await window.connectBluetoothPrinter(true);
+        if (!paired) return false;
     }
 
+    if (window.isPrintingNow) return false;
     window.isPrintingNow = true;
+
     try {
         let waitCount = 0;
         while (window.isGattBusy && waitCount < 10) {
@@ -343,9 +391,9 @@ window.printViaBluetooth = async function(payloadBytes) {
         }
 
         if (!window.printDevice.gatt.connected || !window.printerCharacteristic) {
-            const wokeUp = await window.wakeAndConnectGatt();
+            const wokeUp = await window.wakeAndConnectGatt(true);
             if (!wokeUp) {
-                alert("⚠️ Printer tidak merespons. Pastikan printer MENYALA.");
+                alert("⚠️ Printer tidak merespons. Pastikan printer MENYALA dan tidak sedang terhubung ke perangkat lain.");
                 return false;
             }
         }
@@ -353,22 +401,27 @@ window.printViaBluetooth = async function(payloadBytes) {
         const CHUNK_SIZE = 20;
         for (let i = 0; i < payloadBytes.length; i += CHUNK_SIZE) {
             const chunk = payloadBytes.slice(i, i + CHUNK_SIZE);
-            try {
-                if (window.printerCharacteristic.properties.writeWithoutResponse) {
-                    await window.printerCharacteristic.writeValueWithoutResponse(chunk);
-                } else {
-                    await window.printerCharacteristic.writeValue(chunk);
-                }
-            } catch (writeErr) {
-                const recovered = await window.wakeAndConnectGatt();
-                if (!recovered) throw writeErr;
-                if (window.printerCharacteristic.properties.writeWithoutResponse) {
-                    await window.printerCharacteristic.writeValueWithoutResponse(chunk);
-                } else {
-                    await window.printerCharacteristic.writeValue(chunk);
+            let sent = false;
+
+            // 1. Coba kirim dengan toleransi antrean penuh (backoff retry)
+            for (let retry = 0; retry < 3; retry++) {
+                try {
+                    await window.writeChunkToPrinter(window.printerCharacteristic, chunk);
+                    sent = true;
+                    break;
+                } catch (err) {
+                    await new Promise(r => setTimeout(r, 120 * (retry + 1)));
                 }
             }
-            await new Promise(r => setTimeout(r, 15));
+
+            // 2. Jika masih gagal, paksa reconnect GATT (forceReconnect = true) lalu kirim ulang
+            if (!sent) {
+                const recovered = await window.wakeAndConnectGatt(true);
+                if (!recovered) throw new Error("GATT Reconnect Failed");
+                await window.writeChunkToPrinter(window.printerCharacteristic, chunk);
+            }
+
+            await new Promise(r => setTimeout(r, 25));
         }
         return true;
     } catch (error) {
@@ -1977,7 +2030,7 @@ window.buildEscPosReceipt = async function(orderId, order, deposit, debt, payMet
     if ((order.discounts || 0) > 0 || (order.freeAmount || 0) > 0) {
         let hemat = (order.discounts || 0) + (order.freeAmount || 0);
         receipt += "\n" + centerAlign + boldOn + "*".repeat(32) + "\n";
-        receipt += `🎉 ANDA HEMAT Rp ${hemat.toLocaleString('id-ID')} 🎉\n`;
+        receipt += `** ANDA HEMAT Rp ${hemat.toLocaleString('id-ID')} **\n`;
         receipt += "*".repeat(32) + "\n" + normalText + boldOff + leftAlign;
     }
 
