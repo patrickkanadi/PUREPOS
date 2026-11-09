@@ -19,8 +19,64 @@ window.isMenuLocked = true; window.isSyncing = false; window.loyaltyEnabled = fa
 window.historyHours = 24; // 🔥 Default 24 jam jika belum diatur di Settings
 
 // Advanced Promos (From Laundry POS)
+// Advanced Promos (From Laundry POS)
 window.promoRules = {};
 window.promoStampRules = {};
+window.volumeDiscountRules = [];
+
+window.parseVolumeDiscountSetting = function(valStr) {
+    if (!valStr) return;
+    // Bisa dipisah dengan baris baru (Enter) atau tanda '|'
+    let entries = String(valStr).split(/[\n|]+/).map(s => s.trim()).filter(Boolean);
+    entries.forEach(entry => {
+        let parts = entry.split(";").map(s => s.trim());
+        if (parts.length >= 3) {
+            let itemName = parts[0];
+            let minQty = Number(parts[1]);
+            let discount = Number(parts[2]);
+            let outletsRaw = parts[3] ? parts[3].replace(/[()[\]]/g, '').trim() : "ALL";
+            let outlets = outletsRaw.split(",").map(o => o.trim().toUpperCase()).filter(Boolean);
+            if (itemName && !isNaN(minQty) && minQty > 0 && !isNaN(discount) && discount > 0) {
+                window.volumeDiscountRules.push({
+                    itemName: itemName,
+                    itemKey: itemName.toUpperCase().replace(/\s+/g, ''),
+                    minQty: minQty,
+                    discount: discount,
+                    outlets: outlets.length > 0 ? outlets : ["ALL"]
+                });
+            }
+        }
+    });
+};
+
+window.applyVolumeDiscountsToCart = function() {
+    if (!window.currentCart) return;
+    let curOutlet = String(window.currentOutlet || "").trim().toUpperCase();
+    window.currentCart.forEach(item => {
+        let basePrice = (item.originalPrice !== undefined) ? Number(item.originalPrice) : Number(item.price);
+        item.originalPrice = basePrice;
+        let itemKey = String(item.name || "").trim().toUpperCase().replace(/\s+/g, '');
+        let matchedRule = null;
+
+        for (let r of (window.volumeDiscountRules || [])) {
+            let outletMatch = r.outlets.includes("ALL") || (curOutlet && r.outlets.includes(curOutlet));
+            if (outletMatch && (itemKey === r.itemKey || itemKey.includes(r.itemKey) || r.itemKey.includes(itemKey))) {
+                if (item.qty >= r.minQty) {
+                    matchedRule = r;
+                    break;
+                }
+            }
+        }
+
+        if (matchedRule) {
+            item.price = Math.max(0, basePrice - matchedRule.discount);
+            item.volumeDiscountPerUnit = matchedRule.discount;
+        } else {
+            item.price = basePrice;
+            item.volumeDiscountPerUnit = 0;
+        }
+    });
+};
 
 window.deferredPrompt = null;
 window.bluetoothDevice = null;
@@ -486,9 +542,13 @@ window.syncCriticalData = async function() {
             }
             if (result.data.settings) {
                 const setT = tx.objectStore("settings"); setT.clear();
+                window.volumeDiscountRules = [];
                 for (const [k, v] of Object.entries(result.data.settings)) { 
                     setT.put({ key: k, value: v }); 
                     let upperKey = String(k).toUpperCase().replace(/\s+/g, '');
+                    if (upperKey.includes("VOLUMEDISCOUNT") || upperKey.includes("VOLUME_DISCOUNT") || upperKey.includes("DISKONGROSIR")) {
+                        window.parseVolumeDiscountSetting(v);
+                    }
                     if (upperKey.includes("PROMO")) {
                         let valStr = String(v || "");
                         if (valStr.includes(":")) {
@@ -1011,12 +1071,16 @@ window.updateCartQty = function(itemId, delta) {
 }
 
 window.renderCart = function() {
+    window.applyVolumeDiscountsToCart();
     const container = document.getElementById("cart-items"); container.innerHTML = ""; let total = 0;
     window.currentCart.forEach(item => {
         const lineTotal = item.qty * item.price; total += lineTotal;
+        const discBadge = (item.volumeDiscountPerUnit > 0)
+            ? `<div style="font-size:11px; color:#27ae60; font-weight:bold; margin-top:2px;">🏷️ Grosir -Rp ${item.volumeDiscountPerUnit.toLocaleString('id-ID')}/item</div>`
+            : "";
         container.innerHTML += `
         <div class="cart-item" style="display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px dashed #ccc;">
-            <div style="flex:1; font-weight:bold; font-size:14px;">${item.name}</div>
+            <div style="flex:1; font-weight:bold; font-size:14px;">${item.name}${discBadge}</div>
             <div style="display:flex; align-items:center; gap:8px; margin: 0 10px;">
                 <button onclick="window.updateCartQty('${item.itemId}', -1)" style="width:30px; height:30px; background:#e74c3c; color:white; border:none; border-radius:6px; font-weight:bold; font-size:16px; cursor:pointer;">-</button>
                 <span style="font-weight:bold; min-width:25px; text-align:center;">${item.qty}</span>
@@ -2019,16 +2083,20 @@ window.buildEscPosReceipt = async function(orderId, order, deposit, debt, payMet
     
     receipt += "-".repeat(32) + "\n";
 
+    let volDiscSaving = 0;
     order.items.forEach(item => { 
-        const lineTotal = (item.qty * item.originalPrice).toLocaleString('id-ID'); 
+        let unitP = (item.price !== undefined) ? Number(item.price) : Number(item.originalPrice);
+        let origP = (item.originalPrice !== undefined) ? Number(item.originalPrice) : unitP;
+        if (origP > unitP) volDiscSaving += (origP - unitP) * item.qty;
+        const lineTotal = (item.qty * unitP).toLocaleString('id-ID'); 
         receipt += window.formatLine(`${item.qty}x ${item.name}`, lineTotal, false); 
     });
 
     receipt += "-".repeat(32) + "\n";
     receipt += window.formatLine("Subtotal:", "Rp " + order.subtotal.toLocaleString('id-ID'), false);
     
-    if ((order.discounts || 0) > 0 || (order.freeAmount || 0) > 0) {
-        let hemat = (order.discounts || 0) + (order.freeAmount || 0);
+    if ((order.discounts || 0) > 0 || (order.freeAmount || 0) > 0 || volDiscSaving > 0) {
+        let hemat = Math.max((order.discounts || 0), (order.freeAmount || 0)) + volDiscSaving;
         receipt += "\n" + centerAlign + boldOn + "*".repeat(32) + "\n";
         receipt += `** ANDA HEMAT Rp ${hemat.toLocaleString('id-ID')} **\n`;
         receipt += "*".repeat(32) + "\n" + normalText + boldOff + leftAlign;
@@ -2386,7 +2454,7 @@ window.showOrderDetail = function(orderId) {
         if (o.customerAddress) html += `<strong>Alamat:</strong> ${o.customerAddress}<br>`;
         if (o.notes) html += `<strong>Catatan:</strong> ${o.notes}<br>`;
         html += `<hr style="border-top:1px dashed #ccc; margin:10px 0;">`;
-        if (o.items && o.items.length > 0) { o.items.forEach(i => { html += `<div style="display:flex; justify-content:space-between;"><span>${i.qty}x ${i.name}</span><span>Rp ${(i.qty * i.originalPrice).toLocaleString('id-ID')}</span></div>`; });
+        if (o.items && o.items.length > 0) { o.items.forEach(i => { let unitP = (i.price !== undefined) ? i.price : i.originalPrice; html += `<div style="display:flex; justify-content:space-between;"><span>${i.qty}x ${i.name}</span><span>Rp ${(i.qty * unitP).toLocaleString('id-ID')}</span></div>`; });
         } else { html += `<div style="color:#7f8c8d; font-style:italic;">Detail item tidak tersedia. Subtotal: Rp ${o.subtotal.toLocaleString('id-ID')}</div>`; }
         html += `<hr style="border-top:1px dashed #ccc; margin:10px 0;"><div style="display:flex; justify-content:space-between;"><span><strong>Diskon / Gratis:</strong></span><span style="color:#27ae60;">-Rp ${(o.discounts || o.freeAmount || 0).toLocaleString('id-ID')}</span></div><div style="display:flex; justify-content:space-between; font-size:16px;"><span><strong>Total Akhir:</strong></span><span><strong>Rp ${o.grandTotal.toLocaleString('id-ID')}</strong></span></div>`;
         if ((o.debtAmount || 0) > 0) { html += `<div style="display:flex; justify-content:space-between; color:#c0392b; margin-top:5px;"><span><strong>Hutang:</strong></span><span><strong>Rp ${o.debtAmount.toLocaleString('id-ID')}</strong></span></div>`; }
@@ -4152,6 +4220,13 @@ window.onload = async () => {
         }
         window.loyaltyEnabled = String(settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
         window.historyHours = Number(settings["History_Hours"] || settings["Riwayat_Hours"]) || 24;
+        window.volumeDiscountRules = [];
+        for (const [k, v] of Object.entries(settings)) {
+            let uk = String(k).toUpperCase().replace(/\s+/g, '');
+            if (uk.includes("VOLUMEDISCOUNT") || uk.includes("VOLUME_DISCOUNT") || uk.includes("DISKONGROSIR")) {
+                window.parseVolumeDiscountSetting(v);
+            }
+        }
     }
 
     await window.checkAutoCloseShifts(); 
