@@ -186,32 +186,36 @@ window.forceCloseShift = async function(shift) {
     let tCust = 0, tOrders = 0, tOmset = 0, tCash = 0, tQris = 0, tTransfer = 0, tFree = 0, tExpense = 0, tPiutangGiven = 0, tPiutangPaidCash = 0;
     let foodSummary = {};
     
-    const tx = window.db.transaction(["orders", "expense_categories", "shift_reports", "expenses", "bayar_piutang"], "readwrite");
-    const orders = await new Promise(r => tx.objectStore("orders").getAll().onsuccess = e => r(e.target.result));
-    const expenses = await new Promise(r => tx.objectStore("expenses").getAll().onsuccess = e => r(e.target.result));
-    const piutangs = await new Promise(r => tx.objectStore("bayar_piutang").getAll().onsuccess = e => r(e.target.result));
+    const tx = window.db.transaction(["orders", "expenses", "bayar_piutang"], "readonly");
+    const orders = await new Promise(r => tx.objectStore("orders").getAll().onsuccess = e => r(e.target.result || []));
+    const expenses = await new Promise(r => tx.objectStore("expenses").getAll().onsuccess = e => r(e.target.result || []));
+    const piutangs = await new Promise(r => tx.objectStore("bayar_piutang").getAll().onsuccess = e => r(e.target.result || []));
     
     orders.filter(o => o.shiftId === shift.shiftId && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending").forEach(o => {
         tOrders++; if(o.customerPhone && o.customerPhone !== "-") tCust++;
         let pelC = Number(o.pelunasanCash) || 0;
         let pelQ = Number(o.pelunasanQris) || 0;
         let pelT = Number(o.pelunasanTransfer) || 0;
-        tOmset += o.grandTotal;
+        tOmset += (Number(o.grandTotal) || 0);
         tCash += Math.max(0, (Number(o.cashAmount) || 0) - pelC);
         tQris += Math.max(0, (Number(o.qrisAmount) || 0) - pelQ);
         tTransfer += Math.max(0, (Number(o.transferAmount) || 0) - pelT);
-        tFree += (o.freeAmount || 0);
-        tPiutangGiven += (o.debtAmount || 0);
+        tFree += (Number(o.freeAmount) || 0);
+        tPiutangGiven += (Number(o.debtAmount) || 0);
         if (o.items) o.items.forEach(i => { 
-            let key = i.itemId || i.name;
+            let key = i.name || i.itemId;
             if(!foodSummary[key]) foodSummary[key] = { name: i.name, qty: 0, nominal: 0 }; 
-            foodSummary[key].qty += i.qty; 
-            foodSummary[key].nominal += (i.qty * (i.price || i.originalPrice || 0)); 
+            foodSummary[key].qty += (Number(i.qty) || 0); 
+            foodSummary[key].nominal += ((Number(i.qty) || 0) * (Number(i.price || i.originalPrice) || 0)); 
         });
     });
     
-    expenses.filter(ex => ex.shiftId === shift.shiftId && ex.status === "Active").forEach(ex => { tExpense += (ex.amount || 0); });
-    piutangs.filter(bp => bp.shiftId === shift.shiftId).forEach(bp => { tPiutangPaidCash += (bp.cashAmount || 0); });
+    expenses.filter(ex => ex.shiftId === shift.shiftId && ex.status === "Active").forEach(ex => { tExpense += (Number(ex.amount) || 0); });
+    piutangs.filter(bp => bp.shiftId === shift.shiftId).forEach(bp => {
+        tPiutangPaidCash += (Number(bp.cashAmount) || 0);
+        tQris += (Number(bp.qrisAmount) || 0);
+        tTransfer += (Number(bp.transferAmount) || 0);
+    });
     
     // --- NEW: IGNORE EMPTY SHIFTS AND AUTO CLOCK OUT ---
     const hasActivity = tOrders > 0 || tExpense > 0 || tPiutangGiven > 0 || tPiutangPaidCash > 0;
@@ -640,7 +644,7 @@ window.syncBackgroundData = async function() {
         const res = await fetch(url, { method: "GET", redirect: "follow" });
         const result = await res.json();
         if (result.status === "Success") {
-            const tx = window.db.transaction(["orders", "expense_categories", "shift_reports", "expenses"], "readwrite");
+            const tx = window.db.transaction(["orders", "expense_categories", "shift_reports", "expenses", "bayar_piutang"], "readwrite");
             
             if (result.data.outletStocks) window.outletStocks = result.data.outletStocks;
             
@@ -650,16 +654,20 @@ window.syncBackgroundData = async function() {
                     let req = ordStore.get(o.orderId);
                     req.onsuccess = (e) => {
                         let existing = e.target.result;
-                        // 🔥 Protect local orders that are Pending, Syncing, or already marked Terkirim locally!
                         if (!existing) {
                             ordStore.put(o);
                         } else {
-                            // 🔄 Ganti bagian pemeriksaan di syncBackgroundData menjadi:
                             let isLocalUnsynced = (existing.syncStatus === "Pending" || existing.syncStatus === "Syncing");
-                            let isAlreadyDeliveredLocally = existing && String(existing.deliveryStatus || "").startsWith("Terkirim");
+                            let isAlreadyDeliveredLocally = String(existing.deliveryStatus || "").startsWith("Terkirim") && o.deliveryStatus === "Pending";
                             let isDebtReducedLocally = (existing.debtAmount !== undefined && o.debtAmount !== undefined && existing.debtAmount < o.debtAmount);
                             
                             if (!isLocalUnsynced && !isAlreadyDeliveredLocally && !isDebtReducedLocally) {
+                                // Pertahankan shiftId & metadata lokal agar perhitungan shift tidak kehilangan jejak
+                                o.shiftId = existing.shiftId || o.shiftId;
+                                o.notes = existing.notes || o.notes;
+                                o.pelunasanCash = Math.max(Number(o.pelunasanCash) || 0, Number(existing.pelunasanCash) || 0);
+                                o.pelunasanQris = Math.max(Number(o.pelunasanQris) || 0, Number(existing.pelunasanQris) || 0);
+                                o.pelunasanTransfer = Math.max(Number(o.pelunasanTransfer) || 0, Number(existing.pelunasanTransfer) || 0);
                                 ordStore.put(o);
                             }
                         }
@@ -667,7 +675,7 @@ window.syncBackgroundData = async function() {
                 });
             }
             
-            if(result.data.expenseCategories) {
+            if (result.data.expenseCategories) {
                 const expCatStore = tx.objectStore("expense_categories"); expCatStore.clear(); 
                 result.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
             }
@@ -678,7 +686,10 @@ window.syncBackgroundData = async function() {
                     let req = expStore.get(ex.expenseId);
                     req.onsuccess = (e) => {
                         let existing = e.target.result;
-                        if (!existing || existing.syncStatus !== "Pending") { expStore.put(ex); }
+                        if (!existing || existing.syncStatus !== "Pending") {
+                            if (existing && existing.shiftId) ex.shiftId = existing.shiftId;
+                            expStore.put(ex);
+                        }
                     };
                 });
             }
@@ -689,14 +700,26 @@ window.syncBackgroundData = async function() {
                     let req = bpStore.get(bp.payId);
                     req.onsuccess = (e) => {
                         let existing = e.target.result;
-                        if (!existing || existing.syncStatus !== "Pending") { bpStore.put(bp); }
+                        if (!existing || existing.syncStatus !== "Pending") {
+                            if (existing && existing.shiftId) bp.shiftId = existing.shiftId;
+                            bpStore.put(bp);
+                        }
                     };
                 });
             }
 
             if (result.data.shiftReports) {
-                const srStore = tx.objectStore("shift_reports"); srStore.clear();
-                result.data.shiftReports.forEach(sr => srStore.put(sr));
+                const srStore = tx.objectStore("shift_reports");
+                result.data.shiftReports.forEach(sr => {
+                    let req = srStore.get(sr.shiftId);
+                    req.onsuccess = (e) => {
+                        let existing = e.target.result;
+                        // Jangan timpa laporan shift lokal yang masih berstatus Pending
+                        if (!existing || existing.syncStatus !== "Pending") {
+                            srStore.put(sr);
+                        }
+                    };
+                });
             }
 
             if (result.data.authStatuses) window.processServerUpdates(result.data.authStatuses);
@@ -2501,7 +2524,7 @@ window.submitRemoteVoid = function() {
         const item = e.target.result; if (type === 'orders') item.orderStatus = "Void Pending"; else item.status = "Void Pending";
         window.db.transaction([storeName], "readwrite").objectStore(storeName).put(item); window.renderHistoryList(type); 
     };
-    window.db.transaction(["void_requests"], "readwrite").objectStore("void_requests").add({ id: id, type: type, status: "Void Pending", authName: "Menunggu" });
+    window.db.transaction(["void_requests"], "readwrite").objectStore("void_requests").put({ id: id, type: type, status: "Void Pending", authName: "Menunggu" });
     document.getElementById("admin-void-modal").classList.add("hidden"); window.runBackgroundSync(); alert("Request Pembatalan dikirim ke Admin.");
 }
 
@@ -2533,7 +2556,7 @@ window.confirmAdminVoid = async function() {
                     else { item.status = "Voided"; item.voidAuth = authName; }
                     item.syncStatus = "Pending"; window.db.transaction([storeName], "readwrite").objectStore(storeName).put(item); window.renderHistoryList(type);
                 };
-                window.db.transaction(["void_requests"], "readwrite").objectStore("void_requests").add({ id: id, type: type, status: "Voided", authName: authName });
+                window.db.transaction(["void_requests"], "readwrite").objectStore("void_requests").put({ id: id, type: type, status: "Voided", authName: authName });
                 document.getElementById("admin-void-modal").classList.add("hidden"); window.runBackgroundSync(); alert("Transaksi langsung Dibatalkan oleh: " + authName);
             } else { alert("PIN Salah atau Anda tidak memiliki akses Admin."); }
         };
@@ -2802,103 +2825,6 @@ window.submitNewMember = async function() {
     }
 };
 
-window.fallbackLocalShiftReport = function() {
-    const today = window.getWibDate().split(" ")[0];
-    window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (ev) => {
-        let pendingOuts = ev.target.result.filter(l => l.date === today && !l.clockOut && l.staffName !== window.currentCashier);
-        let currentHour = new Date(window.getWibDate().replace(' ', 'T')).getHours();
-        if (pendingOuts.length > 0) {
-            let msg = "Terdapat staff yang belum Clock-Out:\n";
-            pendingOuts.forEach(p => msg += `- ${p.staffName}\n`);
-            if (currentHour >= 20) {
-                alert(msg + "\nKarena sudah lewat jam 20:00, sistem otomatis melakukan Clock-Out untuk mereka sekarang.");
-                pendingOuts.forEach(p => window.clockOutStaff(p.logId, window.getWibDate()));
-            } else {
-                let forceOut = prompt(msg + "\nMasukkan waktu Clock-Out manual (HH:MM) atau biarkan kosong jika masih bekerja:", "");
-                if (forceOut && forceOut.includes(":")) {
-                    pendingOuts.forEach(p => window.clockOutStaff(p.logId, `${today} ${forceOut}:00`));
-                }
-            }
-        }
-
-        setTimeout(() => {
-            let tCust = 0, tOrders = 0, tOmset = 0, tCash = 0, tQris = 0, tTransfer = 0, tFree = 0, tExpense = 0, tPiutangGiven = 0, tPiutangPaidCash = 0;
-            let foodSummary = {};
-            document.getElementById("meter-water").value = "";
-
-            const isSameDayAndCashier = (recordTs, recordCashier, recordOutlet, recordShiftId) => {
-                if (recordShiftId && window.currentShiftId && recordShiftId === window.currentShiftId) return true;
-                if (recordOutlet && window.currentOutlet && recordOutlet !== window.currentOutlet) return false;
-                if (recordCashier && window.currentCashier && recordCashier !== window.currentCashier) return false;
-                let ms = window.parseSafeTimeMs ? window.parseSafeTimeMs(recordTs) : new Date(recordTs).getTime();
-                if (!ms) return false;
-                let d = new Date(ms + (new Date().getTimezoneOffset() * 60000) + (3600000 * 7));
-                let pad = n => n < 10 ? '0' + n : n;
-                let dStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-                return dStr === today;
-            };
-            
-            window.db.transaction(["orders", "expenses", "bayar_piutang"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-                const validOrders = (e.target.result || []).filter(o => o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && isSameDayAndCashier(o.timestamp, o.cashier, o.outlet, o.shiftId));
-                validOrders.forEach(o => {
-                    tOrders++; if(o.customerPhone && o.customerPhone !== "-") tCust++; tOmset += (Number(o.grandTotal) || 0);
-                    tCash += (Number(o.cashAmount) || 0); tQris += (Number(o.qrisAmount) || 0); tTransfer += (Number(o.transferAmount) || 0); tFree += (Number(o.freeAmount) || 0); 
-                    tPiutangGiven += (Number(o.debtAmount) || 0);
-                    if (o.items && o.items.length > 0) {
-                        o.items.forEach(i => { 
-                            let key = i.name || i.itemId;
-                            if(!foodSummary[key]) foodSummary[key] = { name: i.name, qty: 0, nominal: 0 }; 
-                            foodSummary[key].qty += (Number(i.qty) || 0);
-                            foodSummary[key].nominal += ((Number(i.qty) || 0) * (Number(i.price || i.originalPrice) || 0)); 
-                        });
-                    }
-                });
-                
-                window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (ex) => {
-                    const shiftExpenses = (ex.target.result || []).filter(exp => exp.status === "Active" && isSameDayAndCashier(exp.timestamp, exp.cashier, exp.outlet, exp.shiftId));
-                    shiftExpenses.forEach(exp => { tExpense += (Number(exp.amount) || 0); });
-                    window.db.transaction(["bayar_piutang"], "readonly").objectStore("bayar_piutang").getAll().onsuccess = (bpRes) => {
-                        const shiftPiutangs = (bpRes.target.result || []).filter(bp => isSameDayAndCashier(bp.timestamp, bp.cashier, bp.outlet, bp.shiftId));
-                        shiftPiutangs.forEach(bp => {
-                            tPiutangPaidCash += (Number(bp.cashAmount) || 0);
-                            tQris += (Number(bp.qrisAmount) || 0);
-                            tTransfer += (Number(bp.transferAmount) || 0);
-                        });
-                        
-                        window.calculateLiveDrawer((liveDrawer) => {
-                            document.getElementById("sr-orders").innerText = tOrders; document.getElementById("sr-customers").innerText = tCust; document.getElementById("sr-omset").innerText = `Rp ${tOmset.toLocaleString('id-ID')}`;
-                            document.getElementById("sr-cash").innerText = `Rp ${tCash.toLocaleString('id-ID')}`; document.getElementById("sr-qris").innerText = `Rp ${tQris.toLocaleString('id-ID')}`; document.getElementById("sr-transfer").innerText = `Rp ${tTransfer.toLocaleString('id-ID')}`;
-                            document.getElementById("sr-free").innerText = `Rp ${tFree.toLocaleString('id-ID')}`; document.getElementById("sr-expense").innerText = `Rp ${tExpense.toLocaleString('id-ID')}`;
-                            document.getElementById("sr-piutang-given").innerText = `Rp ${tPiutangGiven.toLocaleString('id-ID')}`; document.getElementById("sr-piutang-paid").innerText = `Rp ${tPiutangPaidCash.toLocaleString('id-ID')}`;
-                            document.getElementById("sr-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`; 
-                            
-                            let itemsHtml = ""; 
-                            for (const [key, val] of Object.entries(foodSummary || {})) { 
-                                let qty = typeof val === 'object' ? val.qty : val;
-                                let name = typeof val === 'object' && val.name ? val.name : key;
-                                itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; 
-                            }
-                            let itemsContainer = document.getElementById("sr-items-list"); if(itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual.</div>";
-                            
-                            document.getElementById("shift-report-modal").classList.remove("hidden");
-                            window.currentShiftData = { shiftId: window.currentShiftId, loginTime: window.currentLoginTime, totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree, totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, logoutTime: window.getWibDate() };
-
-                            let btnPrintHist = document.getElementById("btn-print-history"); 
-                            if (btnPrintHist) { 
-                                btnPrintHist.classList.remove("hidden"); 
-                                btnPrintHist.disabled = false;
-                                btnPrintHist.innerText = "🖨️ Cetak Laporan";
-                                btnPrintHist.style.background = "#2980b9";
-                                btnPrintHist.onclick = window.printShiftReport; 
-                            }
-                        });
-                    };
-                };
-            };
-        }, 300);
-    };
-};
-
 window.openCurrentShiftReport = async function() {
     const today = window.getWibDate().split(" ")[0];
     
@@ -2933,13 +2859,19 @@ window.openCurrentShiftReport = async function() {
     let foodSummary = {};
     document.getElementById("meter-water").value = "";
 
+    const loginMs = window.currentLoginTime ? window.parseSafeTimeMs(window.currentLoginTime) : 0;
+    const loginBoundMs = loginMs > 0 ? (loginMs - 15 * 60 * 1000) : 0;
+
     const isSameDayAndCashier = (recordTs, recordCashier, recordOutlet, recordShiftId) => {
-        if (recordShiftId && window.currentShiftId && recordShiftId === window.currentShiftId) return true;
+        if (recordShiftId && window.currentShiftId) {
+            return recordShiftId === window.currentShiftId;
+        }
         if (recordOutlet && window.currentOutlet && recordOutlet !== window.currentOutlet) return false;
         if (recordCashier && window.currentCashier && recordCashier !== window.currentCashier) return false;
         let ms = window.parseSafeTimeMs ? window.parseSafeTimeMs(recordTs) : new Date(recordTs).getTime();
         if (!ms) return false;
-        let d = new Date(ms + (new Date().getTimezoneOffset() * 60000) + (3600000 * 7));
+        if (loginBoundMs > 0 && ms < loginBoundMs) return false;
+        let d = new Date(ms);
         let pad = n => n < 10 ? '0' + n : n;
         let dStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
         return dStr === today;
@@ -3049,6 +2981,8 @@ window.openCurrentShiftReport = async function() {
         }
     });
 };
+
+window.fallbackLocalShiftReport = window.openCurrentShiftReport;
 
 window.openShiftReport = window.openCurrentShiftReport; 
 
