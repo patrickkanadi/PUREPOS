@@ -186,14 +186,21 @@ window.forceCloseShift = async function(shift) {
     let tCust = 0, tOrders = 0, tOmset = 0, tCash = 0, tQris = 0, tTransfer = 0, tFree = 0, tExpense = 0, tPiutangGiven = 0, tPiutangPaidCash = 0;
     let foodSummary = {};
     
-    const tx = window.db.transaction(["orders", "expenses", "bayar_piutang"], "readonly");
+    const tx = window.db.transaction(["orders", "expense_categories", "shift_reports", "expenses", "bayar_piutang"], "readwrite");
     const orders = await new Promise(r => tx.objectStore("orders").getAll().onsuccess = e => r(e.target.result));
     const expenses = await new Promise(r => tx.objectStore("expenses").getAll().onsuccess = e => r(e.target.result));
     const piutangs = await new Promise(r => tx.objectStore("bayar_piutang").getAll().onsuccess = e => r(e.target.result));
     
     orders.filter(o => o.shiftId === shift.shiftId && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending").forEach(o => {
         tOrders++; if(o.customerPhone && o.customerPhone !== "-") tCust++;
-        tOmset += o.grandTotal; tCash += (o.cashAmount || 0); tQris += (o.qrisAmount || 0); tTransfer += (o.transferAmount || 0); tFree += (o.freeAmount || 0);
+        let pelC = Number(o.pelunasanCash) || 0;
+        let pelQ = Number(o.pelunasanQris) || 0;
+        let pelT = Number(o.pelunasanTransfer) || 0;
+        tOmset += o.grandTotal;
+        tCash += Math.max(0, (Number(o.cashAmount) || 0) - pelC);
+        tQris += Math.max(0, (Number(o.qrisAmount) || 0) - pelQ);
+        tTransfer += Math.max(0, (Number(o.transferAmount) || 0) - pelT);
+        tFree += (o.freeAmount || 0);
         tPiutangGiven += (o.debtAmount || 0);
         if (o.items) o.items.forEach(i => { 
             let key = i.itemId || i.name;
@@ -672,6 +679,17 @@ window.syncBackgroundData = async function() {
                     req.onsuccess = (e) => {
                         let existing = e.target.result;
                         if (!existing || existing.syncStatus !== "Pending") { expStore.put(ex); }
+                    };
+                });
+            }
+
+            if (result.data.activePiutangPayments) {
+                const bpStore = tx.objectStore("bayar_piutang");
+                result.data.activePiutangPayments.forEach(bp => {
+                    let req = bpStore.get(bp.payId);
+                    req.onsuccess = (e) => {
+                        let existing = e.target.result;
+                        if (!existing || existing.syncStatus !== "Pending") { bpStore.put(bp); }
                     };
                 });
             }
@@ -2628,10 +2646,15 @@ window.calculateLiveDrawer = function(callback) {
     let expReq = tx.objectStore("expenses").getAll(); let bpReq = tx.objectStore("bayar_piutang").getAll();
     
     tx.oncomplete = () => {
-        ordersReq.result.forEach(o => { if (o.syncStatus === "Pending" && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending") liveDrawer += (o.cashAmount || 0); });
-        dropReq.result.forEach(d => { if (d.syncStatus === "Pending") liveDrawer -= (d.toAdmin + d.toBank); });
-        expReq.result.forEach(e => { if (e.syncStatus === "Pending" && e.status === "Active") liveDrawer -= (e.amount || 0); });
-        bpReq.result.forEach(bp => { if (bp.syncStatus === "Pending") liveDrawer += (bp.cashAmount || 0); });
+        ordersReq.result.forEach(o => {
+            if ((o.syncStatus === "Pending" || o.syncStatus === "Syncing") && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending") {
+                let checkoutCash = Math.max(0, (Number(o.cashAmount) || 0) - (Number(o.pelunasanCash) || 0));
+                liveDrawer += checkoutCash;
+            }
+        });
+        dropReq.result.forEach(d => { if (d.syncStatus === "Pending") liveDrawer -= ((Number(d.toAdmin) || 0) + (Number(d.toBank) || 0)); });
+        expReq.result.forEach(e => { if (e.syncStatus === "Pending" && e.status === "Active") liveDrawer -= (Number(e.amount) || 0); });
+        bpReq.result.forEach(bp => { if (bp.syncStatus === "Pending") liveDrawer += ((Number(bp.cashAmount) || 0) + (Number(bp.tipAmount) || 0)); });
         callback(liveDrawer);
     };
 }
@@ -2897,7 +2920,15 @@ window.openCurrentShiftReport = async function() {
         }
     }
 
-    // 2. Hitung Laporan Shift murni dari database lokal (Sumber Kebenaran Kasir)
+    // Jika sedang online, dorong antrean lokal & tarik Saldo_Laci + status Void terbaru terlebih dahulu
+    if (navigator.onLine) {
+        try {
+            await window.drainSyncQueue();
+            await window.syncBackgroundData();
+        } catch (e) {}
+    }
+
+    // 2. Hitung Laporan Shift dari database lokal yang sudah sinkron 100%
     let tCust = 0, tOrders = 0, tOmset = 0, tCash = 0, tQris = 0, tTransfer = 0, tFree = 0, tExpense = 0, tPiutangGiven = 0, tPiutangPaidCash = 0;
     let foodSummary = {};
     document.getElementById("meter-water").value = "";
@@ -2925,10 +2956,14 @@ window.openCurrentShiftReport = async function() {
     validOrders.forEach(o => {
         tOrders++;
         if (o.customerPhone && o.customerPhone !== "-") tCust++;
+        let pelC = Number(o.pelunasanCash) || 0;
+        let pelQ = Number(o.pelunasanQris) || 0;
+        let pelT = Number(o.pelunasanTransfer) || 0;
+
         tOmset += (Number(o.grandTotal) || 0);
-        tCash += (Number(o.cashAmount) || 0);
-        tQris += (Number(o.qrisAmount) || 0);
-        tTransfer += (Number(o.transferAmount) || 0);
+        tCash += Math.max(0, (Number(o.cashAmount) || 0) - pelC);
+        tQris += Math.max(0, (Number(o.qrisAmount) || 0) - pelQ);
+        tTransfer += Math.max(0, (Number(o.transferAmount) || 0) - pelT);
         tFree += (Number(o.freeAmount) || 0);
         tPiutangGiven += (Number(o.debtAmount) || 0);
 
@@ -3090,14 +3125,22 @@ window.executeFinalLogout = async function(netCash) {
         totalExpenses: data.totalExpenses, netCash: netCash, foodSummary: data.foodSummary, meterWater: data.meterWater, outlet: window.currentOutlet, syncStatus: "Pending", piutangGiven: data.piutangGiven, piutangPaid: data.piutangPaid
     };
 
-    window.db.transaction(["local_shift_history"], "readwrite").objectStore("local_shift_history").add(shiftPayload);
-    window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").add(shiftPayload);
-    window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(window.currentPin); 
-    
-    // Clear sticky login
-    localStorage.removeItem("activePosPin");
+    let overlay = document.getElementById("sync-lock-overlay");
+    if (overlay) {
+        overlay.style.display = "flex";
+        const descEl = document.getElementById("sync-lock-desc");
+        if (descEl) descEl.innerText = "Menyimpan Laporan Shift Akhir ke Google Sheets...";
+    }
 
-    const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
+    // Gunakan .put() agar tidak pernah terjadi ConstraintError jika dicoba ulang
+    await new Promise(res => {
+        let tx = window.db.transaction(["local_shift_history", "shift_reports"], "readwrite");
+        tx.objectStore("local_shift_history").put(shiftPayload);
+        tx.objectStore("shift_reports").put(shiftPayload);
+        tx.oncomplete = res;
+    });
+
+    const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result || []));
     const activeLog = attendances.find(a => a.staffName === window.currentCashier && !a.clockOut);
     
     if (activeLog) {
@@ -3105,31 +3148,49 @@ window.executeFinalLogout = async function(netCash) {
         activeLog.syncStatus = "OutPending";
         window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(activeLog);
         try {
-            await fetch(API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) });
+            let rAtt = await fetch(API_URL, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) });
+            if ((await rAtt.json()).status === "Success") {
+                activeLog.syncStatus = "Synced";
+                window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(activeLog);
+            }
         } catch(e) {}
     }
 
-    // Kirim Laporan Shift & pastikan server membalas "Success" sebelum reload
+    // Kirim Laporan Shift dengan 3x percobaan otomatis jika sinyal sempat goyang
     let syncSuccess = false;
-    try {
-        let r = await fetch(API_URL, {
-            method: "POST", 
-            redirect: "follow",  
-            headers: { "Content-Type": "text/plain;charset=utf-8" }, 
-            body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) 
-        });
-        let res = await r.json();
-        if (res.status === "Success") { 
-            syncSuccess = true;
-            window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(shiftPayload.shiftId); 
+    for (let tryCount = 1; tryCount <= 3; tryCount++) {
+        try {
+            let r = await fetch(API_URL, {
+                method: "POST", 
+                redirect: "follow",  
+                headers: { "Content-Type": "text/plain;charset=utf-8" }, 
+                body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) 
+            });
+            let res = await r.json();
+            if (res.status === "Success") { 
+                syncSuccess = true;
+                shiftPayload.syncStatus = "Synced";
+                window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").put(shiftPayload); 
+                break;
+            }
+        } catch(e) {
+            await new Promise(r => setTimeout(r, 800));
         }
-    } catch(e) {
-        console.error("Gagal mengirim laporan shift:", e);
     }
 
+    if (overlay) overlay.style.display = "none";
+
     if (!syncSuccess) {
-        return alert(`⚠️ PERINGATAN:\nLaporan Shift belum berhasil tersimpan ke Google Sheets karena gangguan jaringan.\nData shift aman di memori tablet, namun aplikasi TIDAK keluar otomatis agar kasir bisa memeriksa internet dan mencoba tombol Sync lagi.`);
+        return alert(`⚠️ PERINGATAN:\nLaporan Shift belum berhasil tersimpan ke Google Sheets karena gangguan jaringan.\n\nSesi Anda TIDAK ditutup agar Anda bisa memeriksa koneksi internet lalu menekan tombol Logout kembali.`);
     }
+
+    // Hapus sesi aktif HANYA setelah semua transaksi & Laporan Shift resmi masuk ke Google Sheets
+    await new Promise(res => {
+        let txDel = window.db.transaction(["active_shifts"], "readwrite");
+        txDel.objectStore("active_shifts").delete(window.currentPin);
+        txDel.oncomplete = res;
+    });
+    localStorage.removeItem("activePosPin");
 
     alert(`✅ Seluruh transaksi (${data.totalOrders} nota) dan Laporan Shift telah 100% tersimpan di Google Sheets!\n\nAplikasi akan keluar.`);
     window.location.reload();
@@ -3375,7 +3436,15 @@ window.runBackgroundSync = async function() {
             }
         }
         for (const bp of piutangs) {
-            if (bp.syncStatus === "Pending") { try { let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncBayarPiutang", data: bp }) }); if ((await r.json()).status === "Success") { window.db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").delete(bp.payId); } } catch(e) {} }
+            if (bp.syncStatus === "Pending") {
+                try {
+                    let r = await fetch(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncBayarPiutang", data: bp }) });
+                    if ((await r.json()).status === "Success") {
+                        bp.syncStatus = "Synced";
+                        window.db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").put(bp);
+                    }
+                } catch(e) {}
+            }
         }
         for (const drop of drops) {
             if (drop.syncStatus === "Pending") { try { let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncCashDrop", data: drop }) }); if ((await r.json()).status === "Success") { drop.syncStatus = "Synced"; window.db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(drop); } } catch(e) {} }
