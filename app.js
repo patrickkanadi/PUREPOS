@@ -1721,6 +1721,7 @@ window.submitPiutang = function() {
             let tx2 = window.db.transaction(["orders"], "readwrite");
             let store2 = tx2.objectStore("orders");
             
+            let remC = netC, remQ = netQ, remT = netT;
             for (let o of orders) {
                 if (remainingPay <= 0) break;
                 if (targetOrderId !== "" && o.orderId !== targetOrderId) continue; 
@@ -1728,38 +1729,35 @@ window.submitPiutang = function() {
                 let currentDebt = o.debtAmount || 0;
                 let payHere = Math.min(currentDebt, remainingPay);
                 remainingPay -= payHere;
+
+                let addC = 0, addQ = 0, addT = 0;
+                let tempPay = payHere;
+                if (remC > 0) { addC = Math.min(remC, tempPay); remC -= addC; tempPay -= addC; }
+                if (remQ > 0 && tempPay > 0) { addQ = Math.min(remQ, tempPay); remQ -= addQ; tempPay -= addQ; }
+                if (remT > 0 && tempPay > 0) { addT = Math.min(remT, tempPay); remT -= addT; tempPay -= addT; }
                 
                 o.debtAmount = currentDebt - payHere;
+                o.cashAmount = (Number(o.cashAmount) || 0) + addC;
+                o.qrisAmount = (Number(o.qrisAmount) || 0) + addQ;
+                o.transferAmount = (Number(o.transferAmount) || 0) + addT;
+                o.pelunasanCash = (Number(o.pelunasanCash) || 0) + addC;
+                o.pelunasanQris = (Number(o.pelunasanQris) || 0) + addQ;
+                o.pelunasanTransfer = (Number(o.pelunasanTransfer) || 0) + addT;
+
                 if (o.debtAmount === 0 && String(o.paymentMethod).includes("Piutang")) {
                     o.paymentMethod = String(o.paymentMethod).replace("Piutang", "Lunas ("+method+")");
                 } else if (o.debtAmount > 0 && String(o.paymentMethod).includes("Piutang")) {
                     if (!String(o.paymentMethod).includes("Sebagian")) o.paymentMethod = String(o.paymentMethod).replace("Piutang", "Piutang (Sebagian)");
                 }
-                // 🔥 JANGAN ubah o.syncStatus menjadi "Pending" jika sudah "Synced",
-                // karena syncBayarPiutang di server sudah meng-update tab Transactions secara langsung!
                 store2.put(o);
             }
             tx2.oncomplete = () => {
                 document.getElementById("piutang-modal").classList.add("hidden"); 
                 window.renderPiutangList(); 
                 if (window.updateLeftBadges) window.updateLeftBadges();
+                if (window.updateUnsyncedBadge) window.updateUnsyncedBadge();
                 
                 alert("Pembayaran Piutang Berhasil Dicatat!"); 
-
-                // 🔥 INSTANT DIRECT PUSH: Langsung kirim pelunasan ke server detik ini juga
-                // agar jika kasir langsung tutup shift, server sudah mencatat pelunasan ini!
-                if (navigator.onLine) {
-                    fetch(API_URL, {
-                        method: "POST",
-                        redirect: "follow",
-                        headers: { "Content-Type": "text/plain;charset=utf-8" },
-                        body: JSON.stringify({ action: "syncBayarPiutang", data: payload })
-                    }).then(r => r.json()).then(res => {
-                        if (res.status === "Success") {
-                            window.db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").delete(payload.payId);
-                        }
-                    }).catch(() => {});
-                }
                 
                 setTimeout(() => {
                     window.runBackgroundSync();
@@ -2663,15 +2661,26 @@ window.submitCashDrop = function() {
     let adminAmt = 0; let bankAmt = 0; if (destination === "Bank") bankAmt = pullAmount; else adminAmt = pullAmount;
     const finalNotes = `[Ke ${destination}] ${customNotes}`;
     
-    window.calculateLiveDrawer((liveAmount) => {
+    window.calculateLiveDrawer(async (liveAmount) => {
         const leftInDrawer = liveAmount - pullAmount;
         const payload = { dropId: "DRP-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId, toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: finalNotes, outlet: window.currentOutlet, syncStatus: "Pending" };
-        window.db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").add(payload);
+        
+        await new Promise(res => {
+            let tx = window.db.transaction(["cash_drops"], "readwrite");
+            tx.objectStore("cash_drops").add(payload);
+            tx.oncomplete = res;
+        });
+
         document.getElementById("cash-drop-modal").classList.add("hidden"); 
-        window.runBackgroundSync();
-        if (window.isLoggingOut) { window.executeFinalLogout(leftInDrawer); } else { alert(`Setor Uang Berhasil!\nTujuan: ${destination}\nSisa Tunai di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); }
+        
+        if (window.isLoggingOut) { 
+            window.executeFinalLogout(leftInDrawer); 
+        } else { 
+            window.runBackgroundSync();
+            alert(`Setor Uang Berhasil!\nTujuan: ${destination}\nSisa Tunai di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); 
+        }
     });
-}
+};
 
 
 window.restorePrinterConnection = async function() {
@@ -2868,115 +2877,142 @@ window.fallbackLocalShiftReport = function() {
 };
 
 window.openCurrentShiftReport = async function() {
-    if (!navigator.onLine) {
-        alert("⚠️ Anda sedang offline. Sistem akan menggunakan data lokal.");
-        return window.fallbackLocalShiftReport();
-    }
-
     const today = window.getWibDate().split(" ")[0];
-    window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (ev) => {
-        let pendingOuts = ev.target.result.filter(l => l.date === today && !l.clockOut && l.staffName !== window.currentCashier);
-        let currentHour = new Date(window.getWibDate().replace(' ', 'T')).getHours();
-        if (pendingOuts.length > 0) {
-            let msg = "Terdapat staff yang belum Clock-Out:\n";
-            pendingOuts.forEach(p => msg += `- ${p.staffName}\n`);
-            if (currentHour >= 20) {
-                alert(msg + "\nKarena sudah lewat jam 20:00, sistem otomatis melakukan Clock-Out untuk mereka sekarang.");
-                pendingOuts.forEach(p => window.clockOutStaff(p.logId, window.getWibDate()));
-            } else {
-                let forceOut = prompt(msg + "\nMasukkan waktu Clock-Out manual (HH:MM) atau biarkan kosong jika masih bekerja:", "");
-                if (forceOut && forceOut.includes(":")) {
-                    pendingOuts.forEach(p => window.clockOutStaff(p.logId, `${today} ${forceOut}:00`));
-                }
+    
+    // 1. Cek staff yang belum clock-out
+    const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = ev => res(ev.target.result || []));
+    let pendingOuts = attendances.filter(l => l.date === today && !l.clockOut && l.staffName !== window.currentCashier);
+    let currentHour = new Date(window.getWibDate().replace(' ', 'T')).getHours();
+    if (pendingOuts.length > 0) {
+        let msg = "Terdapat staff yang belum Clock-Out:\n";
+        pendingOuts.forEach(p => msg += `- ${p.staffName}\n`);
+        if (currentHour >= 20) {
+            alert(msg + "\nKarena sudah lewat jam 20:00, sistem otomatis melakukan Clock-Out untuk mereka sekarang.");
+            pendingOuts.forEach(p => window.clockOutStaff(p.logId, window.getWibDate()));
+        } else {
+            let forceOut = prompt(msg + "\nMasukkan waktu Clock-Out manual (HH:MM) atau biarkan kosong jika masih bekerja:", "");
+            if (forceOut && forceOut.includes(":")) {
+                pendingOuts.forEach(p => window.clockOutStaff(p.logId, `${today} ${forceOut}:00`));
             }
         }
+    }
 
-        setTimeout(async () => {
-            let meterContainer = document.getElementById("meter-water-container"); if(meterContainer) meterContainer.classList.remove("hidden");
-            let btnEndShift = document.getElementById("btn-end-shift"); if(btnEndShift) btnEndShift.classList.remove("hidden");
-            
-            // 🔥 Reset ALL fields cleanly before loading
-            document.getElementById("meter-water").value = "";
-            document.getElementById("sr-orders").innerText = "-"; 
-            document.getElementById("sr-customers").innerText = "-";
-            document.getElementById("sr-omset").innerText = "Rp -";
-            document.getElementById("sr-cash").innerText = "Rp -";
-            document.getElementById("sr-qris").innerText = "Rp -";
-            document.getElementById("sr-transfer").innerText = "Rp -";
-            document.getElementById("sr-piutang-paid").innerText = "Rp -";
-            document.getElementById("sr-free").innerText = "Rp -";
-            document.getElementById("sr-expense").innerText = "Rp -";
-            document.getElementById("sr-piutang-given").innerText = "Rp -";
-            document.getElementById("sr-net").innerText = "Rp -";
-            document.getElementById("sr-items-list").innerHTML = "<div style='padding:15px; text-align:center; color:#e67e22; font-weight:bold;'><i>⏳ Menyinkronkan & menarik data akurat dari Server...</i></div>";
-            
-            let btnPrintHist = document.getElementById("btn-print-history");
-            if (btnPrintHist) {
-                btnPrintHist.classList.remove("hidden");
-                btnPrintHist.disabled = true;
-                btnPrintHist.innerText = "⏳ Loading...";
-                btnPrintHist.style.background = "#95a5a6";
-            }
-            
-            document.getElementById("shift-report-modal").classList.remove("hidden");
-            
-            try {
-                // Ensure all in-flight orders are completely committed before querying the summary
-                await window.drainSyncQueue();
+    // 2. Hitung Laporan Shift murni dari database lokal (Sumber Kebenaran Kasir)
+    let tCust = 0, tOrders = 0, tOmset = 0, tCash = 0, tQris = 0, tTransfer = 0, tFree = 0, tExpense = 0, tPiutangGiven = 0, tPiutangPaidCash = 0;
+    let foodSummary = {};
+    document.getElementById("meter-water").value = "";
 
-                let url = API_URL + `?type=shiftSummary&outlet=${encodeURIComponent(window.currentOutlet)}&cashier=${encodeURIComponent(window.currentCashier)}&loginTime=${encodeURIComponent(window.currentLoginTime || "")}&shiftId=${encodeURIComponent(window.currentShiftId || "")}`;
-                let res = await fetch(url, { method: "GET", redirect: "follow" });
-                let result = await res.json();
-                
-                if (result.status === "Success" && result.data && result.data.shiftSummary) {
-                    let d = result.data.shiftSummary;
-                    // 🔥 Keep the cashier's real active shiftId (do NOT overwrite window.currentShiftId with a temporary preview ID!)
-                    let activeShiftId = window.currentShiftId || d.shiftId;
-                    let activeLoginTime = d.loginTime || window.currentLoginTime;
-                    
-                    window.currentShiftData = {
-                        shiftId: activeShiftId, loginTime: activeLoginTime, totalCustomers: d.totalCustomers || 0, 
-                        totalOrders: d.totalOrders || 0, totalOmset: d.totalOmset || 0, totalCash: d.totalCash || 0, 
-                        totalQris: d.totalQris || 0, totalTransfer: d.totalTransfer || 0, totalFree: d.totalFree || 0, 
-                        totalExpenses: d.totalExpenses || 0, netCash: d.netCash || 0, foodSummary: d.foodSummary || {}, 
-                        piutangGiven: d.piutangGiven || 0, piutangPaid: d.piutangPaid || 0, logoutTime: window.getWibDate()
-                    };
-                    
-                    document.getElementById("sr-orders").innerText = (d.totalOrders || 0); 
-                    document.getElementById("sr-customers").innerText = (d.totalCustomers || 0); 
-                    document.getElementById("sr-omset").innerText = `Rp ${(d.totalOmset || 0).toLocaleString('id-ID')}`;
-                    document.getElementById("sr-cash").innerText = `Rp ${(d.totalCash || 0).toLocaleString('id-ID')}`; 
-                    document.getElementById("sr-qris").innerText = `Rp ${(d.totalQris || 0).toLocaleString('id-ID')}`; 
-                    document.getElementById("sr-transfer").innerText = `Rp ${(d.totalTransfer || 0).toLocaleString('id-ID')}`;
-                    document.getElementById("sr-free").innerText = `Rp ${(d.totalFree || 0).toLocaleString('id-ID')}`; 
-                    document.getElementById("sr-expense").innerText = `Rp ${(d.totalExpenses || 0).toLocaleString('id-ID')}`;
-                    document.getElementById("sr-piutang-given").innerText = `Rp ${(d.piutangGiven || 0).toLocaleString('id-ID')}`; 
-                    document.getElementById("sr-piutang-paid").innerText = `Rp ${(d.piutangPaid || 0).toLocaleString('id-ID')}`;
-                    document.getElementById("sr-net").innerText = `Rp ${(d.netCash || 0).toLocaleString('id-ID')}`; 
-                    
-                    let itemsHtml = ""; 
-                    for (const [key, val] of Object.entries(d.foodSummary || {})) { 
-                        let qty = typeof val === 'object' ? val.qty : val;
-                        let name = typeof val === 'object' && val.name ? val.name : key;
-                        itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`; 
-                    }
-                    document.getElementById("sr-items-list").innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual hari ini.</div>";
-                    
-                    if (btnPrintHist) { 
-                        btnPrintHist.disabled = false;
-                        btnPrintHist.innerText = "🖨️ Cetak Laporan";
-                        btnPrintHist.style.background = "#2980b9";
-                        btnPrintHist.onclick = window.printShiftReport; 
-                    }
-                } else {
-                    window.fallbackLocalShiftReport();
-                }
-            } catch(e) {
-                console.error(e);
-                window.fallbackLocalShiftReport();
-            }
-        }, 300);
+    const isSameDayAndCashier = (recordTs, recordCashier, recordOutlet, recordShiftId) => {
+        if (recordShiftId && window.currentShiftId && recordShiftId === window.currentShiftId) return true;
+        if (recordOutlet && window.currentOutlet && recordOutlet !== window.currentOutlet) return false;
+        if (recordCashier && window.currentCashier && recordCashier !== window.currentCashier) return false;
+        let ms = window.parseSafeTimeMs ? window.parseSafeTimeMs(recordTs) : new Date(recordTs).getTime();
+        if (!ms) return false;
+        let d = new Date(ms + (new Date().getTimezoneOffset() * 60000) + (3600000 * 7));
+        let pad = n => n < 10 ? '0' + n : n;
+        let dStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+        return dStr === today;
     };
+
+    const tx = window.db.transaction(["orders", "expenses", "bayar_piutang"], "readonly");
+    const [allOrders, allExpenses, allPiutangs] = await Promise.all([
+        new Promise(r => tx.objectStore("orders").getAll().onsuccess = e => r(e.target.result || [])),
+        new Promise(r => tx.objectStore("expenses").getAll().onsuccess = e => r(e.target.result || [])),
+        new Promise(r => tx.objectStore("bayar_piutang").getAll().onsuccess = e => r(e.target.result || []))
+    ]);
+
+    const validOrders = allOrders.filter(o => o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && isSameDayAndCashier(o.timestamp, o.cashier, o.outlet, o.shiftId));
+    validOrders.forEach(o => {
+        tOrders++;
+        if (o.customerPhone && o.customerPhone !== "-") tCust++;
+        tOmset += (Number(o.grandTotal) || 0);
+        tCash += (Number(o.cashAmount) || 0);
+        tQris += (Number(o.qrisAmount) || 0);
+        tTransfer += (Number(o.transferAmount) || 0);
+        tFree += (Number(o.freeAmount) || 0);
+        tPiutangGiven += (Number(o.debtAmount) || 0);
+
+        if (o.items && o.items.length > 0) {
+            o.items.forEach(i => {
+                let key = i.name || i.itemId;
+                if (!foodSummary[key]) foodSummary[key] = { name: i.name, qty: 0, nominal: 0 };
+                foodSummary[key].qty += (Number(i.qty) || 0);
+                foodSummary[key].nominal += ((Number(i.qty) || 0) * (Number(i.price || i.originalPrice) || 0));
+            });
+        }
+    });
+
+    const shiftExpenses = allExpenses.filter(exp => exp.status === "Active" && isSameDayAndCashier(exp.timestamp, exp.cashier, exp.outlet, exp.shiftId));
+    shiftExpenses.forEach(exp => { tExpense += (Number(exp.amount) || 0); });
+
+    const shiftPiutangs = allPiutangs.filter(bp => isSameDayAndCashier(bp.timestamp, bp.cashier, bp.outlet, bp.shiftId));
+    shiftPiutangs.forEach(bp => {
+        tPiutangPaidCash += (Number(bp.cashAmount) || 0);
+        tQris += (Number(bp.qrisAmount) || 0);
+        tTransfer += (Number(bp.transferAmount) || 0);
+    });
+
+    window.calculateLiveDrawer((liveDrawer) => {
+        document.getElementById("sr-orders").innerText = tOrders;
+        document.getElementById("sr-customers").innerText = tCust;
+        document.getElementById("sr-omset").innerText = `Rp ${tOmset.toLocaleString('id-ID')}`;
+        document.getElementById("sr-cash").innerText = `Rp ${tCash.toLocaleString('id-ID')}`;
+        document.getElementById("sr-qris").innerText = `Rp ${tQris.toLocaleString('id-ID')}`;
+        document.getElementById("sr-transfer").innerText = `Rp ${tTransfer.toLocaleString('id-ID')}`;
+        document.getElementById("sr-free").innerText = `Rp ${tFree.toLocaleString('id-ID')}`;
+        document.getElementById("sr-expense").innerText = `Rp ${tExpense.toLocaleString('id-ID')}`;
+        document.getElementById("sr-piutang-given").innerText = `Rp ${tPiutangGiven.toLocaleString('id-ID')}`;
+        document.getElementById("sr-piutang-paid").innerText = `Rp ${tPiutangPaidCash.toLocaleString('id-ID')}`;
+        document.getElementById("sr-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`;
+
+        let itemsHtml = "";
+        for (const [key, val] of Object.entries(foodSummary)) {
+            let qty = typeof val === 'object' ? val.qty : val;
+            let name = typeof val === 'object' && val.name ? val.name : key;
+            itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`;
+        }
+        let itemsContainer = document.getElementById("sr-items-list");
+        if (itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual hari ini.</div>";
+
+        let meterContainer = document.getElementById("meter-water-container");
+        if (meterContainer) meterContainer.classList.remove("hidden");
+        let btnEndShift = document.getElementById("btn-end-shift");
+        if (btnEndShift) btnEndShift.classList.remove("hidden");
+
+        let btnPrintHist = document.getElementById("btn-print-history");
+        if (btnPrintHist) {
+            btnPrintHist.classList.remove("hidden");
+            btnPrintHist.disabled = false;
+            btnPrintHist.innerText = "🖨️ Cetak Laporan";
+            btnPrintHist.style.background = "#2980b9";
+            btnPrintHist.onclick = window.printShiftReport;
+        }
+
+        window.currentShiftData = {
+            shiftId: window.currentShiftId,
+            loginTime: window.currentLoginTime,
+            totalCustomers: tCust,
+            totalOrders: tOrders,
+            totalOmset: tOmset,
+            totalCash: tCash,
+            totalQris: tQris,
+            totalTransfer: tTransfer,
+            totalFree: tFree,
+            totalExpenses: tExpense,
+            netCash: liveDrawer,
+            foodSummary: foodSummary,
+            piutangGiven: tPiutangGiven,
+            piutangPaid: tPiutangPaidCash,
+            logoutTime: window.getWibDate()
+        };
+
+        document.getElementById("shift-report-modal").classList.remove("hidden");
+
+        // Kirim transaksi lokal yang belum terkirim di latar belakang
+        if (navigator.onLine) {
+            window.runBackgroundSync();
+        }
+    });
 };
 
 window.openShiftReport = window.openCurrentShiftReport; 
@@ -3032,7 +3068,6 @@ window.initiateLogoutSequence = async function() {
 }
 
 window.executeFinalLogout = async function(netCash) { 
-    // 🔥 CEK ANTREAN TERAKHIR KALI: Pastikan setoran laci dan semua transaksi sudah habis
     if (!navigator.onLine) {
         let count = await window.getUnsyncedCount();
         return alert(`⛔ TIDAK BISA LOGOUT SAAT OFFLINE!\n\nTerdapat ${count} data lokal belum terkirim. Nyalakan koneksi internet agar data shift dan transaksi tidak hilang.`);
@@ -3045,6 +3080,10 @@ window.executeFinalLogout = async function(netCash) {
     }
 
     const data = window.currentShiftData;
+    if (!data) {
+        return alert("⚠️ Data shift belum siap. Silakan buka Laporan Shift terlebih dahulu.");
+    }
+
     const shiftPayload = {
         shiftId: window.currentShiftId, timestamp: window.getWibDate(), cashier: window.currentCashier, loginTime: window.currentLoginTime, logoutTime: window.getWibDate(), 
         totalCustomers: data.totalCustomers, totalOrders: data.totalOrders, totalOmset: data.totalOmset, totalCash: data.totalCash, totalQris: data.totalQris, totalTransfer: data.totalTransfer, totalFree: data.totalFree,
@@ -3065,10 +3104,13 @@ window.executeFinalLogout = async function(netCash) {
         activeLog.clockOut = window.getWibDate();
         activeLog.syncStatus = "OutPending";
         window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(activeLog);
-        fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) }).catch(()=>{});
+        try {
+            await fetch(API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) });
+        } catch(e) {}
     }
 
     // Kirim Laporan Shift & pastikan server membalas "Success" sebelum reload
+    let syncSuccess = false;
     try {
         let r = await fetch(API_URL, {
             method: "POST", 
@@ -3078,15 +3120,20 @@ window.executeFinalLogout = async function(netCash) {
         });
         let res = await r.json();
         if (res.status === "Success") { 
+            syncSuccess = true;
             window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(shiftPayload.shiftId); 
         }
     } catch(e) {
         console.error("Gagal mengirim laporan shift:", e);
     }
 
+    if (!syncSuccess) {
+        return alert(`⚠️ PERINGATAN:\nLaporan Shift belum berhasil tersimpan ke Google Sheets karena gangguan jaringan.\nData shift aman di memori tablet, namun aplikasi TIDAK keluar otomatis agar kasir bisa memeriksa internet dan mencoba tombol Sync lagi.`);
+    }
+
     alert(`✅ Seluruh transaksi (${data.totalOrders} nota) dan Laporan Shift telah 100% tersimpan di Google Sheets!\n\nAplikasi akan keluar.`);
     window.location.reload();
-}
+};
 
 window.lockScreen = function() { 
     localStorage.removeItem("activePosPin"); 
@@ -3188,7 +3235,7 @@ window.drainSyncQueueWithLock = async function() {
         overlay.style.left = "0";
         overlay.style.width = "100vw";
         overlay.style.height = "100vh";
-        overlay.style.background = "rgba(44, 62, 80, 0.92)";
+        overlay.style.background = "rgba(44, 62, 80, 0.95)";
         overlay.style.zIndex = "99999";
         overlay.style.display = "flex";
         overlay.style.flexDirection = "column";
@@ -3204,7 +3251,14 @@ window.drainSyncQueueWithLock = async function() {
     }
     overlay.style.display = "flex";
 
-    let maxAttempts = 25; // Maksimal coba kuras 25 kali (~40 detik)
+    // Tunggu jika ada background sync yang sedang berjalan
+    let waitLoops = 0;
+    while (window.isSyncing && waitLoops < 25) {
+        await new Promise(r => setTimeout(r, 200));
+        waitLoops++;
+    }
+
+    let maxAttempts = 25;
     let attempt = 0;
 
     while (attempt < maxAttempts) {
@@ -3215,7 +3269,7 @@ window.drainSyncQueueWithLock = async function() {
 
         if (count === 0) {
             overlay.style.display = "none";
-            await window.updateUnsyncedBadge();
+            if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
             return true;
         }
 
@@ -3224,13 +3278,17 @@ window.drainSyncQueueWithLock = async function() {
             return false;
         }
 
+        while (window.isSyncing) {
+            await new Promise(r => setTimeout(r, 200));
+        }
+
         await window.runBackgroundSync();
         await new Promise(r => setTimeout(r, 600));
     }
 
     let finalCount = await window.getUnsyncedCount();
     overlay.style.display = "none";
-    await window.updateUnsyncedBadge();
+    if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
     return finalCount === 0;
 };
 
