@@ -2564,37 +2564,75 @@ window.confirmAdminVoid = async function() {
 }
 
 window.processServerUpdates = function(authStatuses) {
-    const tx = window.db.transaction(["orders", "expenses"], "readwrite"); 
-    const ordStore = tx.objectStore("orders"); const expStore = tx.objectStore("expenses"); 
+    const tx = window.db.transaction(["orders", "expenses", "void_requests", "bayar_piutang"], "readwrite"); 
+    const ordStore = tx.objectStore("orders");
+    const expStore = tx.objectStore("expenses");
+    const voidStore = tx.objectStore("void_requests");
+    const bpStore = tx.objectStore("bayar_piutang");
     let uiNeedsRefresh = false;
 
-    ordStore.getAll().onsuccess = (e) => {
-        e.target.result.forEach(order => {
+    let voidsReq = voidStore.getAll();
+    let bpReq = bpStore.getAll();
+    let ordReq = ordStore.getAll();
+    let expReq = expStore.getAll();
+
+    tx.oncomplete = () => {
+        if (uiNeedsRefresh && !document.getElementById("history-modal").classList.contains("hidden")) {
+            window.renderHistoryList(window.currentHistoryTab || 'orders');
+        }
+    };
+
+    expReq.onsuccess = () => {
+        const pendingVoidIds = new Set((voidsReq.result || []).map(v => v.id));
+        const pendingBpPhones = new Set((bpReq.result || []).filter(b => b.syncStatus === "Pending").map(b => b.customerPhone));
+
+        (ordReq.result || []).forEach(order => {
+            if (order.syncStatus === "Pending" || order.syncStatus === "Syncing" || pendingVoidIds.has(order.orderId)) return;
             const remote = authStatuses.orders[order.orderId];
             if (remote) {
                 let changed = false;
-                if (remote.status === "Voided" && order.orderStatus !== "Voided") { order.orderStatus = "Voided"; changed = true; window.applyLocalVoidAftermath(order); } 
-                else if (remote.status !== "Void Pending" && remote.status !== "Voided" && order.orderStatus === "Void Pending") { order.orderStatus = remote.status; changed = true; }
+                if (remote.status === "Voided" && order.orderStatus !== "Voided") {
+                    order.orderStatus = "Voided";
+                    changed = true;
+                    window.applyLocalVoidAftermath(order);
+                } else if (remote.status !== "Void Pending" && remote.status !== "Voided" && order.orderStatus === "Void Pending" && String(remote.auth || "").includes("reject")) {
+                    order.orderStatus = remote.status;
+                    changed = true;
+                }
                 
-                if (remote.paymentMethod && order.paymentMethod !== remote.paymentMethod) { order.paymentMethod = remote.paymentMethod; changed = true; }
-                if (remote.debtAmount !== undefined && order.debtAmount !== remote.debtAmount) { order.debtAmount = remote.debtAmount; changed = true; }
+                // Jangan timpa piutang lokal yang sudah berkurang/lunas jika bayar_piutang masih mengantre
+                if (!pendingBpPhones.has(order.customerPhone)) {
+                    if (remote.debtAmount !== undefined && order.debtAmount !== remote.debtAmount && remote.debtAmount <= (order.debtAmount ?? Infinity)) {
+                        order.debtAmount = remote.debtAmount;
+                        changed = true;
+                    }
+                    if (remote.paymentMethod && order.paymentMethod !== remote.paymentMethod && remote.debtAmount <= (order.debtAmount ?? Infinity)) {
+                        order.paymentMethod = remote.paymentMethod;
+                        changed = true;
+                    }
+                }
                 
-                if(changed) { ordStore.put(order); uiNeedsRefresh = true; }
+                if (changed) { ordStore.put(order); uiNeedsRefresh = true; }
             }
         });
-        if (uiNeedsRefresh && !document.getElementById("history-modal").classList.contains("hidden")) window.renderHistoryList('orders');
-    };
-    expStore.getAll().onsuccess = (e) => {
-        e.target.result.forEach(exp => {
+
+        (expReq.result || []).forEach(exp => {
+            if (exp.syncStatus === "Pending" || pendingVoidIds.has(exp.expenseId)) return;
             const remote = authStatuses.expenses[exp.expenseId];
             if (remote) {
-                if (remote.status === "Voided" && exp.status !== "Voided") { exp.status = "Voided"; expStore.put(exp); uiNeedsRefresh = true; } 
-                else if (remote.status !== "Void Pending" && remote.status !== "Voided" && exp.status === "Void Pending") { exp.status = remote.status; expStore.put(exp); uiNeedsRefresh = true; }
+                if (remote.status === "Voided" && exp.status !== "Voided") {
+                    exp.status = "Voided";
+                    expStore.put(exp);
+                    uiNeedsRefresh = true;
+                } else if (remote.status !== "Void Pending" && remote.status !== "Voided" && exp.status === "Void Pending" && String(remote.auth || "").includes("reject")) {
+                    exp.status = remote.status;
+                    expStore.put(exp);
+                    uiNeedsRefresh = true;
+                }
             }
         });
-        if (uiNeedsRefresh && !document.getElementById("history-modal").classList.contains("hidden")) window.renderHistoryList('expenses');
     };
-}
+};
 
 window.applyLocalVoidAftermath = function(order) {
     const tx = window.db.transaction(["menu", "members"], "readwrite"); 
@@ -3005,20 +3043,38 @@ window.initiateLogoutSequence = async function() {
     
     const hasActivity = data.totalOrders > 0 || data.totalExpenses > 0 || data.piutangGiven > 0 || data.piutangPaid > 0;
     if (!hasActivity) {
-        window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(window.currentPin); 
-        
-        // 🔥 Clear sticky login
-        localStorage.removeItem("activePosPin");
-
-        const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
+        const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result || []));
         const activeLog = attendances.find(a => a.staffName === window.currentCashier && !a.clockOut);
         
         if (activeLog) {
             activeLog.clockOut = window.getWibDate();
             activeLog.syncStatus = "OutPending";
-            window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(activeLog);
-            if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) }).catch(()=>{});
+            await new Promise(res => {
+                let txAtt = window.db.transaction(["attendance"], "readwrite");
+                txAtt.objectStore("attendance").put(activeLog);
+                txAtt.oncomplete = res;
+            });
+            if (navigator.onLine) {
+                try {
+                    let rAtt = await fetch(API_URL, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) });
+                    if ((await rAtt.json()).status === "Success") {
+                        activeLog.syncStatus = "Synced";
+                        await new Promise(res => {
+                            let txAtt2 = window.db.transaction(["attendance"], "readwrite");
+                            txAtt2.objectStore("attendance").put(activeLog);
+                            txAtt2.oncomplete = res;
+                        });
+                    }
+                } catch(e) {}
+            }
         }
+
+        await new Promise(res => {
+            let txDel = window.db.transaction(["active_shifts"], "readwrite");
+            txDel.objectStore("active_shifts").delete(window.currentPin);
+            txDel.oncomplete = res;
+        });
+        localStorage.removeItem("activePosPin");
 
         alert("Shift kosong (tidak ada transaksi). Sesi diakhiri tanpa membuat laporan shift.");
         window.location.reload();
@@ -3053,6 +3109,9 @@ window.executeFinalLogout = async function(netCash) {
         return alert("⚠️ Data shift belum siap. Silakan buka Laporan Shift terlebih dahulu.");
     }
 
+    // Kunci flag isSyncing agar timer 25 detik tidak menyerobot saat pengiriman akhir
+    window.isSyncing = true;
+
     const shiftPayload = {
         shiftId: window.currentShiftId, timestamp: window.getWibDate(), cashier: window.currentCashier, loginTime: window.currentLoginTime, logoutTime: window.getWibDate(), 
         totalCustomers: data.totalCustomers, totalOrders: data.totalOrders, totalOmset: data.totalOmset, totalCash: data.totalCash, totalQris: data.totalQris, totalTransfer: data.totalTransfer, totalFree: data.totalFree,
@@ -3066,7 +3125,6 @@ window.executeFinalLogout = async function(netCash) {
         if (descEl) descEl.innerText = "Menyimpan Laporan Shift Akhir ke Google Sheets...";
     }
 
-    // Gunakan .put() agar tidak pernah terjadi ConstraintError jika dicoba ulang
     await new Promise(res => {
         let tx = window.db.transaction(["local_shift_history", "shift_reports"], "readwrite");
         tx.objectStore("local_shift_history").put(shiftPayload);
@@ -3080,12 +3138,20 @@ window.executeFinalLogout = async function(netCash) {
     if (activeLog) {
         activeLog.clockOut = window.getWibDate();
         activeLog.syncStatus = "OutPending";
-        window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(activeLog);
+        await new Promise(res => {
+            let txAtt = window.db.transaction(["attendance"], "readwrite");
+            txAtt.objectStore("attendance").put(activeLog);
+            txAtt.oncomplete = res;
+        });
         try {
             let rAtt = await fetch(API_URL, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) });
             if ((await rAtt.json()).status === "Success") {
                 activeLog.syncStatus = "Synced";
-                window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(activeLog);
+                await new Promise(res => {
+                    let txAtt2 = window.db.transaction(["attendance"], "readwrite");
+                    txAtt2.objectStore("attendance").put(activeLog);
+                    txAtt2.oncomplete = res;
+                });
             }
         } catch(e) {}
     }
@@ -3104,7 +3170,11 @@ window.executeFinalLogout = async function(netCash) {
             if (res.status === "Success") { 
                 syncSuccess = true;
                 shiftPayload.syncStatus = "Synced";
-                window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").put(shiftPayload); 
+                await new Promise(resolvePut => {
+                    let txSr = window.db.transaction(["shift_reports"], "readwrite");
+                    txSr.objectStore("shift_reports").put(shiftPayload);
+                    txSr.oncomplete = resolvePut;
+                });
                 break;
             }
         } catch(e) {
@@ -3115,6 +3185,7 @@ window.executeFinalLogout = async function(netCash) {
     if (overlay) overlay.style.display = "none";
 
     if (!syncSuccess) {
+        window.isSyncing = false;
         return alert(`⚠️ PERINGATAN:\nLaporan Shift belum berhasil tersimpan ke Google Sheets karena gangguan jaringan.\n\nSesi Anda TIDAK ditutup agar Anda bisa memeriksa koneksi internet lalu menekan tombol Logout kembali.`);
     }
 
@@ -3125,6 +3196,7 @@ window.executeFinalLogout = async function(netCash) {
         txDel.oncomplete = res;
     });
     localStorage.removeItem("activePosPin");
+    window.isSyncing = false;
 
     alert(`✅ Seluruh transaksi (${data.totalOrders} nota) dan Laporan Shift telah 100% tersimpan di Google Sheets!\n\nAplikasi akan keluar.`);
     window.location.reload();
@@ -3137,11 +3209,16 @@ window.lockScreen = function() {
 
 window.drainSyncQueue = async function() {
     let waitLoops = 0;
-    while (window.isSyncing && waitLoops < 20) {
+    while (window.isSyncing && waitLoops < 60) {
         await new Promise(r => setTimeout(r, 250));
         waitLoops++;
     }
     await window.runBackgroundSync();
+    let postLoops = 0;
+    while (window.isSyncing && postLoops < 60) {
+        await new Promise(r => setTimeout(r, 250));
+        postLoops++;
+    }
 };
 
 // =========================================================================
@@ -3287,9 +3364,14 @@ window.drainSyncQueueWithLock = async function() {
     return finalCount === 0;
 };
 
+window.syncPendingAgain = false;
 window.runBackgroundSync = async function() {
-    if (!navigator.onLine || window.isSyncing) return;
-    window.isSyncing = true; 
+    if (!navigator.onLine) return;
+    if (window.isSyncing) {
+        window.syncPendingAgain = true;
+        return;
+    }
+    window.isSyncing = true;
     
     // Grab the button and store its original state
     let syncBtn = document.getElementById("btn-sync");
@@ -3479,6 +3561,10 @@ window.runBackgroundSync = async function() {
     } finally { 
         window.isSyncing = false; 
         if (window.updateUnsyncedBadge) window.updateUnsyncedBadge();
+        if (window.syncPendingAgain && navigator.onLine) {
+            window.syncPendingAgain = false;
+            setTimeout(() => window.runBackgroundSync(), 200);
+        }
     }
 }
 
@@ -4058,12 +4144,14 @@ window.clockOutStaff = function(logId, manualTime = null) {
     let tx = window.db.transaction(["attendance"], "readwrite");
     tx.objectStore("attendance").get(logId).onsuccess = (e) => {
         let log = e.target.result;
+        if (!log) return;
         log.clockOut = manualTime || window.getWibDate();
         log.syncStatus = "OutPending";
         tx.objectStore("attendance").put(log);
-        
-        if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: log }) });
-        window.renderAbsensi(); window.runBackgroundSync();
+    };
+    tx.oncomplete = () => {
+        window.renderAbsensi();
+        window.runBackgroundSync();
     };
 }
 
