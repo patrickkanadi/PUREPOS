@@ -254,8 +254,8 @@ window.forceCloseShift = async function(shift) {
     };
 
     const txWrite = window.db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
-    txWrite.objectStore("local_shift_history").add(shiftPayload);
-    txWrite.objectStore("shift_reports").add(shiftPayload);
+    txWrite.objectStore("local_shift_history").put(shiftPayload);
+    txWrite.objectStore("shift_reports").put(shiftPayload);
     txWrite.objectStore("active_shifts").delete(shift.pin);
 }
 
