@@ -644,85 +644,98 @@ window.syncBackgroundData = async function() {
         const res = await fetch(url, { method: "GET", redirect: "follow" });
         const result = await res.json();
         if (result.status === "Success") {
-            const tx = window.db.transaction(["orders", "expense_categories", "shift_reports", "expenses", "bayar_piutang"], "readwrite");
-            
-            if (result.data.outletStocks) window.outletStocks = result.data.outletStocks;
-            
-            if (result.data.activeOrders) {
-                const ordStore = tx.objectStore("orders");
-                result.data.activeOrders.forEach(o => {
-                    let req = ordStore.get(o.orderId);
-                    req.onsuccess = (e) => {
-                        let existing = e.target.result;
-                        if (!existing) {
-                            ordStore.put(o);
-                        } else {
-                            let isLocalUnsynced = (existing.syncStatus === "Pending" || existing.syncStatus === "Syncing");
-                            let isAlreadyDeliveredLocally = String(existing.deliveryStatus || "").startsWith("Terkirim") && o.deliveryStatus === "Pending";
-                            let isDebtReducedLocally = (existing.debtAmount !== undefined && o.debtAmount !== undefined && existing.debtAmount < o.debtAmount);
-                            
-                            if (!isLocalUnsynced && !isAlreadyDeliveredLocally && !isDebtReducedLocally) {
-                                // Pertahankan shiftId & metadata lokal agar perhitungan shift tidak kehilangan jejak
-                                o.shiftId = existing.shiftId || o.shiftId;
-                                o.notes = existing.notes || o.notes;
-                                o.pelunasanCash = Math.max(Number(o.pelunasanCash) || 0, Number(existing.pelunasanCash) || 0);
-                                o.pelunasanQris = Math.max(Number(o.pelunasanQris) || 0, Number(existing.pelunasanQris) || 0);
-                                o.pelunasanTransfer = Math.max(Number(o.pelunasanTransfer) || 0, Number(existing.pelunasanTransfer) || 0);
+            const pendingVoidIds = await new Promise(r => {
+                try {
+                    let req = window.db.transaction(["void_requests"], "readonly").objectStore("void_requests").getAll();
+                    req.onsuccess = e => r(new Set((e.target.result || []).map(v => v.id)));
+                    req.onerror = () => r(new Set());
+                } catch(err) { r(new Set()); }
+            });
+
+            await new Promise((resolveTx) => {
+                const tx = window.db.transaction(["orders", "expense_categories", "shift_reports", "expenses", "bayar_piutang"], "readwrite");
+                tx.oncomplete = () => resolveTx();
+                tx.onerror = () => resolveTx();
+                
+                if (result.data.outletStocks) window.outletStocks = result.data.outletStocks;
+                
+                if (result.data.activeOrders) {
+                    const ordStore = tx.objectStore("orders");
+                    result.data.activeOrders.forEach(o => {
+                        let req = ordStore.get(o.orderId);
+                        req.onsuccess = (e) => {
+                            let existing = e.target.result;
+                            if (!existing) {
                                 ordStore.put(o);
+                            } else {
+                                let isLocalUnsynced = (existing.syncStatus === "Pending" || existing.syncStatus === "Syncing" || pendingVoidIds.has(o.orderId));
+                                let isAlreadyDeliveredLocally = String(existing.deliveryStatus || "").startsWith("Terkirim") && o.deliveryStatus === "Pending";
+                                let isDebtReducedLocally = (existing.debtAmount !== undefined && o.debtAmount !== undefined && existing.debtAmount < o.debtAmount);
+                                let isLocalVoided = (existing.orderStatus === "Voided" && o.orderStatus !== "Voided");
+                                
+                                if (!isLocalUnsynced && !isAlreadyDeliveredLocally && !isDebtReducedLocally && !isLocalVoided) {
+                                    // Pertahankan shiftId & metadata lokal agar perhitungan shift tidak kehilangan jejak
+                                    o.shiftId = existing.shiftId || o.shiftId;
+                                    o.notes = existing.notes || o.notes;
+                                    o.pelunasanCash = Math.max(Number(o.pelunasanCash) || 0, Number(existing.pelunasanCash) || 0);
+                                    o.pelunasanQris = Math.max(Number(o.pelunasanQris) || 0, Number(existing.pelunasanQris) || 0);
+                                    o.pelunasanTransfer = Math.max(Number(o.pelunasanTransfer) || 0, Number(existing.pelunasanTransfer) || 0);
+                                    ordStore.put(o);
+                                }
                             }
-                        }
-                    };
-                });
-            }
-            
-            if (result.data.expenseCategories) {
-                const expCatStore = tx.objectStore("expense_categories"); expCatStore.clear(); 
-                result.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
-            }
-            
-            if (result.data.activeExpenses) {
-                const expStore = tx.objectStore("expenses");
-                result.data.activeExpenses.forEach(ex => {
-                    let req = expStore.get(ex.expenseId);
-                    req.onsuccess = (e) => {
-                        let existing = e.target.result;
-                        if (!existing || existing.syncStatus !== "Pending") {
-                            if (existing && existing.shiftId) ex.shiftId = existing.shiftId;
-                            expStore.put(ex);
-                        }
-                    };
-                });
-            }
+                        };
+                    });
+                }
+                
+                if (result.data.expenseCategories) {
+                    const expCatStore = tx.objectStore("expense_categories"); expCatStore.clear(); 
+                    result.data.expenseCategories.forEach(c => expCatStore.put({name: c}));
+                }
+                
+                if (result.data.activeExpenses) {
+                    const expStore = tx.objectStore("expenses");
+                    result.data.activeExpenses.forEach(ex => {
+                        let req = expStore.get(ex.expenseId);
+                        req.onsuccess = (e) => {
+                            let existing = e.target.result;
+                            let isExpUnsynced = existing && (existing.syncStatus === "Pending" || pendingVoidIds.has(ex.expenseId) || (existing.status === "Voided" && ex.status !== "Voided"));
+                            if (!isExpUnsynced) {
+                                if (existing && existing.shiftId) ex.shiftId = existing.shiftId;
+                                expStore.put(ex);
+                            }
+                        };
+                    });
+                }
 
-            if (result.data.activePiutangPayments) {
-                const bpStore = tx.objectStore("bayar_piutang");
-                result.data.activePiutangPayments.forEach(bp => {
-                    let req = bpStore.get(bp.payId);
-                    req.onsuccess = (e) => {
-                        let existing = e.target.result;
-                        if (!existing || existing.syncStatus !== "Pending") {
-                            if (existing && existing.shiftId) bp.shiftId = existing.shiftId;
-                            bpStore.put(bp);
-                        }
-                    };
-                });
-            }
+                if (result.data.activePiutangPayments) {
+                    const bpStore = tx.objectStore("bayar_piutang");
+                    result.data.activePiutangPayments.forEach(bp => {
+                        let req = bpStore.get(bp.payId);
+                        req.onsuccess = (e) => {
+                            let existing = e.target.result;
+                            if (!existing || existing.syncStatus !== "Pending") {
+                                if (existing && existing.shiftId) bp.shiftId = existing.shiftId;
+                                bpStore.put(bp);
+                            }
+                        };
+                    });
+                }
 
-            if (result.data.shiftReports) {
-                const srStore = tx.objectStore("shift_reports");
-                result.data.shiftReports.forEach(sr => {
-                    let req = srStore.get(sr.shiftId);
-                    req.onsuccess = (e) => {
-                        let existing = e.target.result;
-                        // Jangan timpa laporan shift lokal yang masih berstatus Pending
-                        if (!existing || existing.syncStatus !== "Pending") {
-                            srStore.put(sr);
-                        }
-                    };
-                });
-            }
+                if (result.data.shiftReports) {
+                    const srStore = tx.objectStore("shift_reports");
+                    result.data.shiftReports.forEach(sr => {
+                        let req = srStore.get(sr.shiftId);
+                        req.onsuccess = (e) => {
+                            let existing = e.target.result;
+                            if (!existing || existing.syncStatus !== "Pending") {
+                                srStore.put(sr);
+                            }
+                        };
+                    });
+                }
+            });
 
-            if (result.data.authStatuses) window.processServerUpdates(result.data.authStatuses);
+            if (result.data.authStatuses) await window.processServerUpdates(result.data.authStatuses);
             if (window.updateLeftBadges) window.updateLeftBadges();
         }
     } catch(e) { console.error("Background Sync Error:", e); }
