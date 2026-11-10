@@ -2921,8 +2921,8 @@ window.openCurrentShiftReport = async function() {
             document.getElementById("shift-report-modal").classList.remove("hidden");
             
             try {
-                // 🔥 1. Push any unsynced local orders / piutang payments to the server FIRST!
-                await window.runBackgroundSync();
+                // Ensure all in-flight orders are completely committed before querying the summary
+                await window.drainSyncQueue();
 
                 let url = API_URL + `?type=shiftSummary&outlet=${encodeURIComponent(window.currentOutlet)}&cashier=${encodeURIComponent(window.currentCashier)}&loginTime=${encodeURIComponent(window.currentLoginTime || "")}&shiftId=${encodeURIComponent(window.currentShiftId || "")}`;
                 let res = await fetch(url, { method: "GET", redirect: "follow" });
@@ -2982,6 +2982,20 @@ window.openCurrentShiftReport = async function() {
 window.openShiftReport = window.openCurrentShiftReport; 
 
 window.initiateLogoutSequence = async function() { 
+    // 🔥 1. CEK ANTREAN SEBELUM TUTUP SHIFT: Kasir tidak boleh lanjut jika data belum tersinkron!
+    const pendingCount = await window.getUnsyncedCount();
+    if (pendingCount > 0) {
+        if (!navigator.onLine) {
+            return alert(`⛔ TIDAK BISA LOGOUT!\n\nTerdapat ${pendingCount} transaksi lokal yang BELUM terkirim ke Google Sheets, dan perangkat saat ini sedang OFFLINE.\n\nHarap nyalakan WiFi / Hotspot dan pastikan tombol Sync berhasil sebelum menutup shift agar data di spreadsheet akurat.`);
+        }
+        
+        let drained = await window.drainSyncQueueWithLock();
+        if (!drained) {
+            let sisa = await window.getUnsyncedCount();
+            return alert(`⛔ LOGOUT DITUNDA!\n\nMasih ada ${sisa} data yang sedang dalam proses pengiriman atau koneksi internet tidak stabil. Silakan klik tombol 'Sync' dan pastikan semua data terkirim sebelum menutup shift.`);
+        }
+    }
+
     const data = window.currentShiftData;
     
     const hasActivity = data.totalOrders > 0 || data.totalExpenses > 0 || data.piutangGiven > 0 || data.piutangPaid > 0;
@@ -3018,6 +3032,18 @@ window.initiateLogoutSequence = async function() {
 }
 
 window.executeFinalLogout = async function(netCash) { 
+    // 🔥 CEK ANTREAN TERAKHIR KALI: Pastikan setoran laci dan semua transaksi sudah habis
+    if (!navigator.onLine) {
+        let count = await window.getUnsyncedCount();
+        return alert(`⛔ TIDAK BISA LOGOUT SAAT OFFLINE!\n\nTerdapat ${count} data lokal belum terkirim. Nyalakan koneksi internet agar data shift dan transaksi tidak hilang.`);
+    }
+
+    let drained = await window.drainSyncQueueWithLock();
+    if (!drained) {
+        let remaining = await window.getUnsyncedCount();
+        return alert(`⛔ LOGOUT GAGAL!\n\nMasih ada ${remaining} data yang belum terkirim ke server. Periksa jaringan internet Anda dan klik 'Sync' lagi sebelum logout.`);
+    }
+
     const data = window.currentShiftData;
     const shiftPayload = {
         shiftId: window.currentShiftId, timestamp: window.getWibDate(), cashier: window.currentCashier, loginTime: window.currentLoginTime, logoutTime: window.getWibDate(), 
@@ -3029,7 +3055,7 @@ window.executeFinalLogout = async function(netCash) {
     window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").add(shiftPayload);
     window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(window.currentPin); 
     
-    // 🔥 Clear sticky login
+    // Clear sticky login
     localStorage.removeItem("activePosPin");
 
     const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
@@ -3039,21 +3065,26 @@ window.executeFinalLogout = async function(netCash) {
         activeLog.clockOut = window.getWibDate();
         activeLog.syncStatus = "OutPending";
         window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(activeLog);
-        
-        if (navigator.onLine) {
-            fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) }).catch(()=>{});
-        }
+        fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) }).catch(()=>{});
     }
 
-    if (navigator.onLine) {
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = `Menyinkronkan Transaksi & Shift...`;
-        try {
-            // 🔥 Pastikan semua pelunasan piutang & order terkirim ke server SEBELUM menghitung laporan shift dan reload!
-            await window.runBackgroundSync();
-            let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) });
-            if ((await r.json()).status === "Success") { window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(shiftPayload.shiftId); }
-        } catch(e) {}
+    // Kirim Laporan Shift & pastikan server membalas "Success" sebelum reload
+    try {
+        let r = await fetch(API_URL, {
+            method: "POST", 
+            redirect: "follow",  
+            headers: { "Content-Type": "text/plain;charset=utf-8" }, 
+            body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) 
+        });
+        let res = await r.json();
+        if (res.status === "Success") { 
+            window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(shiftPayload.shiftId); 
+        }
+    } catch(e) {
+        console.error("Gagal mengirim laporan shift:", e);
     }
+
+    alert(`✅ Seluruh transaksi (${data.totalOrders} nota) dan Laporan Shift telah 100% tersimpan di Google Sheets!\n\nAplikasi akan keluar.`);
     window.location.reload();
 }
 
@@ -3062,6 +3093,146 @@ window.lockScreen = function() {
     window.location.reload(); 
 }
 
+window.drainSyncQueue = async function() {
+    let waitLoops = 0;
+    while (window.isSyncing && waitLoops < 20) {
+        await new Promise(r => setTimeout(r, 250));
+        waitLoops++;
+    }
+    await window.runBackgroundSync();
+};
+
+// =========================================================================
+// 🔒 PENGHITUNG ANTREAN & PENGAWAL SINKRONISASI
+// =========================================================================
+window.getUnsyncedCount = async function() {
+    if (!window.db) return 0;
+    try {
+        const tx = window.db.transaction([
+            "orders", "bayar_piutang", "cash_drops", "shift_reports",
+            "expenses", "void_requests", "unsynced_members", "stock_inbound",
+            "cuci_tandon", "lapor_masalah", "kembali_galon", "attendance"
+        ], "readonly");
+
+        const getAll = (store) => new Promise(res => {
+            const req = tx.objectStore(store).getAll();
+            req.onsuccess = e => res(e.target.result || []);
+            req.onerror = () => res([]);
+        });
+
+        const [orders, piutang, drops, reports, expenses, voids, members, inb, cuci, lapor, kmb, att] = await Promise.all([
+            getAll("orders"), getAll("bayar_piutang"), getAll("cash_drops"), getAll("shift_reports"),
+            getAll("expenses"), getAll("void_requests"), getAll("unsynced_members"), getAll("stock_inbound"),
+            getAll("cuci_tandon"), getAll("lapor_masalah"), getAll("kembali_galon"), getAll("attendance")
+        ]);
+
+        let count = 0;
+        count += orders.filter(o => o.syncStatus === "Pending" || o.syncStatus === "Syncing").length;
+        count += piutang.filter(bp => bp.syncStatus === "Pending").length;
+        count += drops.filter(d => d.syncStatus === "Pending").length;
+        count += reports.filter(r => r.syncStatus === "Pending").length;
+        count += expenses.filter(e => e.syncStatus === "Pending").length;
+        count += voids.length;
+        count += members.length;
+        count += inb.filter(i => i.syncStatus === "Pending").length;
+        count += cuci.filter(c => c.syncStatus === "Pending").length;
+        count += lapor.filter(l => l.syncStatus === "Pending").length;
+        count += kmb.filter(k => k.syncStatus === "Pending").length;
+        count += att.filter(a => a.syncStatus === "Pending" || a.syncStatus === "OutPending").length;
+
+        return count;
+    } catch (e) {
+        return 0;
+    }
+};
+
+window.updateUnsyncedBadge = async function() {
+    const count = await window.getUnsyncedCount();
+    let badge = document.getElementById("unsynced-queue-badge");
+    if (!badge) {
+        badge = document.createElement("span");
+        badge.id = "unsynced-queue-badge";
+        badge.style.padding = "3px 9px";
+        badge.style.borderRadius = "12px";
+        badge.style.fontSize = "12px";
+        badge.style.fontWeight = "bold";
+        badge.style.marginLeft = "8px";
+        badge.style.cursor = "pointer";
+        badge.title = "Ada data transaksi lokal belum terkirim. Klik untuk sinkronkan sekarang.";
+        badge.onclick = window.manualPushSync;
+        const netContainer = document.getElementById("network-text");
+        if (netContainer && netContainer.parentNode) {
+            netContainer.parentNode.appendChild(badge);
+        }
+    }
+
+    if (count > 0) {
+        badge.style.display = "inline-block";
+        badge.style.background = "#e74c3c";
+        badge.style.color = "white";
+        badge.innerText = `⏳ ${count} Data Belum Terkirim`;
+    } else {
+        badge.style.display = "none";
+    }
+    return count;
+};
+
+// Menguras antrean sampai 0 dengan tampilan overlay loading
+window.drainSyncQueueWithLock = async function() {
+    let overlay = document.getElementById("sync-lock-overlay");
+    if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.id = "sync-lock-overlay";
+        overlay.style.position = "fixed";
+        overlay.style.top = "0";
+        overlay.style.left = "0";
+        overlay.style.width = "100vw";
+        overlay.style.height = "100vh";
+        overlay.style.background = "rgba(44, 62, 80, 0.92)";
+        overlay.style.zIndex = "99999";
+        overlay.style.display = "flex";
+        overlay.style.flexDirection = "column";
+        overlay.style.justifyContent = "center";
+        overlay.style.alignItems = "center";
+        overlay.style.color = "white";
+        overlay.innerHTML = `
+            <div style="font-size:48px; margin-bottom:15px; animation: spin 2s linear infinite;">⏳</div>
+            <h2 id="sync-lock-title" style="margin:0 0 10px 0;">Menyinkronkan Data ke Spreadsheet...</h2>
+            <p id="sync-lock-desc" style="font-size:16px; color:#ecf0f1; max-width:400px; text-align:center;">Harap tunggu. Jangan matikan tablet atau me-refresh aplikasi.</p>
+        `;
+        document.body.appendChild(overlay);
+    }
+    overlay.style.display = "flex";
+
+    let maxAttempts = 25; // Maksimal coba kuras 25 kali (~40 detik)
+    let attempt = 0;
+
+    while (attempt < maxAttempts) {
+        attempt++;
+        let count = await window.getUnsyncedCount();
+        const descEl = document.getElementById("sync-lock-desc");
+        if (descEl) descEl.innerText = `Mengirim sisa ${count} transaksi ke server... (Percobaan ${attempt})`;
+
+        if (count === 0) {
+            overlay.style.display = "none";
+            await window.updateUnsyncedBadge();
+            return true;
+        }
+
+        if (!navigator.onLine) {
+            overlay.style.display = "none";
+            return false;
+        }
+
+        await window.runBackgroundSync();
+        await new Promise(r => setTimeout(r, 600));
+    }
+
+    let finalCount = await window.getUnsyncedCount();
+    overlay.style.display = "none";
+    await window.updateUnsyncedBadge();
+    return finalCount === 0;
+};
 
 window.runBackgroundSync = async function() {
     if (!navigator.onLine || window.isSyncing) return;
@@ -3244,7 +3415,10 @@ window.runBackgroundSync = async function() {
                 }
             }, 3000);
         }
-    } finally { window.isSyncing = false; }
+    } finally { 
+        window.isSyncing = false; 
+        if (window.updateUnsyncedBadge) window.updateUnsyncedBadge();
+    }
 }
 
 window.updateTabStyles = function(activeId) {
@@ -4259,4 +4433,8 @@ window.onload = async () => {
         window.setInterval(window.updateLeftBadges, 12000); 
         window.updateLeftBadges();
     } 
+    if(window.updateUnsyncedBadge) {
+        window.setInterval(window.updateUnsyncedBadge, 6000);
+        window.updateUnsyncedBadge();
+    }
 };
