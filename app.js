@@ -592,27 +592,39 @@ window.syncCriticalData = async function() {
                 const memT = tx.objectStore("members"); memT.clear();
                 const mergedMap = new Map();
                 
-                // Hitung pembayaran piutang lokal yang masih antre (Pending)
+                /// Hitung pembayaran piutang lokal yang masih antre (Pending)
                 const pendingPaidByPhone = {};
                 pendingPiutangList.forEach(bp => {
                     if (bp.syncStatus === "Pending" && bp.customerPhone) {
                         let pKey = bp.customerPhone;
-                        let outKey = bp.outlet || window.currentOutlet;
+                        let outKey = String(bp.outlet || window.currentOutlet || "").toUpperCase();
                         if (!pendingPaidByPhone[pKey]) pendingPaidByPhone[pKey] = {};
                         pendingPaidByPhone[pKey][outKey] = (pendingPaidByPhone[pKey][outKey] || 0) + (Number(bp.amountPaid) || 0);
                     }
                 });
 
                 result.data.members.forEach(m => {
+                    // Samakan kunci piutangBreakdown agar bisa diakses baik dengan nama asli maupun huruf besar
+                    if (m.piutangBreakdown && window.currentOutlet) {
+                        let upOut = window.currentOutlet.toUpperCase();
+                        if (m.piutangBreakdown[upOut] !== undefined) {
+                            m.piutangBreakdown[window.currentOutlet] = m.piutangBreakdown[upOut];
+                        }
+                    }
                     // 🔥 Potong piutang server dengan pembayaran lokal yang masih Pending agar piutang tidak muncul kembali!
                     let basePhone = String(m.phone || "").replace(/-DUP\d+$/, "");
                     if (pendingPaidByPhone[basePhone]) {
                         for (let outKey in pendingPaidByPhone[basePhone]) {
                             let paidAmt = pendingPaidByPhone[basePhone][outKey];
-                            if (m.piutangBreakdown && m.piutangBreakdown[outKey] !== undefined) {
-                                m.piutangBreakdown[outKey] = Math.max(0, m.piutangBreakdown[outKey] - paidAmt);
+                            if (m.piutangBreakdown) {
+                                if (m.piutangBreakdown[outKey] !== undefined) {
+                                    m.piutangBreakdown[outKey] = Math.max(0, m.piutangBreakdown[outKey] - paidAmt);
+                                }
+                                if (window.currentOutlet && m.piutangBreakdown[window.currentOutlet] !== undefined) {
+                                    m.piutangBreakdown[window.currentOutlet] = Math.max(0, m.piutangBreakdown[window.currentOutlet] - paidAmt);
+                                }
                             }
-                            if (!window.currentOutlet || outKey === window.currentOutlet) {
+                            if (!window.currentOutlet || outKey === window.currentOutlet.toUpperCase()) {
                                 m.piutang = Math.max(0, (m.piutang || 0) - paidAmt);
                             }
                         }
