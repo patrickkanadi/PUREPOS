@@ -3006,32 +3006,59 @@ window.openCurrentShiftReport = async function() {
     document.getElementById("meter-water").value = "";
 
     const loginMs = window.currentLoginTime ? window.parseSafeTimeMs(window.currentLoginTime) : 0;
-    const loginBoundMs = loginMs > 0 ? (loginMs - 15 * 60 * 1000) : 0;
     const targetCashierClean = String(window.currentCashier || "").replace("(Auto-Close)", "").trim().toLowerCase();
     const targetOutletClean = String(window.currentOutlet || "").trim().toUpperCase();
 
+    const tx = window.db.transaction(["orders", "expenses", "bayar_piutang", "shift_reports"], "readonly");
+    const [allOrders, allExpenses, allPiutangs, allShiftReports] = await Promise.all([
+        new Promise(r => tx.objectStore("orders").getAll().onsuccess = e => r(e.target.result || [])),
+        new Promise(r => tx.objectStore("expenses").getAll().onsuccess = e => r(e.target.result || [])),
+        new Promise(r => tx.objectStore("bayar_piutang").getAll().onsuccess = e => r(e.target.result || [])),
+        new Promise(r => tx.objectStore("shift_reports").getAll().onsuccess = e => r(e.target.result || []))
+    ]);
+
+    // Cari batas waktu tutup shift sebelumnya dari kasir & cabang yang sama pada hari ini (jika kasir buka >1 shift sehari)
+    let lastClosedShiftLogoutMs = 0;
+    allShiftReports.forEach(sr => {
+        if (sr.shiftId === window.currentShiftId) return;
+        let srOut = String(sr.outlet || "").trim().toUpperCase();
+        let srCashier = String(sr.cashier || "").replace("(Auto-Close)", "").trim().toLowerCase();
+        if (srOut === targetOutletClean && srCashier === targetCashierClean) {
+            let outMs = window.parseSafeTimeMs(sr.logoutTime);
+            if (outMs > 0 && window.getWibDateFromMs(outMs).split(" ")[0] === today) {
+                if (outMs > lastClosedShiftLogoutMs) lastClosedShiftLogoutMs = outMs;
+            }
+        }
+    });
+
+    let earliestActivityMs = loginMs > 0 ? loginMs : Infinity;
+
     const isSameDayAndCashier = (recordTs, recordCashier, recordOutlet, recordShiftId) => {
-        // Jika record memiliki shiftId eksplisit dan berbeda dari shift aktif saat ini, tolak!
+        if (recordShiftId && window.currentShiftId && recordShiftId === window.currentShiftId) {
+            let ms = window.parseSafeTimeMs ? window.parseSafeTimeMs(recordTs) : new Date(recordTs).getTime();
+            if (ms > 0 && ms < earliestActivityMs) earliestActivityMs = ms;
+            return true;
+        }
+        // Jika punya shiftId dari shift lain yang SUDAH ditutup hari ini, tolak
         if (recordShiftId && window.currentShiftId && recordShiftId !== window.currentShiftId) {
-            return false;
+            let isClosedShift = allShiftReports.some(sr => sr.shiftId === recordShiftId);
+            if (isClosedShift) return false;
         }
         if (String(recordOutlet || "").trim().toUpperCase() !== targetOutletClean) return false;
         if (String(recordCashier || "").replace("(Auto-Close)", "").trim().toLowerCase() !== targetCashierClean) return false;
 
         let ms = window.parseSafeTimeMs ? window.parseSafeTimeMs(recordTs) : new Date(recordTs).getTime();
         if (!ms) return false;
-        if (loginBoundMs > 0 && ms < loginBoundMs) return false;
+        // Hanya ambil transaksi setelah shift sebelumnya ditutup (atau semua transaksi hari ini jika belum pernah tutup shift hari ini)
+        if (lastClosedShiftLogoutMs > 0 && ms <= lastClosedShiftLogoutMs) return false;
 
         let dStr = window.getWibDateFromMs(ms).split(" ")[0];
-        return dStr === today;
+        if (dStr === today) {
+            if (ms < earliestActivityMs) earliestActivityMs = ms;
+            return true;
+        }
+        return false;
     };
-
-    const tx = window.db.transaction(["orders", "expenses", "bayar_piutang"], "readonly");
-    const [allOrders, allExpenses, allPiutangs] = await Promise.all([
-        new Promise(r => tx.objectStore("orders").getAll().onsuccess = e => r(e.target.result || [])),
-        new Promise(r => tx.objectStore("expenses").getAll().onsuccess = e => r(e.target.result || [])),
-        new Promise(r => tx.objectStore("bayar_piutang").getAll().onsuccess = e => r(e.target.result || []))
-    ]);
 
     const validOrders = allOrders.filter(o => o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && isSameDayAndCashier(o.timestamp, o.cashier, o.outlet, o.shiftId));
     validOrders.forEach(o => {
@@ -3107,9 +3134,14 @@ window.openCurrentShiftReport = async function() {
         const shiftNetCash = tCash + tPiutangPaidCash - tExpense;
         document.getElementById("sr-net").innerText = `Rp ${shiftNetCash.toLocaleString('id-ID')}`;
 
+        const effectiveLoginStr = (earliestActivityMs < Infinity && (!loginMs || earliestActivityMs < loginMs))
+            ? window.getWibDateFromMs(earliestActivityMs)
+            : window.currentLoginTime;
+        window.currentLoginTime = effectiveLoginStr;
+
         window.currentShiftData = {
             shiftId: window.currentShiftId,
-            loginTime: window.currentLoginTime,
+            loginTime: effectiveLoginStr,
             totalCustomers: tCust,
             totalOrders: tOrders,
             totalOmset: tOmset,
