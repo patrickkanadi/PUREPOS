@@ -138,6 +138,12 @@ window.getWibDate = function() {
     return `${nd.getFullYear()}-${pad(nd.getMonth()+1)}-${pad(nd.getDate())} ${pad(nd.getHours())}:${pad(nd.getMinutes())}:${pad(nd.getSeconds())}`;
 }
 
+window.getWibDateFromMs = function(ms) {
+    const d = new Date(ms); const utc = d.getTime() + (d.getTimezoneOffset() * 60000); const nd = new Date(utc + (3600000 * 7));
+    const pad = n => n < 10 ? '0' + n : n;
+    return `${nd.getFullYear()}-${pad(nd.getMonth()+1)}-${pad(nd.getDate())} ${pad(nd.getHours())}:${pad(nd.getMinutes())}:${pad(nd.getSeconds())}`;
+}
+
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault(); window.deferredPrompt = e;
     const installBtn = document.getElementById('btn-install'); const installBtnLogin = document.getElementById('btn-install-login');
@@ -240,16 +246,25 @@ window.forceCloseShift = async function(shift) {
     }
     // --------------------------------
     
-    let liveDrawer = window.outletStocks && window.outletStocks[shift.outlet] && window.outletStocks[shift.outlet]["Saldo_Laci"] ? window.outletStocks[shift.outlet]["Saldo_Laci"] : (tCash + tPiutangPaidCash - tExpense);
-            
+    // 🔥 Gunakan rumus Net Cash Shift murni agar 100% identik dengan Audit & POS Live Shift!
+    let shiftNetCash = tCash + tPiutangPaidCash - tExpense;
+
     const staffList = await window.getStaffFromDB();
     const staffMatch = staffList.find(s => s.pin === shift.pin);
     const actualCashier = (staffMatch ? staffMatch.name : "Unknown Cashier") + " (Auto-Close)";
-    
+
+    // Gunakan jam transaksi terakhir pada shift tersebut sebagai logoutTime jika berasal dari hari sebelumnya
+    let lastActivityMs = 0;
+    orders.filter(o => o.shiftId === shift.shiftId).forEach(o => {
+        let ms = window.parseSafeTimeMs ? window.parseSafeTimeMs(o.timestamp) : new Date(o.timestamp).getTime();
+        if (ms > lastActivityMs) lastActivityMs = ms;
+    });
+    let finalAutoLogout = lastActivityMs > 0 ? window.getWibDateFromMs(lastActivityMs) : window.getWibDate();
+
     const shiftPayload = {
-        shiftId: shift.shiftId, timestamp: window.getWibDate(), cashier: actualCashier, loginTime: shift.loginTime, logoutTime: window.getWibDate(),
+        shiftId: shift.shiftId, timestamp: window.getWibDate(), cashier: actualCashier, loginTime: shift.loginTime, logoutTime: finalAutoLogout,
         totalCustomers: tCust, totalOrders: tOrders, totalOmset: tOmset, totalCash: tCash, totalQris: tQris, totalTransfer: tTransfer, totalFree: tFree,
-        totalExpenses: tExpense, netCash: liveDrawer, foodSummary: foodSummary, meterWater: 0, outlet: shift.outlet, syncStatus: "Pending",
+        totalExpenses: tExpense, netCash: shiftNetCash, foodSummary: foodSummary, meterWater: 0, outlet: shift.outlet, syncStatus: "Pending",
         piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, autoClosed: true
     };
 
@@ -2992,16 +3007,21 @@ window.openCurrentShiftReport = async function() {
 
     const loginMs = window.currentLoginTime ? window.parseSafeTimeMs(window.currentLoginTime) : 0;
     const loginBoundMs = loginMs > 0 ? (loginMs - 15 * 60 * 1000) : 0;
+    const targetCashierClean = String(window.currentCashier || "").replace("(Auto-Close)", "").trim().toLowerCase();
+    const targetOutletClean = String(window.currentOutlet || "").trim().toUpperCase();
 
     const isSameDayAndCashier = (recordTs, recordCashier, recordOutlet, recordShiftId) => {
-        if (recordShiftId && window.currentShiftId) {
-            return recordShiftId === window.currentShiftId;
+        // Jika record memiliki shiftId eksplisit dan berbeda dari shift aktif saat ini, tolak!
+        if (recordShiftId && window.currentShiftId && recordShiftId !== window.currentShiftId) {
+            return false;
         }
-        if (recordOutlet && window.currentOutlet && recordOutlet !== window.currentOutlet) return false;
-        if (recordCashier && window.currentCashier && recordCashier !== window.currentCashier) return false;
+        if (String(recordOutlet || "").trim().toUpperCase() !== targetOutletClean) return false;
+        if (String(recordCashier || "").replace("(Auto-Close)", "").trim().toLowerCase() !== targetCashierClean) return false;
+
         let ms = window.parseSafeTimeMs ? window.parseSafeTimeMs(recordTs) : new Date(recordTs).getTime();
         if (!ms) return false;
         if (loginBoundMs > 0 && ms < loginBoundMs) return false;
+
         let d = new Date(ms);
         let pad = n => n < 10 ? '0' + n : n;
         let dStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
@@ -3086,6 +3106,9 @@ window.openCurrentShiftReport = async function() {
             btnPrintHist.onclick = window.printShiftReport;
         }
 
+        const shiftNetCash = tCash + tPiutangPaidCash - tExpense;
+        document.getElementById("sr-net").innerText = `Rp ${shiftNetCash.toLocaleString('id-ID')}`;
+
         window.currentShiftData = {
             shiftId: window.currentShiftId,
             loginTime: window.currentLoginTime,
@@ -3097,7 +3120,8 @@ window.openCurrentShiftReport = async function() {
             totalTransfer: tTransfer,
             totalFree: tFree,
             totalExpenses: tExpense,
-            netCash: liveDrawer,
+            netCash: shiftNetCash,
+            drawerBalance: liveDrawer,
             foodSummary: foodSummary,
             piutangGiven: tPiutangGiven,
             piutangPaid: tPiutangPaidCash,
@@ -3205,10 +3229,11 @@ window.executeFinalLogout = async function(netCash) {
     // Kunci flag isSyncing agar timer 25 detik tidak menyerobot saat pengiriman akhir
     window.isSyncing = true;
 
+    const shiftNetCash = (Number(data.totalCash) || 0) + (Number(data.piutangPaid) || 0) - (Number(data.totalExpenses) || 0);
     const shiftPayload = {
         shiftId: window.currentShiftId, timestamp: window.getWibDate(), cashier: window.currentCashier, loginTime: window.currentLoginTime, logoutTime: window.getWibDate(), 
         totalCustomers: data.totalCustomers, totalOrders: data.totalOrders, totalOmset: data.totalOmset, totalCash: data.totalCash, totalQris: data.totalQris, totalTransfer: data.totalTransfer, totalFree: data.totalFree,
-        totalExpenses: data.totalExpenses, netCash: netCash, foodSummary: data.foodSummary, meterWater: data.meterWater, outlet: window.currentOutlet, syncStatus: "Pending", piutangGiven: data.piutangGiven, piutangPaid: data.piutangPaid
+        totalExpenses: data.totalExpenses, netCash: shiftNetCash, foodSummary: data.foodSummary, meterWater: data.meterWater, outlet: window.currentOutlet, syncStatus: "Pending", piutangGiven: data.piutangGiven, piutangPaid: data.piutangPaid
     };
 
     let overlay = document.getElementById("sync-lock-overlay");
