@@ -674,7 +674,9 @@ window.syncBackgroundData = async function() {
                                 let isLocalVoided = (existing.orderStatus === "Voided" && o.orderStatus !== "Voided");
                                 
                                 if (!isLocalUnsynced && !isAlreadyDeliveredLocally && !isDebtReducedLocally && !isLocalVoided) {
-                                    // Pertahankan shiftId & metadata lokal agar perhitungan shift tidak kehilangan jejak
+                                    if (o.orderStatus === "Voided") {
+                                        o.debtAmount = 0; // Kunci hutang menjadi 0 saat void
+                                    }
                                     o.shiftId = existing.shiftId || o.shiftId;
                                     o.notes = existing.notes || o.notes;
                                     o.pelunasanCash = Math.max(Number(o.pelunasanCash) || 0, Number(existing.pelunasanCash) || 0);
@@ -1613,7 +1615,12 @@ window.triggerBayarPiutang = function(phone, linkedOrderId = null) {
         } else {
             // FALLBACK: If member isn't synced yet, build a temporary profile
             window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e2) => {
-                let orders = e2.target.result.filter(o => o.customerPhone === phone && (o.debtAmount || 0) > 0);
+                let orders = e2.target.result.filter(o => 
+                    o.customerPhone === phone && 
+                    (o.debtAmount || 0) > 0 && 
+                    o.orderStatus !== "Voided" && 
+                    o.orderStatus !== "Void Pending"
+                );
                 if (orders.length > 0) {
                     let totalDebt = orders.reduce((sum, o) => sum + (o.debtAmount || 0), 0);
                     let fallbackMember = { phone: phone, name: orders[0].customerName, piutang: totalDebt };
@@ -1660,8 +1667,13 @@ window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
     orderSelect.innerHTML = `<option value="">-- Lunasi Saldo Global --</option>`;
     
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        // 🔥 THE FIX: Broadened the filter to ANY order with debtAmount > 0 (prevents missing dropdowns)
-        const memberOrders = e.target.result.filter(o => o.customerPhone === window.piutangTargetMember.phone && (o.debtAmount || 0) > 0);
+        // Abaikan nota yang sudah Voided atau sedang menunggu Void
+        const memberOrders = e.target.result.filter(o => 
+            o.customerPhone === window.piutangTargetMember.phone && 
+            (o.debtAmount || 0) > 0 && 
+            o.orderStatus !== "Voided" && 
+            o.orderStatus !== "Void Pending"
+        );
         memberOrders.forEach(o => { orderSelect.innerHTML += `<option value="${o.orderId}">Nota: ${o.orderId} (Hutang Rp ${o.debtAmount.toLocaleString('id-ID')})</option>`; });
         
         if (linkedOrderId) orderSelect.value = linkedOrderId;
@@ -1769,8 +1781,13 @@ window.submitPiutang = function() {
         
         let remainingPay = payAmount;
         window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-            let orders = e.target.result.filter(o => o.customerPhone === window.piutangTargetMember.phone && (o.debtAmount || 0) > 0);
-            orders.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp)); 
+            let orders = e.target.result.filter(o => 
+                o.customerPhone === window.piutangTargetMember.phone && 
+                (o.debtAmount || 0) > 0 && 
+                o.orderStatus !== "Voided" && 
+                o.orderStatus !== "Void Pending"
+            );
+            orders.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
             
             let tx2 = window.db.transaction(["orders"], "readwrite");
             let store2 = tx2.objectStore("orders");
@@ -2369,7 +2386,7 @@ window.renderHistoryList = function(type) {
             container.innerHTML = shiftOrders.map(o => {
                 let badge = o.orderStatus === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : o.orderStatus === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">${o.orderStatus}</span>`; 
                 let syncBadge = o.syncStatus !== "Synced" ? `<span style="font-size:11px; background:#fef9e7; color:#d68910; border:1px solid #f39c12; padding:1px 5px; border-radius:4px; margin-left:4px;">⏳ Lokal</span>` : '';
-                let piutangBadge = (o.debtAmount || 0) > 0 ? `<br><span style="font-size:12px; color:#c0392b; font-weight:bold;">⚠️ Piutang: Rp ${(o.debtAmount).toLocaleString('id-ID')}</span>` : '';
+                let piutangBadge = (o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && (o.debtAmount || 0) > 0) ? `<br><span style="font-size:12px; color:#c0392b; font-weight:bold;">⚠️ Piutang: Rp ${(o.debtAmount).toLocaleString('id-ID')}</span>` : '';
                 let btnVoid = o.orderStatus === "Voided" ? '' : `<button onclick="window.requestVoid('orders', '${o.orderId}')" style="background:${o.orderStatus === 'Void Pending' ? '#8e44ad' : '#e74c3c'}; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">${o.orderStatus === 'Void Pending' ? '🔑 PIN Admin' : 'Batal'}</button>`;
                 let btnPrint = `<button onclick="window.reprintOrder('${o.orderId}')" style="background:#2980b9; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">🖨️ Cetak</button>`;
                 let btnDetail = `<button onclick="window.showOrderDetail('${o.orderId}')" style="background:#f39c12; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">👁️ Detail</button>`;
@@ -2509,7 +2526,7 @@ window.showOrderDetail = function(orderId) {
         if (o.items && o.items.length > 0) { o.items.forEach(i => { let unitP = (i.price !== undefined) ? i.price : i.originalPrice; html += `<div style="display:flex; justify-content:space-between;"><span>${i.qty}x ${i.name}</span><span>Rp ${(i.qty * unitP).toLocaleString('id-ID')}</span></div>`; });
         } else { html += `<div style="color:#7f8c8d; font-style:italic;">Detail item tidak tersedia. Subtotal: Rp ${o.subtotal.toLocaleString('id-ID')}</div>`; }
         html += `<hr style="border-top:1px dashed #ccc; margin:10px 0;"><div style="display:flex; justify-content:space-between;"><span><strong>Diskon / Gratis:</strong></span><span style="color:#27ae60;">-Rp ${(o.discounts || o.freeAmount || 0).toLocaleString('id-ID')}</span></div><div style="display:flex; justify-content:space-between; font-size:16px;"><span><strong>Total Akhir:</strong></span><span><strong>Rp ${o.grandTotal.toLocaleString('id-ID')}</strong></span></div>`;
-        if ((o.debtAmount || 0) > 0) { html += `<div style="display:flex; justify-content:space-between; color:#c0392b; margin-top:5px;"><span><strong>Hutang:</strong></span><span><strong>Rp ${o.debtAmount.toLocaleString('id-ID')}</strong></span></div>`; }
+        if (o.orderStatus !== "Voided" && (o.debtAmount || 0) > 0) { html += `<div style="display:flex; justify-content:space-between; color:#c0392b; margin-top:5px;"><span><strong>Hutang:</strong></span><span><strong>Rp ${o.debtAmount.toLocaleString('id-ID')}</strong></span></div>`; }
         document.getElementById("order-detail-container").innerHTML = html; document.getElementById("order-detail-modal").classList.remove("hidden");
     };
 }
@@ -2564,10 +2581,13 @@ window.confirmAdminVoid = async function() {
                     if (type === 'orders') { 
                         item.orderStatus = "Voided"; item.voidAuth = authName; 
                         if(item.items) item.items.forEach(i => i.qty = Number(i.qty)); 
-                        window.applyLocalVoidAftermath(item); // UPDATED TO LOCAL ONLY
+                        window.applyLocalVoidAftermath(item);
+                        item.debtAmount = 0; // Nolkan hutang nota seketika
                     } 
                     else { item.status = "Voided"; item.voidAuth = authName; }
-                    item.syncStatus = "Pending"; window.db.transaction([storeName], "readwrite").objectStore(storeName).put(item); window.renderHistoryList(type);
+                    item.syncStatus = "Pending"; 
+                    window.db.transaction([storeName], "readwrite").objectStore(storeName).put(item); 
+                    window.renderHistoryList(type);
                 };
                 window.db.transaction(["void_requests"], "readwrite").objectStore("void_requests").put({ id: id, type: type, status: "Voided", authName: authName });
                 document.getElementById("admin-void-modal").classList.add("hidden"); window.runBackgroundSync(); alert("Transaksi langsung Dibatalkan oleh: " + authName);
@@ -2604,10 +2624,17 @@ window.processServerUpdates = function(authStatuses) {
             const remote = authStatuses.orders[order.orderId];
             if (remote) {
                 let changed = false;
-                if (remote.status === "Voided" && order.orderStatus !== "Voided") {
+                if (remote.status === "Voided") {
+                    let wasNotVoided = (order.orderStatus !== "Voided");
                     order.orderStatus = "Voided";
-                    changed = true;
-                    window.applyLocalVoidAftermath(order);
+                    if (wasNotVoided) {
+                        changed = true;
+                        window.applyLocalVoidAftermath(order);
+                    }
+                    if (order.debtAmount !== 0) {
+                        order.debtAmount = 0;
+                        changed = true;
+                    }
                 } else if (remote.status !== "Void Pending" && remote.status !== "Voided" && order.orderStatus === "Void Pending" && String(remote.auth || "").includes("reject")) {
                     order.orderStatus = remote.status;
                     changed = true;
@@ -2648,9 +2675,17 @@ window.processServerUpdates = function(authStatuses) {
 };
 
 window.applyLocalVoidAftermath = function(order) {
-    const tx = window.db.transaction(["menu", "members"], "readwrite"); 
+    let voidDebt = Number(order.debtAmount) || 0;
+    order.debtAmount = 0; // 🔥 Nolkan hutang nota seketika
+
+    const tx = window.db.transaction(["menu", "members", "unsynced_members", "orders"], "readwrite"); 
     const menuStore = tx.objectStore("menu"); 
     const memberStore = tx.objectStore("members");
+    const unsyncedStore = tx.objectStore("unsynced_members");
+    const orderStore = tx.objectStore("orders");
+
+    // Simpan nota yang sudah bersih dari hutang ke IndexedDB
+    orderStore.put(order);
 
     if (order.items) {
         order.items.forEach(item => {
@@ -2667,7 +2702,18 @@ window.applyLocalVoidAftermath = function(order) {
             if (mem) { 
                 mem.spent = Math.max(0, (mem.spent || 0) - order.grandTotal); 
                 mem.bottlesBorrowed = Math.max(0, (mem.bottlesBorrowed || 0) - (order.rentBottleQty || 0));
-                mem.piutang = Math.max(0, (mem.piutang || 0) - (order.debtAmount || 0));
+                mem.piutang = Math.max(0, (mem.piutang || 0) - voidDebt);
+                
+                // 🔥 Potong piutang cabang terkait agar daftar Piutang & Badge hilang seketika
+                if (mem.piutangBreakdown) {
+                    let out = order.outlet || window.currentOutlet;
+                    if (mem.piutangBreakdown[out] !== undefined) {
+                        mem.piutangBreakdown[out] = Math.max(0, mem.piutangBreakdown[out] - voidDebt);
+                    }
+                    if (window.currentOutlet && mem.piutangBreakdown[window.currentOutlet] !== undefined) {
+                        mem.piutangBreakdown[window.currentOutlet] = Math.max(0, mem.piutangBreakdown[window.currentOutlet] - voidDebt);
+                    }
+                }
                 
                 // Revert Wallet Points & Free Items locally instantly
                 let currentWallet = typeof mem.wallet === 'object' ? mem.wallet : {};
@@ -2702,6 +2748,22 @@ window.applyLocalVoidAftermath = function(order) {
                 mem.wallet = currentWallet;
                 memberStore.put(mem); 
                 
+                // 🔥 Update unsynced_members agar data piutang lama tidak membangkitkan piutang kembali
+                unsyncedStore.get(order.customerPhone).onsuccess = (ue) => {
+                    let um = ue.target.result;
+                    if (um) {
+                        um.piutang = mem.piutang;
+                        um.piutangBreakdown = mem.piutangBreakdown;
+                        unsyncedStore.put(um);
+                    }
+                };
+
+                // 🔥 Update RAM cache seketika agar renderPiutangList & Badges langsung terupdate (0 detik)
+                if (window.globalMembersCache) {
+                    let idx = window.globalMembersCache.findIndex(x => x.phone === mem.phone);
+                    if (idx > -1) window.globalMembersCache[idx] = mem;
+                }
+
                 if (window.activeCustomerProfile && window.activeCustomerProfile.phone === mem.phone) { 
                     window.activeCustomerProfile = mem; 
                     window.updatePromoBanner(window.activeCustomerProfile); 
@@ -2709,8 +2771,14 @@ window.applyLocalVoidAftermath = function(order) {
             } 
         };
     }
-    tx.oncomplete = () => { if (!document.getElementById("pos-screen").classList.contains("hidden")) window.renderProductGrid(); };
-}
+    tx.oncomplete = () => { 
+        if (window.renderPiutangList && !document.getElementById("piutang-section").classList.contains("hidden")) {
+            window.renderPiutangList();
+        }
+        if (window.updateLeftBadges) window.updateLeftBadges();
+        if (!document.getElementById("pos-screen").classList.contains("hidden")) window.renderProductGrid(); 
+    };
+};
 
 window.calculateLiveDrawer = function(callback) {
     let liveDrawer = (window.outletStocks && window.outletStocks[window.currentOutlet] && window.outletStocks[window.currentOutlet]["Saldo_Laci"]) ? window.outletStocks[window.currentOutlet]["Saldo_Laci"] : 0; 
