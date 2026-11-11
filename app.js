@@ -3022,9 +3022,7 @@ window.openCurrentShiftReport = async function() {
         if (!ms) return false;
         if (loginBoundMs > 0 && ms < loginBoundMs) return false;
 
-        let d = new Date(ms);
-        let pad = n => n < 10 ? '0' + n : n;
-        let dStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+        let dStr = window.getWibDateFromMs(ms).split(" ")[0];
         return dStr === today;
     };
 
@@ -3584,7 +3582,15 @@ window.runBackgroundSync = async function() {
             if (drop.syncStatus === "Pending") { try { let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncCashDrop", data: drop }) }); if ((await r.json()).status === "Success") { drop.syncStatus = "Synced"; window.db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(drop); } } catch(e) {} }
         }
         for (const report of reports) {
-            if (report.syncStatus === "Pending") { try { let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncShiftReport", data: report }) }); if ((await r.json()).status === "Success") { window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(report.shiftId); } } catch(e) {} }
+            if (report.syncStatus === "Pending") {
+                try {
+                    let r = await fetch(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncShiftReport", data: report }) });
+                    if ((await r.json()).status === "Success") {
+                        report.syncStatus = "Synced";
+                        window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").put(report);
+                    }
+                } catch(e) {}
+            }
         }
         for (const exp of expenses) {
             if (exp.syncStatus === "Pending") { try { let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncExpense", data: exp }) }); if ((await r.json()).status === "Success") { exp.syncStatus = "Synced"; window.db.transaction(["expenses"], "readwrite").objectStore("expenses").put(exp); } } catch(e) {} }
