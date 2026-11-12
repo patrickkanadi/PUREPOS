@@ -1114,7 +1114,11 @@ window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rO
         if(piutang !== undefined) {
             mem.piutang = piutang; 
             if (!mem.piutangBreakdown) mem.piutangBreakdown = {};
-            mem.piutangBreakdown[window.currentOutlet] = piutang; 
+            mem.piutangBreakdown[window.currentOutlet] = piutang;
+            if (window.currentOutlet) mem.piutangBreakdown[window.currentOutlet.toUpperCase()] = piutang;
+        }
+        if (window.piutangTargetMember && window.piutangTargetMember.phone === phone && Array.isArray(window.piutangTargetMember.piutangInvoices)) {
+            mem.piutangInvoices = window.piutangTargetMember.piutangInvoices;
         }
 
         if (window.globalMembersCache) {
@@ -1673,8 +1677,10 @@ window.renderPiutangList = async function() {
         await window.loadMembersFromCache();
     }
 
+    let curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
     let members = (window.globalMembersCache || []).filter(m => {
-        let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : m.piutang;
+        if (/-DUP\d+$/.test(String(m.phone || ""))) return false;
+        let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] ?? m.piutangBreakdown[curOutUp] ?? 0) : m.piutang;
         m._tempBranchPiutang = localP; 
         return localP > 0;
     });
@@ -1891,7 +1897,25 @@ window.submitPiutang = function() {
         };
         
         window.db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").add(payload);
-        window.piutangTargetMember.piutang -= payAmount;
+        window.piutangTargetMember.piutang = Math.max(0, (window.piutangTargetMember.piutang || 0) - payAmount);
+        if (Array.isArray(window.piutangTargetMember.piutangInvoices)) {
+            let remInvPay = payAmount;
+            let curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
+            let invList = window.piutangTargetMember.piutangInvoices;
+            if (targetOrderId !== "") {
+                invList.sort((a, b) => (a.orderId === targetOrderId ? -1 : (b.orderId === targetOrderId ? 1 : 0)));
+            }
+            for (let inv of invList) {
+                if (remInvPay <= 0) break;
+                if (curOutUp && String(inv.outlet || "").trim().toUpperCase() !== curOutUp) continue;
+                let s = Number(inv.sisa) || 0;
+                if (s <= 0) continue;
+                let cut = Math.min(s, remInvPay);
+                inv.sisa = s - cut;
+                remInvPay -= cut;
+            }
+            window.piutangTargetMember.piutangInvoices = invList.filter(inv => (Number(inv.sisa) || 0) > 0);
+        }
         window.saveMemberToDB(window.piutangTargetMember.phone, window.piutangTargetMember.name, window.piutangTargetMember.wallet, window.piutangTargetMember.bottlesBorrowed, window.piutangTargetMember.piutang, window.piutangTargetMember.firstOutlet, window.piutangTargetMember.recentOutlets);
         
         if (window.activeCustomerProfile && window.activeCustomerProfile.phone === window.piutangTargetMember.phone) { 
@@ -3821,10 +3845,6 @@ window.runBackgroundSync = async function() {
                 }
             }
         }
-        if (syncedAnyPiutang) {
-            window.syncCriticalData();
-            window.syncBackgroundData();
-        }
         for (const drop of drops) {
             if (drop.syncStatus === "Pending") {
                 try {
@@ -3945,6 +3965,11 @@ window.runBackgroundSync = async function() {
                     else if (resJ.message) window.lastSyncServerError = `updateAttendanceOut: ${resJ.message}`;
                 } catch(e) { window.lastSyncServerError = `updateAttendanceOut: ${e.message}`; } 
             }
+        }
+
+        if (syncedAnyPiutang) {
+            await window.syncCriticalData();
+            await window.syncBackgroundData();
         }
 
         // On Success: Turn Green
@@ -4259,17 +4284,19 @@ window.updateLeftBadges = function() {
 
     // ⚡ FAST RAM BADGE CALCULATION (No IndexedDB disk read needed!)
     let memList = window.globalMembersCache || [];
+    let curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
     let pCount = 0; let bCount = 0;
     for (let i = 0; i < memList.length; i++) {
         let m = memList[i];
-        let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : m.piutang;
+        if (/-DUP\d+$/.test(String(m.phone || ""))) continue;
+        let localP = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] ?? m.piutangBreakdown[curOutUp] ?? 0) : m.piutang;
         if (localP > 0) pCount++;
         
         if (m.rentalBreakdown && m.rentalBreakdown.length > 0) {
             let localB = 0;
             for (let j = 0; j < m.rentalBreakdown.length; j++) {
                 let r = m.rentalBreakdown[j];
-                if ((r.outlet || window.currentOutlet) === window.currentOutlet) localB += (r.sisa || 0);
+                if (String(r.outlet || window.currentOutlet || "").trim().toUpperCase() === curOutUp) localB += (r.sisa || 0);
             }
             if (localB > 0) bCount++;
         }
