@@ -1058,7 +1058,8 @@ window.handleAutocomplete = function(e) {
                 let safePhoneKey = String(m.phone || "-").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let safeAddress = String(m.address || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 
-                let localPiutang = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] || 0) : (m.piutang || 0);
+                let curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
+                let localPiutang = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] ?? m.piutangBreakdown[curOutUp] ?? 0) : (m.piutang || 0);
                 let piutangBadge = localPiutang > 0 ? `<span style="font-size:11px; background:#fadbd8; color:#922b21; padding:2px 7px; border-radius:10px; font-weight:bold; margin-left:6px;">Hutang: Rp ${localPiutang.toLocaleString('id-ID')}</span>` : '';
 
                 let addressDisplay = (m.address && m.address !== "-")
@@ -1119,6 +1120,9 @@ window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rO
         }
         if (window.piutangTargetMember && window.piutangTargetMember.phone === phone && Array.isArray(window.piutangTargetMember.piutangInvoices)) {
             mem.piutangInvoices = window.piutangTargetMember.piutangInvoices;
+        }
+        if (window.activeCustomerProfile && window.activeCustomerProfile.phone === phone && Array.isArray(window.activeCustomerProfile.rentalBreakdown)) {
+            mem.rentalBreakdown = window.activeCustomerProfile.rentalBreakdown;
         }
 
         if (window.globalMembersCache) {
@@ -1626,7 +1630,8 @@ window.unlockMenu = function() {
 
     let applyUnlockedMember = (member) => {
         if (member) { 
-            let localPiutang = member.piutangBreakdown ? (member.piutangBreakdown[window.currentOutlet] || 0) : (member.piutang || 0);
+            let curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
+            let localPiutang = member.piutangBreakdown ? (member.piutangBreakdown[window.currentOutlet] ?? member.piutangBreakdown[curOutUp] ?? 0) : (member.piutang || 0);
             window.activeCustomerProfile = { ...member, piutang: localPiutang }; 
             name = member.name; 
             searchPhone = member.phone;
@@ -1873,12 +1878,12 @@ window.submitPiutang = function() {
 
     let processPayment = function(courierName) {
         let netC = c; let netQ = q; let netT = t;
-        let remParkir = parkir;
+        let remExtra = parkir + tip;
         
-        // We ONLY deduct Parkir because it leaves the drawer immediately. Tip enters the drawer.
-        if (remParkir > 0 && netC > 0) { let d = Math.min(remParkir, netC); netC -= d; remParkir -= d; }
-        if (remParkir > 0 && netQ > 0) { let d = Math.min(remParkir, netQ); netQ -= d; remParkir -= d; }
-        if (remParkir > 0 && netT > 0) { let d = Math.min(remParkir, netT); netT -= d; remParkir -= d; }
+        // Deduct both Parkir and Tip from net Piutang payment because Tip is logged separately in [6] TIP KURIR & Saldo_Laci
+        if (remExtra > 0 && netC > 0) { let d = Math.min(remExtra, netC); netC -= d; remExtra -= d; }
+        if (remExtra > 0 && netQ > 0) { let d = Math.min(remExtra, netQ); netQ -= d; remExtra -= d; }
+        if (remExtra > 0 && netT > 0) { let d = Math.min(remExtra, netT); netT -= d; remExtra -= d; }
 
         let payMethods = [];
         if(netC > 0) payMethods.push("Tunai");
@@ -4145,11 +4150,13 @@ window.renderPeminjamList = function() {
         let allOrders = ordEv.target.result;
         
         window.db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
+            let curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
             // 🔥 STRICT BRANCH FILTER: Calculate branch-specific borrowed bottles instantly
             let members = e.target.result.filter(m => {
+                if (/-DUP\d+$/.test(String(m.phone || ""))) return false;
                 let localB = 0;
                 if (m.rentalBreakdown) {
-                    localB = m.rentalBreakdown.filter(r => (r.outlet || window.currentOutlet) === window.currentOutlet).reduce((sum, r) => sum + r.sisa, 0);
+                    localB = m.rentalBreakdown.filter(r => String(r.outlet || window.currentOutlet || "").trim().toUpperCase() === curOutUp).reduce((sum, r) => sum + (Number(r.sisa) || 0), 0);
                 }
                 m._tempBranchBorrowed = localB;
                 return localB > 0;
@@ -4163,7 +4170,7 @@ window.renderPeminjamList = function() {
                 
                 // 1. Filter server breakdown to ONLY include this branch
                 if (m.rentalBreakdown && m.rentalBreakdown.length > 0) {
-                    m.rentalBreakdown.filter(r => (r.outlet || window.currentOutlet) === window.currentOutlet).forEach(r => combinedBreakdown.push(r));
+                    m.rentalBreakdown.filter(r => String(r.outlet || window.currentOutlet || "").trim().toUpperCase() === curOutUp).forEach(r => combinedBreakdown.push(r));
                 }
                 
                 // 2. Add any local un-synced orders strictly for this branch
