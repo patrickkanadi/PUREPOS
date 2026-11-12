@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 1; // 🔥 Keep at 22 so IndexedDB never blocks!
-const APP_VERSION = "2"; 
+const APP_VERSION = "3"; 
 window.db = null;
 
 // Core State
@@ -1099,8 +1099,10 @@ window.handleAutocomplete = function(e) {
 window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rOut, address) {
     if(!phone || phone === "-") return; 
     window.db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
-        let mem = e.target.result || { phone: phone, name: name, address: address || "", wallet: {}, spent: 0, bottlesBorrowed: 0, piutang: 0, firstOutlet: fOut || window.currentOutlet, recentOutlets: rOut || window.currentOutlet }; 
-        mem.name = name; 
+        let initBreakdown = (window.activeCustomerProfile && window.activeCustomerProfile.phone === phone && Array.isArray(window.activeCustomerProfile.rentalBreakdown))
+            ? window.activeCustomerProfile.rentalBreakdown
+            : [];
+        let mem = e.target.result || { phone: phone, name: name, address: address || "", wallet: {}, spent: 0, bottlesBorrowed: 0, piutang: 0, firstOutlet: fOut || window.currentOutlet, recentOutlets: rOut || window.currentOutlet, rentalBreakdown: initBreakdown };
         if(address !== undefined && address !== "") mem.address = address;
         if(wallet !== undefined) mem.wallet = wallet; 
         if(bottles !== undefined) mem.bottlesBorrowed = bottles; 
