@@ -571,8 +571,8 @@ window.syncCriticalData = async function() {
         const result = await res.json();
         if (result.status === "Success") {
             
-            // 1. Fetch offline/unsynced members AND pending piutang payments BEFORE opening the main write transaction
-            const [unsyncedList, pendingPiutangList] = await Promise.all([
+            // 1. Fetch offline/unsynced members, pending piutang payments, AND pending gallon returns BEFORE opening the main write transaction
+            const [unsyncedList, pendingPiutangList, pendingKembaliList] = await Promise.all([
                 new Promise(r => {
                     try {
                         let req = window.db.transaction(["unsynced_members"], "readonly").objectStore("unsynced_members").getAll();
@@ -583,6 +583,13 @@ window.syncCriticalData = async function() {
                 new Promise(r => {
                     try {
                         let req = window.db.transaction(["bayar_piutang"], "readonly").objectStore("bayar_piutang").getAll();
+                        req.onsuccess = e => r(e.target.result || []);
+                        req.onerror = () => r([]);
+                    } catch(err) { r([]); }
+                }),
+                new Promise(r => {
+                    try {
+                        let req = window.db.transaction(["kembali_galon"], "readonly").objectStore("kembali_galon").getAll();
                         req.onsuccess = e => r(e.target.result || []);
                         req.onerror = () => r([]);
                     } catch(err) { r([]); }
@@ -653,6 +660,19 @@ window.syncCriticalData = async function() {
                                 m.piutang = Math.max(0, (m.piutang || 0) - paidAmt);
                             }
                         }
+                    }
+                    // Potong pinjam galon server dengan pengembalian lokal yang masih Pending
+                    if (Array.isArray(m.rentalBreakdown) && pendingKembaliList.length > 0) {
+                        pendingKembaliList.forEach(kmb => {
+                            if (kmb.syncStatus === "Pending" && String(kmb.customerPhone || "").replace(/-DUP\d+$/, "") === basePhone) {
+                                let r = m.rentalBreakdown.find(x => x.logId === kmb.targetLogId || (kmb.targetOrderId && x.orderId === kmb.targetOrderId));
+                                if (r) {
+                                    r.sisa = Math.max(0, (Number(r.sisa) || 0) - (Number(kmb.qtyReturn) || 0));
+                                }
+                            }
+                        });
+                        m.rentalBreakdown = m.rentalBreakdown.filter(x => (Number(x.sisa) || 0) > 0);
+                        m.bottlesBorrowed = m.rentalBreakdown.reduce((s, x) => s + (Number(x.sisa) || 0), 0);
                     }
                     mergedMap.set(m.phone, m);
                     memT.put(m);
@@ -1116,40 +1136,48 @@ window.handleAutocomplete = function(e) {
 };
 
 window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rOut, address) {
-    if(!phone || phone === "-") return; 
-    window.db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
-        let initBreakdown = (window.activeCustomerProfile && window.activeCustomerProfile.phone === phone && Array.isArray(window.activeCustomerProfile.rentalBreakdown))
-            ? window.activeCustomerProfile.rentalBreakdown
-            : [];
-        let mem = e.target.result || { phone: phone, name: name, address: address || "", wallet: {}, spent: 0, bottlesBorrowed: 0, piutang: 0, firstOutlet: fOut || window.currentOutlet, recentOutlets: rOut || window.currentOutlet, rentalBreakdown: initBreakdown };
-        if(address !== undefined && address !== "") mem.address = address;
-        if(wallet !== undefined) mem.wallet = wallet; 
-        if(bottles !== undefined) mem.bottlesBorrowed = bottles; 
-        if(fOut !== undefined) mem.firstOutlet = fOut; 
-        if(rOut !== undefined) mem.recentOutlets = rOut;
-        
-        if(piutang !== undefined) {
-            mem.piutang = piutang; 
-            if (!mem.piutangBreakdown) mem.piutangBreakdown = {};
+    if (!phone || phone === "-") return Promise.resolve();
+    let cachedMem = (window.globalMembersCache || []).find(x => x.phone === phone);
+    let initBreakdown = (window.activeCustomerProfile && window.activeCustomerProfile.phone === phone && Array.isArray(window.activeCustomerProfile.rentalBreakdown))
+        ? window.activeCustomerProfile.rentalBreakdown
+        : [];
+    let mem = cachedMem ? { ...cachedMem } : { phone: phone, name: name, address: address || "", wallet: {}, spent: 0, bottlesBorrowed: 0, piutang: 0, firstOutlet: fOut || window.currentOutlet, recentOutlets: rOut || window.currentOutlet, rentalBreakdown: initBreakdown };
+    if (name && name !== "Walk-in") mem.name = name;
+    if (address !== undefined && address !== "") mem.address = address;
+    if (wallet !== undefined) mem.wallet = wallet;
+    if (bottles !== undefined) mem.bottlesBorrowed = bottles;
+    if (fOut !== undefined) mem.firstOutlet = fOut;
+    if (rOut !== undefined) mem.recentOutlets = rOut;
+
+    if (piutang !== undefined) {
+        mem.piutang = piutang;
+        mem.piutangBreakdown = { ...(mem.piutangBreakdown || {}) };
+        if (window.currentOutlet) {
             mem.piutangBreakdown[window.currentOutlet] = piutang;
-            if (window.currentOutlet) mem.piutangBreakdown[window.currentOutlet.toUpperCase()] = piutang;
+            mem.piutangBreakdown[window.currentOutlet.toUpperCase()] = piutang;
         }
-        if (window.piutangTargetMember && window.piutangTargetMember.phone === phone && Array.isArray(window.piutangTargetMember.piutangInvoices)) {
-            mem.piutangInvoices = window.piutangTargetMember.piutangInvoices;
-        }
-        if (window.activeCustomerProfile && window.activeCustomerProfile.phone === phone && Array.isArray(window.activeCustomerProfile.rentalBreakdown)) {
-            mem.rentalBreakdown = window.activeCustomerProfile.rentalBreakdown;
-        }
+    }
+    if (window.piutangTargetMember && window.piutangTargetMember.phone === phone && Array.isArray(window.piutangTargetMember.piutangInvoices)) {
+        mem.piutangInvoices = window.piutangTargetMember.piutangInvoices;
+    }
+    if (window.activeCustomerProfile && window.activeCustomerProfile.phone === phone && Array.isArray(window.activeCustomerProfile.rentalBreakdown)) {
+        mem.rentalBreakdown = window.activeCustomerProfile.rentalBreakdown;
+    }
 
-        if (window.globalMembersCache) {
-            let idx = window.globalMembersCache.findIndex(x => x.phone === phone);
-            if (idx > -1) window.globalMembersCache[idx] = mem;
-            else window.globalMembersCache.unshift(mem);
-        }
+    // Update RAM cache synchronously (0ms) so UI badges & lists are immediately accurate
+    if (!window.globalMembersCache) window.globalMembersCache = [];
+    let idx = window.globalMembersCache.findIndex(x => x.phone === phone);
+    if (idx > -1) window.globalMembersCache[idx] = mem;
+    else window.globalMembersCache.unshift(mem);
 
-        window.db.transaction(["members"], "readwrite").objectStore("members").put(mem);
-        window.db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").put(mem);
-    };
+    return new Promise(resolve => {
+        if (!window.db) return resolve(mem);
+        let tx = window.db.transaction(["members", "unsynced_members"], "readwrite");
+        tx.objectStore("members").put(mem);
+        tx.objectStore("unsynced_members").put(mem);
+        tx.oncomplete = () => resolve(mem);
+        tx.onerror = () => resolve(mem);
+    });
 };
 
 window.loadMembersFromCache = async function() {
