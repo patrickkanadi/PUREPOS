@@ -239,7 +239,7 @@ window.forceCloseShift = async function(shift) {
                 activeLog.clockOut = window.getWibDate();
                 activeLog.syncStatus = "OutPending";
                 window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(activeLog);
-                if (navigator.onLine) fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) }).catch(()=>{});
+                if (navigator.onLine) fetch(API_URL, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) }).catch(()=>{});
             }
         }
         return; // Stop here, do not create a shift report
@@ -652,7 +652,11 @@ window.syncCriticalData = async function() {
                 // 🔄 Ganti menjadi:
                     unsyncedList.forEach(um => {
                         let srv = mergedMap.get(um.phone) || {};
-                        let merged = { ...srv, ...um }; // Data lokal menimpa data server yang belum sinkron
+                        let merged = {
+                            ...srv,
+                            ...um,
+                            piutangBreakdown: { ...(srv.piutangBreakdown || {}), ...(um.piutangBreakdown || {}) }
+                        };
                         mergedMap.set(um.phone, merged);
                         memT.put(merged);
                     });
@@ -4279,6 +4283,8 @@ window.submitNewStaff = async function() {
     try {
         let res = await fetch(API_URL, {
             method: "POST",
+            redirect: "follow",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
             body: JSON.stringify({ action: "addStaff", staffName: name, outlet: window.currentOutlet, cashier: window.currentCashier })
         });
         let out = await res.json();
