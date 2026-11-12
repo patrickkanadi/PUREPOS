@@ -2964,15 +2964,16 @@ window.calculateLiveDrawer = function(callback) {
     let expReq = tx.objectStore("expenses").getAll(); let bpReq = tx.objectStore("bayar_piutang").getAll();
     
     tx.oncomplete = () => {
+        const isCurOut = (recOut) => !window.currentOutlet || !recOut || recOut === window.currentOutlet;
         ordersReq.result.forEach(o => {
-            if ((o.syncStatus === "Pending" || o.syncStatus === "Syncing") && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending") {
+            if (isCurOut(o.outlet) && (o.syncStatus === "Pending" || o.syncStatus === "Syncing") && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending") {
                 let checkoutCash = Math.max(0, (Number(o.cashAmount) || 0) - (Number(o.pelunasanCash) || 0));
                 liveDrawer += checkoutCash;
             }
         });
-        dropReq.result.forEach(d => { if (d.syncStatus === "Pending") liveDrawer -= ((Number(d.toAdmin) || 0) + (Number(d.toBank) || 0)); });
-        expReq.result.forEach(e => { if (e.syncStatus === "Pending" && e.status === "Active") liveDrawer -= (Number(e.amount) || 0); });
-        bpReq.result.forEach(bp => { if (bp.syncStatus === "Pending") liveDrawer += ((Number(bp.cashAmount) || 0) + (Number(bp.tipAmount) || 0)); });
+        dropReq.result.forEach(d => { if (isCurOut(d.outlet) && d.syncStatus === "Pending") liveDrawer -= ((Number(d.toAdmin) || 0) + (Number(d.toBank) || 0)); });
+        expReq.result.forEach(e => { if (isCurOut(e.outlet) && e.syncStatus === "Pending" && e.status === "Active") liveDrawer -= (Number(e.amount) || 0); });
+        bpReq.result.forEach(bp => { if (isCurOut(bp.outlet) && bp.syncStatus === "Pending") liveDrawer += ((Number(bp.cashAmount) || 0) + (Number(bp.tipAmount) || 0)); });
         callback(liveDrawer);
     };
 }
@@ -4182,13 +4183,13 @@ window.renderPeminjamList = function() {
                 }
                 
                 // 2. Add any local un-synced orders strictly for this branch
-                let localMemOrders = allOrders.filter(o => o.customerPhone === m.phone && (o.rentBottleQty || 0) > 0 && o.orderStatus !== "Voided" && o.outlet === window.currentOutlet);
+                let localMemOrders = allOrders.filter(o => o.customerPhone === m.phone && ((o.rentBottleQty || 0) - (o.returnedBottleQty || 0)) > 0 && o.orderStatus !== "Voided" && o.outlet === window.currentOutlet);
                 localMemOrders.forEach(o => {
                     if (!combinedBreakdown.some(b => b.orderId === o.orderId)) {
                         combinedBreakdown.push({
                             logId: o.rentLogId || ("PJG-" + o.orderId), 
                             orderId: o.orderId, 
-                            sisa: o.rentBottleQty, 
+                            sisa: Math.max(0, (o.rentBottleQty || 0) - (o.returnedBottleQty || 0)), 
                             date: o.timestamp
                         });
                     }
@@ -4253,18 +4254,18 @@ window.submitReturnGalon = function(phone, name, targetLogId, targetOrderId, max
             
             // Instantly update the UI breakdown
             if (mem.rentalBreakdown) {
-                let r = mem.rentalBreakdown.find(x => x.logId === targetLogId);
+                let r = mem.rentalBreakdown.find(x => x.logId === targetLogId || (targetOrderId && x.orderId === targetOrderId));
                 if (r) {
                     r.sisa -= qty;
-                    if (r.sisa <= 0) mem.rentalBreakdown = mem.rentalBreakdown.filter(x => x.logId !== targetLogId);
+                    if (r.sisa <= 0) mem.rentalBreakdown = mem.rentalBreakdown.filter(x => x !== r);
                 }
             }
 
-            // Also update local order just in case it's a local-only order
+            // Catat jumlah yang sudah dikembalikan tanpa mengubah total pinjam awal (rentBottleQty)
             window.db.transaction(["orders"], "readwrite").objectStore("orders").get(targetOrderId).onsuccess = (ordEv) => {
                 let ord = ordEv.target.result;
                 if (ord) {
-                    ord.rentBottleQty = Math.max(0, ord.rentBottleQty - qty);
+                    ord.returnedBottleQty = (Number(ord.returnedBottleQty) || 0) + qty;
                     window.db.transaction(["orders"], "readwrite").objectStore("orders").put(ord);
                 }
             };
@@ -5027,7 +5028,7 @@ window.onload = async () => {
     }
     
     if (navigator.onLine) {
-        window.syncMasterData(); 
+        window.runBackgroundSync().then(() => window.syncMasterData()); 
     } else {
         let netText = document.getElementById("network-text");
         let netDot = document.getElementById("network-dot");
