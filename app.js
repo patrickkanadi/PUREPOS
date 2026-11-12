@@ -759,7 +759,9 @@ window.syncCriticalData = async function() {
                 // nol-kan juga sisa debtAmount pada order lokal yang sudah Synced agar tidak nyangkut di tablet!
                 let zeroDebtPhones = new Set();
                 let knownServerPhones = new Set();
+                let hasUnlinkedInvoicePhones = new Set();
                 let activeInvoiceDebtByOrder = {};
+                let curOutUpClean = String(window.currentOutlet || "").trim().toUpperCase();
                 window.globalMembersCache.forEach(m => {
                     let rawPhone = String(m.phone || "");
                     if (/-DUP\d+$/.test(rawPhone)) return; // Abaikan baris duplikat karena saldo piutang ada di baris utama
@@ -767,15 +769,18 @@ window.syncCriticalData = async function() {
                     if (bPhone) knownServerPhones.add(bPhone);
                     if (pendingPaidByPhone[bPhone]) return;
                     let branchDebt = (m.piutangBreakdown && window.currentOutlet)
-                        ? (m.piutangBreakdown[window.currentOutlet] ?? m.piutangBreakdown[window.currentOutlet.toUpperCase()] ?? 0)
+                        ? (m.piutangBreakdown[window.currentOutlet] ?? m.piutangBreakdown[curOutUpClean] ?? 0)
                         : (m.piutang || 0);
                     if (branchDebt <= 0 && bPhone) {
                         zeroDebtPhones.add(bPhone);
                     }
                     if (Array.isArray(m.piutangInvoices)) {
                         m.piutangInvoices.forEach(inv => {
+                            if (curOutUpClean && String(inv.outlet || "").trim().toUpperCase() !== curOutUpClean) return;
                             if (inv.orderId && inv.orderId !== "-") {
                                 activeInvoiceDebtByOrder[inv.orderId] = Number(inv.sisa) || 0;
+                            } else if ((Number(inv.sisa) || 0) > 0 && bPhone) {
+                                hasUnlinkedInvoicePhones.add(bPhone);
                             }
                         });
                     }
@@ -793,8 +798,8 @@ window.syncCriticalData = async function() {
                             let ordAgeMs = Date.now() - (window.parseSafeTimeMs(ord.timestamp) || 0);
                             if (activeInvoiceDebtByOrder[ord.orderId] === undefined && ordAgeMs < 180000) return;
 
-                            if (!zeroDebtPhones.has(ordPhone) && activeInvoiceDebtByOrder[ord.orderId] === undefined) return;
-                            let serverDebt = zeroDebtPhones.has(ordPhone) ? 0 : activeInvoiceDebtByOrder[ord.orderId];
+                            if (!zeroDebtPhones.has(ordPhone) && activeInvoiceDebtByOrder[ord.orderId] === undefined && hasUnlinkedInvoicePhones.has(ordPhone)) return;
+                            let serverDebt = zeroDebtPhones.has(ordPhone) ? 0 : (activeInvoiceDebtByOrder[ord.orderId] ?? 0);
                             if (serverDebt !== ord.debtAmount) {
                                 ord.debtAmount = serverDebt;
                                 if (serverDebt === 0 && String(ord.paymentMethod || "").includes("Piutang")) {
