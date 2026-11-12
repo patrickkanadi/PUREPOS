@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
-const DB_VERSION = 1; // 🔥 Keep at 22 so IndexedDB never blocks!
-const APP_VERSION = "4"; 
+const DB_VERSION = 30; 
+const APP_VERSION = "30"; 
 window.db = null;
 
 // Core State
@@ -143,7 +143,16 @@ window.initDB = function() {
             if (!window.db.objectStoreNames.contains("attendance")) window.db.createObjectStore("attendance", { keyPath: "logId" });
         };
         request.onsuccess = (e) => { window.db = e.target.result; resolve(window.db); };
-        request.onerror = (e) => reject(e);
+        request.onerror = (e) => {
+            // Jika tablet memiliki versi DB yang lebih tinggi di memori browser, buka langsung tanpa paksa versi
+            if (request.error && request.error.name === "VersionError") {
+                const fallbackReq = indexedDB.open(DB_NAME);
+                fallbackReq.onsuccess = (ev) => { window.db = ev.target.result; resolve(window.db); };
+                fallbackReq.onerror = (ev) => reject(ev);
+            } else {
+                reject(e);
+            }
+        };
     });
 }
 
