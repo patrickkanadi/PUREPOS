@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 1; // 🔥 Keep at 22 so IndexedDB never blocks!
-const APP_VERSION = "3"; 
+const APP_VERSION = "4"; 
 window.db = null;
 
 // Core State
@@ -642,13 +642,13 @@ window.syncCriticalData = async function() {
                         for (let outKey in pendingPaidByPhone[basePhone]) {
                             let paidAmt = pendingPaidByPhone[basePhone][outKey];
                             if (m.piutangBreakdown) {
-                                if (m.piutangBreakdown[outKey] !== undefined) {
-                                    m.piutangBreakdown[outKey] = Math.max(0, m.piutangBreakdown[outKey] - paidAmt);
+                                    if (m.piutangBreakdown[outKey] !== undefined) {
+                                        m.piutangBreakdown[outKey] = Math.max(0, m.piutangBreakdown[outKey] - paidAmt);
+                                    }
+                                    if (window.currentOutlet && window.currentOutlet !== outKey && m.piutangBreakdown[window.currentOutlet] !== undefined) {
+                                        m.piutangBreakdown[window.currentOutlet] = Math.max(0, m.piutangBreakdown[window.currentOutlet] - paidAmt);
+                                    }
                                 }
-                                if (window.currentOutlet && m.piutangBreakdown[window.currentOutlet] !== undefined) {
-                                    m.piutangBreakdown[window.currentOutlet] = Math.max(0, m.piutangBreakdown[window.currentOutlet] - paidAmt);
-                                }
-                            }
                             if (!window.currentOutlet || outKey === window.currentOutlet.toUpperCase()) {
                                 m.piutang = Math.max(0, (m.piutang || 0) - paidAmt);
                             }
@@ -2880,15 +2880,19 @@ window.applyLocalVoidAftermath = function(order) {
                 }
                 mem.piutang = Math.max(0, (mem.piutang || 0) - voidDebt);
                 
-                // 🔥 Potong piutang cabang terkait agar daftar Piutang & Badge hilang seketika
+                // 🔥 Potong piutang cabang terkait (1x) & hapus dari daftar piutangInvoices lokal
                 if (mem.piutangBreakdown) {
-                    let out = order.outlet || window.currentOutlet;
-                    if (mem.piutangBreakdown[out] !== undefined) {
+                    let out = String(order.outlet || window.currentOutlet || "").trim();
+                    let outUp = out.toUpperCase();
+                    if (out && mem.piutangBreakdown[out] !== undefined) {
                         mem.piutangBreakdown[out] = Math.max(0, mem.piutangBreakdown[out] - voidDebt);
                     }
-                    if (window.currentOutlet && mem.piutangBreakdown[window.currentOutlet] !== undefined) {
-                        mem.piutangBreakdown[window.currentOutlet] = Math.max(0, mem.piutangBreakdown[window.currentOutlet] - voidDebt);
+                    if (outUp && outUp !== out && mem.piutangBreakdown[outUp] !== undefined) {
+                        mem.piutangBreakdown[outUp] = Math.max(0, mem.piutangBreakdown[outUp] - voidDebt);
                     }
+                }
+                if (Array.isArray(mem.piutangInvoices) && order.orderId) {
+                    mem.piutangInvoices = mem.piutangInvoices.filter(inv => inv.orderId !== order.orderId);
                 }
                 
                 // Revert Wallet Points & Free Items locally instantly
