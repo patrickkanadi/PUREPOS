@@ -269,7 +269,7 @@ window.forceCloseShift = async function(shift) {
         const staffMatch = staffList.find(s => s.pin === shift.pin);
         
         if (staffMatch) {
-            const activeLog = attendances.find(a => a.staffName === staffMatch.name && !a.clockOut);
+            const activeLog = attendances.slice().reverse().find(a => a.staffName === staffMatch.name && !a.clockOut);
             if (activeLog) {
                 activeLog.clockOut = window.getWibDate();
                 activeLog.syncStatus = "OutPending";
@@ -571,12 +571,19 @@ window.syncCriticalData = async function() {
         const result = await res.json();
         if (result.status === "Success") {
             
-            // 1. Fetch offline/unsynced members, pending piutang payments, AND pending gallon returns BEFORE opening the main write transaction
-            const [unsyncedList, pendingPiutangList, pendingKembaliList] = await Promise.all([
+            // 1. Fetch offline/unsynced members, pending orders, pending piutang payments, AND pending gallon returns BEFORE opening the main write transaction
+            const [unsyncedList, pendingOrdersList, pendingPiutangList, pendingKembaliList] = await Promise.all([
                 new Promise(r => {
                     try {
                         let req = window.db.transaction(["unsynced_members"], "readonly").objectStore("unsynced_members").getAll();
                         req.onsuccess = e => r(e.target.result || []);
+                        req.onerror = () => r([]);
+                    } catch(err) { r([]); }
+                }),
+                new Promise(r => {
+                    try {
+                        let req = window.db.transaction(["orders"], "readonly").objectStore("orders").getAll();
+                        req.onsuccess = e => r((e.target.result || []).filter(o => (o.syncStatus === "Pending" || o.syncStatus === "Syncing") && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending"));
                         req.onerror = () => r([]);
                     } catch(err) { r([]); }
                 }),
@@ -643,8 +650,43 @@ window.syncCriticalData = async function() {
                             m.piutangBreakdown[window.currentOutlet] = m.piutangBreakdown[upOut];
                         }
                     }
-                    // 🔥 Potong piutang server dengan pembayaran lokal yang masih Pending agar piutang tidak muncul kembali!
                     let basePhone = String(m.phone || "").replace(/-DUP\d+$/, "");
+
+                    // Tambahkan tagihan & galon dari order lokal yang masih Pending/Syncing (belum masuk server)
+                    if (!/-DUP\d+$/.test(String(m.phone || "")) && pendingOrdersList.length > 0) {
+                        pendingOrdersList.forEach(po => {
+                            let poPhone = String(po.customerPhone || "").replace(/-DUP\d+$/, "");
+                            if (poPhone !== basePhone) return;
+                            let poOut = String(po.outlet || window.currentOutlet || "").trim();
+                            let poOutUp = poOut.toUpperCase();
+                            let poOrigDebt = (Number(po.debtAmount) || 0) + (Number(po.pelunasanCash) || 0) + (Number(po.pelunasanQris) || 0) + (Number(po.pelunasanTransfer) || 0);
+                            if (poOrigDebt > 0) {
+                                if (!m.piutangBreakdown) m.piutangBreakdown = {};
+                                if (poOutUp) m.piutangBreakdown[poOutUp] = (m.piutangBreakdown[poOutUp] || 0) + poOrigDebt;
+                                if (poOut && poOut !== poOutUp) m.piutangBreakdown[poOut] = (m.piutangBreakdown[poOut] || 0) + poOrigDebt;
+                                if (!window.currentOutlet || poOutUp === window.currentOutlet.toUpperCase()) {
+                                    m.piutang = (m.piutang || 0) + poOrigDebt;
+                                }
+                            }
+                            if ((Number(po.rentBottleQty) || 0) > 0) {
+                                if (!Array.isArray(m.rentalBreakdown)) m.rentalBreakdown = [];
+                                if (!m.rentalBreakdown.some(r => r.orderId === po.orderId)) {
+                                    m.rentalBreakdown.push({
+                                        logId: po.rentLogId || ("PJG-" + po.orderId),
+                                        orderId: po.orderId,
+                                        sisa: Number(po.rentBottleQty) || 0,
+                                        date: po.timestamp || window.getWibDate(),
+                                        outlet: poOut || window.currentOutlet
+                                    });
+                                }
+                            }
+                            if (window.loyaltyEnabled && po.finalStoredRewards && po.finalStoredRewards !== "{}") {
+                                try { m.wallet = JSON.parse(po.finalStoredRewards); } catch (e) {}
+                            }
+                        });
+                    }
+
+                    // 🔥 Potong piutang server dengan pembayaran lokal yang masih Pending agar piutang tidak muncul kembali!
                     if (pendingPaidByPhone[basePhone]) {
                         for (let outKey in pendingPaidByPhone[basePhone]) {
                             let paidAmt = pendingPaidByPhone[basePhone][outKey];
@@ -718,7 +760,7 @@ window.syncCriticalData = async function() {
                     }
                 });
 
-                try {
+                if (window.currentOutlet) try {
                     let txOrdClean = window.db.transaction(["orders"], "readwrite");
                     let ordStoreClean = txOrdClean.objectStore("orders");
                     ordStoreClean.getAll().onsuccess = (evOrd) => {
@@ -1018,13 +1060,24 @@ window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localP
     
     let wallet = {}; try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
     let primaryMem = (window.globalMembersCache || []).find(m => m.phone === canonicalPhone);
+    let curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
+    let branchPiutang = primaryMem
+        ? (primaryMem.piutangBreakdown && window.currentOutlet
+            ? (primaryMem.piutangBreakdown[window.currentOutlet] ?? primaryMem.piutangBreakdown[curOutUp] ?? 0)
+            : (primaryMem.piutang || 0))
+        : localPiutang;
+    let branchBottles = primaryMem
+        ? (Array.isArray(primaryMem.rentalBreakdown) && curOutUp
+            ? primaryMem.rentalBreakdown.filter(r => String(r.outlet || window.currentOutlet || "").trim().toUpperCase() === curOutUp).reduce((s, r) => s + (Number(r.sisa) || 0), 0)
+            : (primaryMem.bottlesBorrowed || 0))
+        : dbBottlesBorrowed;
     window.activeCustomerProfile = {
         phone: canonicalPhone,
         name: name,
         address: address,
         wallet: (primaryMem && primaryMem.wallet) ? primaryMem.wallet : wallet,
-        bottlesBorrowed: primaryMem ? (primaryMem.bottlesBorrowed || 0) : dbBottlesBorrowed,
-        piutang: primaryMem ? (primaryMem.piutang || 0) : localPiutang,
+        bottlesBorrowed: branchBottles,
+        piutang: branchPiutang,
         piutangBreakdown: primaryMem ? primaryMem.piutangBreakdown : undefined,
         piutangInvoices: primaryMem ? primaryMem.piutangInvoices : undefined,
         rentalBreakdown: primaryMem ? primaryMem.rentalBreakdown : undefined,
@@ -3365,7 +3418,7 @@ window.initiateLogoutSequence = async function() {
     const hasActivity = data.totalOrders > 0 || data.totalExpenses > 0 || data.piutangGiven > 0 || data.piutangPaid > 0;
     if (!hasActivity) {
         const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result || []));
-        const activeLog = attendances.find(a => a.staffName === window.currentCashier && !a.clockOut);
+        const activeLog = attendances.slice().reverse().find(a => a.staffName === window.currentCashier && !a.clockOut);
         
         if (activeLog) {
             activeLog.clockOut = window.getWibDate();
@@ -3454,7 +3507,7 @@ window.executeFinalLogout = async function(netCash, logoutCashDrop = null) {
     });
 
     const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result || []));
-    const activeLog = attendances.find(a => a.staffName === window.currentCashier && !a.clockOut);
+    const activeLog = attendances.slice().reverse().find(a => a.staffName === window.currentCashier && !a.clockOut);
     if (activeLog) {
         activeLog.clockOut = window.getWibDate();
         activeLog.syncStatus = "Bundled";
