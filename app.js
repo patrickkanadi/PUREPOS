@@ -3948,6 +3948,11 @@ window.runBackgroundSync = async function() {
         });
 
         let syncedAnyPiutang = false;
+        let syncedAnyOrderOrGalon = orders.some(o => o.syncStatus === "Pending" || o.syncStatus === "Syncing") ||
+            kembalis.some(k => k.syncStatus === "Pending") ||
+            expenses.some(e => e.syncStatus === "Pending") ||
+            drops.some(d => d.syncStatus === "Pending") ||
+            voids.length > 0;
         for (const bp of piutangs) {
             if (bp.syncStatus === "Pending") {
                 try {
@@ -4087,11 +4092,7 @@ window.runBackgroundSync = async function() {
             }
         }
 
-        let hasNewServerMutations = syncedAnyPiutang ||
-            orders.some(o => o.syncStatus === "Pending" || o.syncStatus === "Syncing") ||
-            kembalis.some(k => k.syncStatus === "Pending") ||
-            voids.length > 0;
-        if (hasNewServerMutations) {
+        if (syncedAnyPiutang || syncedAnyOrderOrGalon) {
             await window.syncCriticalData();
             await window.syncBackgroundData();
         }
@@ -4590,7 +4591,7 @@ window.submitDeliveryDone = function() {
 
         if (pinjamQty > 0) {
             order.rentBottleQty = (order.rentBottleQty || 0) + pinjamQty;
-            order.rentLogId = "PJG-" + Date.now(); // Generate ID instantly
+            if (!order.rentLogId) order.rentLogId = "PJG-" + Date.now();
             order.hasUnsyncedRental = true;
             
             // Immediately attach it to the local customer profile
