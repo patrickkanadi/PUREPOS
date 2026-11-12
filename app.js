@@ -784,7 +784,8 @@ window.syncCriticalData = async function() {
                             let ordAgeMs = Date.now() - (window.parseSafeTimeMs(ord.timestamp) || 0);
                             if (activeInvoiceDebtByOrder[ord.orderId] === undefined && ordAgeMs < 180000) return;
 
-                            let serverDebt = zeroDebtPhones.has(ordPhone) ? 0 : (activeInvoiceDebtByOrder[ord.orderId] ?? 0);
+                            if (!zeroDebtPhones.has(ordPhone) && activeInvoiceDebtByOrder[ord.orderId] === undefined) return;
+                            let serverDebt = zeroDebtPhones.has(ordPhone) ? 0 : activeInvoiceDebtByOrder[ord.orderId];
                             if (serverDebt !== ord.debtAmount) {
                                 ord.debtAmount = serverDebt;
                                 if (serverDebt === 0 && String(ord.paymentMethod || "").includes("Piutang")) {
@@ -4086,7 +4087,11 @@ window.runBackgroundSync = async function() {
             }
         }
 
-        if (syncedAnyPiutang) {
+        let hasNewServerMutations = syncedAnyPiutang ||
+            orders.some(o => o.syncStatus === "Pending" || o.syncStatus === "Syncing") ||
+            kembalis.some(k => k.syncStatus === "Pending") ||
+            voids.length > 0;
+        if (hasNewServerMutations) {
             await window.syncCriticalData();
             await window.syncBackgroundData();
         }
