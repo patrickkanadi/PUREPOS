@@ -3627,16 +3627,22 @@ window.runBackgroundSync = async function() {
                 }
             }
         }
+        let syncedAnyPiutang = false;
         for (const bp of piutangs) {
             if (bp.syncStatus === "Pending") {
                 try {
                     let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncBayarPiutang", data: bp }) });
                     if ((await r.json()).status === "Success") {
                         bp.syncStatus = "Synced";
+                        syncedAnyPiutang = true;
                         window.db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").put(bp);
                     }
                 } catch(e) {}
             }
+        }
+        if (syncedAnyPiutang) {
+            window.syncCriticalData();
+            window.syncBackgroundData();
         }
         for (const drop of drops) {
             if (drop.syncStatus === "Pending") { try { let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncCashDrop", data: drop }) }); if ((await r.json()).status === "Success") { drop.syncStatus = "Synced"; window.db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(drop); } } catch(e) {} }
