@@ -678,10 +678,12 @@ window.syncCriticalData = async function() {
                 let zeroDebtPhones = new Set();
                 let activeInvoiceDebtByOrder = {};
                 window.globalMembersCache.forEach(m => {
-                    let bPhone = String(m.phone || "").replace(/-DUP\d+$/, "");
+                    let rawPhone = String(m.phone || "");
+                    if (/-DUP\d+$/.test(rawPhone)) return; // Abaikan baris duplikat karena saldo piutang ada di baris utama
+                    let bPhone = rawPhone.replace(/-DUP\d+$/, "");
                     if (pendingPaidByPhone[bPhone]) return;
                     let branchDebt = (m.piutangBreakdown && window.currentOutlet)
-                        ? (m.piutangBreakdown[window.currentOutlet] || 0)
+                        ? (m.piutangBreakdown[window.currentOutlet] ?? m.piutangBreakdown[window.currentOutlet.toUpperCase()] ?? 0)
                         : (m.piutang || 0);
                     if (branchDebt <= 0 && bPhone) {
                         zeroDebtPhones.add(bPhone);
@@ -1725,6 +1727,10 @@ window.triggerBayarPiutang = function(phone, linkedOrderId = null) {
 
 window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
     window.piutangTargetMember = memberOverride || window.activeCustomerProfile;
+    if (window.piutangTargetMember && window.piutangTargetMember.piutangBreakdown && window.currentOutlet) {
+        let bDebt = window.piutangTargetMember.piutangBreakdown[window.currentOutlet] ?? window.piutangTargetMember.piutangBreakdown[window.currentOutlet.toUpperCase()];
+        if (bDebt !== undefined) window.piutangTargetMember.piutang = Math.max(bDebt, linkedOrderId ? (window.piutangTargetMember.piutang || 0) : bDebt);
+    }
     
     // 🔥 THE FIX: Do not silently abort. If it's a delivery intercept, force it open.
     if(!window.piutangTargetMember || (window.piutangTargetMember.piutang <= 0 && !linkedOrderId)) {
@@ -1908,13 +1914,17 @@ window.submitPiutang = function() {
             let tx2 = window.db.transaction(["orders"], "readwrite");
             let store2 = tx2.objectStore("orders");
             
+            // Prioritaskan nota yang dipilih (targetOrderId), lalu alokasikan sisa pembayaran secara FIFO ke nota lain milik pelanggan di cabang ini (identik dengan server)
+            if (targetOrderId !== "") {
+                orders.sort((a, b) => (a.orderId === targetOrderId ? -1 : (b.orderId === targetOrderId ? 1 : (window.parseSafeTimeMs(a.timestamp) - window.parseSafeTimeMs(b.timestamp)))));
+            }
             let remC = netC, remQ = netQ, remT = netT;
             for (let o of orders) {
                 if (remainingPay <= 0) break;
-                if (targetOrderId !== "" && o.orderId !== targetOrderId) continue; 
                 
                 let currentDebt = o.debtAmount || 0;
                 let payHere = Math.min(currentDebt, remainingPay);
+                if (payHere <= 0) continue;
                 remainingPay -= payHere;
 
                 let addC = 0, addQ = 0, addT = 0;
@@ -2948,7 +2958,7 @@ window.submitCashDrop = function() {
     
     window.calculateLiveDrawer(async (liveAmount) => {
         const leftInDrawer = liveAmount - pullAmount;
-        const payload = { dropId: "DRP-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId, toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: finalNotes, outlet: window.currentOutlet, syncStatus: "Pending" };
+        const payload = { dropId: "DRP-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId, toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: finalNotes, outlet: window.currentOutlet, syncStatus: window.isLoggingOut ? "Bundled" : "Pending" };
         
         await new Promise(res => {
             let tx = window.db.transaction(["cash_drops"], "readwrite");
@@ -3343,22 +3353,27 @@ window.executeFinalLogout = async function(netCash, logoutCashDrop = null) {
         return alert("⚠️ Data shift belum siap. Silakan buka Laporan Shift terlebih dahulu.");
     }
 
-    // Kunci flag isSyncing agar timer 25 detik tidak menyerobot saat pengiriman akhir
-    window.isSyncing = true;
-
-    const shiftNetCash = (Number(data.totalCash) || 0) + (Number(data.piutangPaid) || 0) - (Number(data.totalExpenses) || 0);
-    const shiftPayload = {
-        shiftId: window.currentShiftId, timestamp: window.getWibDate(), cashier: window.currentCashier, loginTime: window.currentLoginTime, logoutTime: window.getWibDate(), 
-        totalCustomers: data.totalCustomers, totalOrders: data.totalOrders, totalOmset: data.totalOmset, totalCash: data.totalCash, totalQris: data.totalQris, totalTransfer: data.totalTransfer, totalFree: data.totalFree,
-        totalExpenses: data.totalExpenses, netCash: shiftNetCash, foodSummary: data.foodSummary, meterWater: data.meterWater, outlet: window.currentOutlet, syncStatus: "Pending", piutangGiven: data.piutangGiven, piutangPaid: data.piutangPaid
-    };
-
     let overlay = document.getElementById("sync-lock-overlay");
     if (overlay) {
         overlay.style.display = "flex";
         const descEl = document.getElementById("sync-lock-desc");
         if (descEl) descEl.innerText = "Menyimpan Setor Laci, Absensi, & Laporan Shift Akhir sekaligus...";
     }
+
+    // Tunggu jika ada proses sync latar belakang yang sedang berjalan agar tidak bertabrakan
+    let waitSync = 0;
+    while (window.isSyncing && waitSync < 40) {
+        await new Promise(r => setTimeout(r, 250));
+        waitSync++;
+    }
+    window.isSyncing = true;
+
+    const shiftNetCash = (Number(data.totalCash) || 0) + (Number(data.piutangPaid) || 0) - (Number(data.totalExpenses) || 0);
+    const shiftPayload = {
+        shiftId: window.currentShiftId, timestamp: window.getWibDate(), cashier: window.currentCashier, loginTime: window.currentLoginTime, logoutTime: window.getWibDate(), 
+        totalCustomers: data.totalCustomers, totalOrders: data.totalOrders, totalOmset: data.totalOmset, totalCash: data.totalCash, totalQris: data.totalQris, totalTransfer: data.totalTransfer, totalFree: data.totalFree,
+        totalExpenses: data.totalExpenses, netCash: shiftNetCash, foodSummary: data.foodSummary, meterWater: data.meterWater, outlet: window.currentOutlet, syncStatus: "Bundled", piutangGiven: data.piutangGiven, piutangPaid: data.piutangPaid
+    };
 
     await new Promise(res => {
         let tx = window.db.transaction(["local_shift_history", "shift_reports"], "readwrite");
@@ -3371,7 +3386,7 @@ window.executeFinalLogout = async function(netCash, logoutCashDrop = null) {
     const activeLog = attendances.find(a => a.staffName === window.currentCashier && !a.clockOut);
     if (activeLog) {
         activeLog.clockOut = window.getWibDate();
-        activeLog.syncStatus = "OutPending";
+        activeLog.syncStatus = "Bundled";
         await new Promise(res => {
             let txAtt = window.db.transaction(["attendance"], "readwrite");
             txAtt.objectStore("attendance").put(activeLog);
@@ -3427,6 +3442,23 @@ window.executeFinalLogout = async function(netCash, logoutCashDrop = null) {
     if (overlay) overlay.style.display = "none";
 
     if (!syncSuccess) {
+        await new Promise(resolveRevert => {
+            let stores = ["shift_reports"];
+            if (logoutCashDrop) stores.push("cash_drops");
+            if (activeLog) stores.push("attendance");
+            let txRev = window.db.transaction(stores, "readwrite");
+            shiftPayload.syncStatus = "Pending";
+            txRev.objectStore("shift_reports").put(shiftPayload);
+            if (logoutCashDrop) {
+                logoutCashDrop.syncStatus = "Pending";
+                txRev.objectStore("cash_drops").put(logoutCashDrop);
+            }
+            if (activeLog) {
+                activeLog.syncStatus = "OutPending";
+                txRev.objectStore("attendance").put(activeLog);
+            }
+            txRev.oncomplete = resolveRevert;
+        });
         window.isSyncing = false;
         return alert(`⚠️ PERINGATAN:\nLaporan Shift belum berhasil tersimpan ke Google Sheets karena gangguan jaringan.\n\nSesi Anda TIDAK ditutup agar Anda bisa memeriksa koneksi internet lalu menekan tombol Logout kembali.`);
     }
@@ -4313,9 +4345,12 @@ window.markDeliveryDone = async function(orderId) {
                 // 🔥 THE FIX: Prevent silent crash! Force piutang amount to be AT LEAST the order's debt, 
                 // in case the background sync temporarily overwrote it with '0'.
                 // Jangan paksa naikkan piutang jika order sebenarnya sudah lunas
+                let branchDebt = (m.piutangBreakdown && window.currentOutlet)
+                    ? (m.piutangBreakdown[window.currentOutlet] ?? m.piutangBreakdown[window.currentOutlet.toUpperCase()] ?? m.piutang)
+                    : m.piutang;
                 if ((order.debtAmount || 0) > 0) {
-                    m.piutang = Math.max((m.piutang || 0), order.debtAmount);
-                }    
+                    m.piutang = Math.max((branchDebt || 0), order.debtAmount);
+                }
                 window.openPiutangModal(m, orderId);
             } else {
                 window.openPiutangModal(fallbackMember, orderId);
