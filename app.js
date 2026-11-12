@@ -24,6 +24,41 @@ window.promoRules = {};
 window.promoStampRules = {};
 window.volumeDiscountRules = [];
 
+window.applySettingsToMemory = function(settingsObj) {
+    if (!settingsObj) return;
+    window.volumeDiscountRules = [];
+    window.promoRules = {};
+    window.promoStampRules = {};
+
+    for (const [k, v] of Object.entries(settingsObj)) {
+        let upperKey = String(k).toUpperCase().replace(/\s+/g, '');
+        if (upperKey.includes("VOLUMEDISCOUNT") || upperKey.includes("VOLUME_DISCOUNT") || upperKey.includes("DISKONGROSIR")) {
+            window.parseVolumeDiscountSetting(v);
+        }
+        if (upperKey.includes("PROMO")) {
+            let valStr = String(v || "");
+            if (valStr.includes(":")) {
+                valStr.split(",").forEach(p => {
+                    let parts = p.split(":");
+                    if (parts.length === 2) {
+                        let itemName = parts[0].trim().toUpperCase().replace(/\s+/g, '');
+                        let reqQty = Number(parts[1].trim());
+                        if (itemName && !isNaN(reqQty)) window.promoRules[itemName] = reqQty;
+                    } else if (parts.length === 4) {
+                        let itemName = parts[0].trim().toUpperCase().replace(/\s+/g, '');
+                        let minQty = Number(parts[1].trim());
+                        let target = Number(parts[2].trim());
+                        let rewardQty = Number(parts[3].trim());
+                        if (itemName && !isNaN(target)) window.promoStampRules[itemName] = { target, minQty, rewardQty, originalName: parts[0].trim() };
+                    }
+                });
+            }
+        }
+    }
+    window.loyaltyEnabled = String(settingsObj["Enable_Loyalty"]).toUpperCase() === "TRUE";
+    window.historyHours = Number(settingsObj["History_Hours"] || settingsObj["Riwayat_Hours"]) || 24;
+};
+
 window.parseVolumeDiscountSetting = function(valStr) {
     if (!valStr) return;
     // Bisa dipisah dengan baris baru (Enter) atau tanda '|'
@@ -568,35 +603,10 @@ window.syncCriticalData = async function() {
             }
             if (result.data.settings) {
                 const setT = tx.objectStore("settings"); setT.clear();
-                window.volumeDiscountRules = [];
                 for (const [k, v] of Object.entries(result.data.settings)) { 
                     setT.put({ key: k, value: v }); 
-                    let upperKey = String(k).toUpperCase().replace(/\s+/g, '');
-                    if (upperKey.includes("VOLUMEDISCOUNT") || upperKey.includes("VOLUME_DISCOUNT") || upperKey.includes("DISKONGROSIR")) {
-                        window.parseVolumeDiscountSetting(v);
-                    }
-                    if (upperKey.includes("PROMO")) {
-                        let valStr = String(v || "");
-                        if (valStr.includes(":")) {
-                            valStr.split(",").forEach(p => {
-                                let parts = p.split(":");
-                                if (parts.length === 2) {
-                                    let itemName = parts[0].trim().toUpperCase().replace(/\s+/g, '');
-                                    let reqQty = Number(parts[1].trim());
-                                    if (itemName && !isNaN(reqQty)) window.promoRules[itemName] = reqQty;
-                                } else if (parts.length === 4) {
-                                    let itemName = parts[0].trim().toUpperCase().replace(/\s+/g, '');
-                                    let minQty = Number(parts[1].trim());
-                                    let target = Number(parts[2].trim());
-                                    let rewardQty = Number(parts[3].trim());
-                                    if (itemName && !isNaN(target)) window.promoStampRules[itemName] = { target, minQty, rewardQty, originalName: parts[0].trim() };
-                                }
-                            });
-                        }
-                    }
                 }
-                window.loyaltyEnabled = String(result.data.settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
-                window.historyHours = Number(result.data.settings["History_Hours"] || result.data.settings["Riwayat_Hours"]) || 24;
+                window.applySettingsToMemory(result.data.settings);
                 
                 const rawOutlets = result.data.settings["Outlet_List"] || "Pusat"; 
                 const outletArray = rawOutlets.split(",").map(s => s.trim()); 
@@ -3296,7 +3306,7 @@ window.executeFinalLogout = async function(netCash) {
             txAtt.oncomplete = res;
         });
         try {
-            let rAtt = await fetch(API_URL, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) });
+            let rAtt = await window.fetchWithSyncTimeout(API_URL, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) });
             if ((await rAtt.json()).status === "Success") {
                 activeLog.syncStatus = "Synced";
                 await new Promise(res => {
@@ -4656,7 +4666,14 @@ window.reprintArchivedOrder = async function(idx) {
         discounts: o.discounts || 0,
         freeAmount: o.freeAmount || 0,
         grandTotal: o.total || 0,
-        items: (o.itemsArray && o.itemsArray.length > 0) ? o.itemsArray.map(i => ({ name: i.name, qty: Number(i.qty) || 1, originalPrice: Number(i.originalPrice || i.price) || 0 })) : [{ name: o.items, qty: 1, originalPrice: o.total || 0 }]
+        items: (o.itemsArray && o.itemsArray.length > 0)
+            ? o.itemsArray.map(i => ({
+                name: i.name,
+                qty: Number(i.qty) || 1,
+                price: Number(i.price !== undefined ? i.price : i.originalPrice) || 0,
+                originalPrice: Number(i.originalPrice !== undefined ? i.originalPrice : i.price) || 0
+            }))
+            : [{ name: o.items, qty: 1, price: o.total || 0, originalPrice: o.total || 0 }]
     };
     const deposit = (o.cashAmount || 0) + (o.qrisAmount || 0) + (o.transferAmount || 0) + (o.freeAmount || 0) || (o.total - (o.debt || 0));
     let updatedWallet = {};
@@ -4723,15 +4740,7 @@ window.onload = async () => {
                 selectBox.innerHTML = `<option value="AUTO">🏠 Sesuai Cabang Asal</option>` + outletArray.map(o => `<option value="${o}">${o}</option>`).join(""); 
             }
         }
-        window.loyaltyEnabled = String(settings["Enable_Loyalty"]).toUpperCase() === "TRUE";
-        window.historyHours = Number(settings["History_Hours"] || settings["Riwayat_Hours"]) || 24;
-        window.volumeDiscountRules = [];
-        for (const [k, v] of Object.entries(settings)) {
-            let uk = String(k).toUpperCase().replace(/\s+/g, '');
-            if (uk.includes("VOLUMEDISCOUNT") || uk.includes("VOLUME_DISCOUNT") || uk.includes("DISKONGROSIR")) {
-                window.parseVolumeDiscountSetting(v);
-            }
-        }
+        window.applySettingsToMemory(settings);
     }
 
     await window.checkAutoCloseShifts(); 
