@@ -678,18 +678,19 @@ window.syncCriticalData = async function() {
                     memT.put(m);
                 });
                 
-                // Keep unsynced local members alive so they are never wiped out!
-                // 🔄 Ganti menjadi:
-                    unsyncedList.forEach(um => {
-                        let srv = mergedMap.get(um.phone) || {};
-                        let merged = {
-                            ...srv,
-                            ...um,
-                            piutangBreakdown: { ...(srv.piutangBreakdown || {}), ...(um.piutangBreakdown || {}) }
-                        };
-                        mergedMap.set(um.phone, merged);
-                        memT.put(merged);
-                    });
+                // Keep unsynced local members alive without overwriting authoritative server balances!
+                unsyncedList.forEach(um => {
+                    let srv = mergedMap.get(um.phone);
+                    let merged = srv ? {
+                        ...srv,
+                        name: (um.name && um.name !== "Walk-in") ? um.name : srv.name,
+                        address: (um.address && um.address !== "-") ? um.address : srv.address,
+                        firstOutlet: um.firstOutlet || srv.firstOutlet,
+                        recentOutlets: um.recentOutlets || srv.recentOutlets
+                    } : um;
+                    mergedMap.set(um.phone, merged);
+                    memT.put(merged);
+                });
                 window.globalMembersCache = Array.from(mergedMap.values());
 
                 // 🔥 SINKRONISASI CLEAN SLATE / PELUNASAN SERVER KE ORDERS LOKAL:
