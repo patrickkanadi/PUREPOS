@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbxILiFVszwxFiOOvyKPh7Js83_tKBvXUTvWxzi_ZGStFCa9qV6so8tbJDINsqoS3UVc/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 1; // 🔥 Keep at 22 so IndexedDB never blocks!
-const APP_VERSION = "1"; 
+const APP_VERSION = "2"; 
 window.db = null;
 
 // Core State
@@ -2741,8 +2741,12 @@ window.applyLocalVoidAftermath = function(order) {
         memberStore.get(order.customerPhone).onsuccess = (e) => { 
             const mem = e.target.result; 
             if (mem) { 
-                mem.spent = Math.max(0, (mem.spent || 0) - order.grandTotal); 
+                let totalPaidVoid = (Number(order.cashAmount) || 0) + (Number(order.qrisAmount) || 0) + (Number(order.transferAmount) || 0);
+                mem.spent = Math.max(0, (mem.spent || 0) - totalPaidVoid); 
                 mem.bottlesBorrowed = Math.max(0, (mem.bottlesBorrowed || 0) - (order.rentBottleQty || 0));
+                if (mem.rentalBreakdown && order.orderId) {
+                    mem.rentalBreakdown = mem.rentalBreakdown.filter(r => r.orderId !== order.orderId);
+                }
                 mem.piutang = Math.max(0, (mem.piutang || 0) - voidDebt);
                 
                 // 🔥 Potong piutang cabang terkait agar daftar Piutang & Badge hilang seketika
