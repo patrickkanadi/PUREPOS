@@ -1739,8 +1739,8 @@ window.triggerBayarPiutang = function(phone, linkedOrderId = null) {
 window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
     window.piutangTargetMember = memberOverride || window.activeCustomerProfile;
     if (window.piutangTargetMember && window.piutangTargetMember.piutangBreakdown && window.currentOutlet) {
-        let bDebt = window.piutangTargetMember.piutangBreakdown[window.currentOutlet] ?? window.piutangTargetMember.piutangBreakdown[window.currentOutlet.toUpperCase()];
-        if (bDebt !== undefined) window.piutangTargetMember.piutang = Math.max(bDebt, linkedOrderId ? (window.piutangTargetMember.piutang || 0) : bDebt);
+        let bDebt = window.piutangTargetMember.piutangBreakdown[window.currentOutlet] ?? window.piutangTargetMember.piutangBreakdown[window.currentOutlet.toUpperCase()] ?? 0;
+        window.piutangTargetMember.piutang = Math.max(bDebt, linkedOrderId ? (window.piutangTargetMember.piutang || 0) : bDebt);
     }
     
     // 🔥 THE FIX: Do not silently abort. If it's a delivery intercept, force it open.
@@ -3072,18 +3072,9 @@ window.submitNewMember = async function() {
             tx.oncomplete = resolve;
         });
 
-        // 2. Push to server immediately if online
-        if (navigator.onLine) {
-            fetch(API_URL, { 
-                method: "POST", 
-                redirect: "follow",
-                headers: { "Content-Type": "text/plain;charset=utf-8" },
-                body: JSON.stringify({ action: "addMember", data: newMember }) 
-            }).then(r => r.json()).then(res => {
-                if (res.status === "Success") {
-                    window.db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(formatPhone);
-                }
-            }).catch(() => {}); 
+        // 2. Sync via unified background queue (prevents lock contention & race with immediate checkout)
+        if (navigator.onLine && window.runBackgroundSync) {
+            window.runBackgroundSync();
         }
 
         document.getElementById("add-member-modal").classList.add("hidden");
