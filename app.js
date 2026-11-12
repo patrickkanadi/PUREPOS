@@ -652,25 +652,38 @@ window.syncCriticalData = async function() {
                     }
                     let basePhone = String(m.phone || "").replace(/-DUP\d+$/, "");
 
-                    // Tambahkan tagihan & galon dari order lokal yang masih Pending/Syncing (belum masuk server)
+                    // Tambahkan tagihan & galon dari order lokal baru yang belum pernah masuk server (!po.hasSyncedOnce)
                     if (!/-DUP\d+$/.test(String(m.phone || "")) && pendingOrdersList.length > 0) {
                         pendingOrdersList.forEach(po => {
                             let poPhone = String(po.customerPhone || "").replace(/-DUP\d+$/, "");
                             if (poPhone !== basePhone) return;
                             let poOut = String(po.outlet || window.currentOutlet || "").trim();
                             let poOutUp = poOut.toUpperCase();
-                            let poOrigDebt = (Number(po.debtAmount) || 0) + (Number(po.pelunasanCash) || 0) + (Number(po.pelunasanQris) || 0) + (Number(po.pelunasanTransfer) || 0);
-                            if (poOrigDebt > 0) {
-                                if (!m.piutangBreakdown) m.piutangBreakdown = {};
-                                if (poOutUp) m.piutangBreakdown[poOutUp] = (m.piutangBreakdown[poOutUp] || 0) + poOrigDebt;
-                                if (poOut && poOut !== poOutUp) m.piutangBreakdown[poOut] = (m.piutangBreakdown[poOut] || 0) + poOrigDebt;
-                                if (!window.currentOutlet || poOutUp === window.currentOutlet.toUpperCase()) {
-                                    m.piutang = (m.piutang || 0) + poOrigDebt;
+                            let alreadyInServerInvoices = Array.isArray(m.piutangInvoices) && m.piutangInvoices.some(inv => inv.orderId === po.orderId);
+
+                            if (!po.hasSyncedOnce && !alreadyInServerInvoices) {
+                                let poOrigDebt = (Number(po.debtAmount) || 0) + (Number(po.pelunasanCash) || 0) + (Number(po.pelunasanQris) || 0) + (Number(po.pelunasanTransfer) || 0);
+                                if (poOrigDebt > 0) {
+                                    if (!m.piutangBreakdown) m.piutangBreakdown = {};
+                                    if (poOutUp) m.piutangBreakdown[poOutUp] = (m.piutangBreakdown[poOutUp] || 0) + poOrigDebt;
+                                    if (poOut && poOut !== poOutUp) m.piutangBreakdown[poOut] = (m.piutangBreakdown[poOut] || 0) + poOrigDebt;
+                                    if (!window.currentOutlet || poOutUp === window.currentOutlet.toUpperCase()) {
+                                        m.piutang = (m.piutang || 0) + poOrigDebt;
+                                    }
+                                    if (!Array.isArray(m.piutangInvoices)) m.piutangInvoices = [];
+                                    m.piutangInvoices.push({ idTagihan: "HUT-LOCAL-" + po.orderId, orderId: po.orderId, sisa: poOrigDebt, date: po.timestamp || window.getWibDate(), outlet: poOut || window.currentOutlet });
+                                }
+                                if (window.loyaltyEnabled && po.finalStoredRewards && po.finalStoredRewards !== "{}") {
+                                    try { m.wallet = JSON.parse(po.finalStoredRewards); } catch (e) {}
                                 }
                             }
-                            if ((Number(po.rentBottleQty) || 0) > 0) {
+
+                            if ((!po.hasSyncedOnce || po.hasUnsyncedRental) && (Number(po.rentBottleQty) || 0) > 0) {
                                 if (!Array.isArray(m.rentalBreakdown)) m.rentalBreakdown = [];
-                                if (!m.rentalBreakdown.some(r => r.orderId === po.orderId)) {
+                                let existingRent = m.rentalBreakdown.find(r => r.orderId === po.orderId);
+                                if (existingRent) {
+                                    existingRent.sisa = Math.max(Number(existingRent.sisa) || 0, Number(po.rentBottleQty) || 0);
+                                } else {
                                     m.rentalBreakdown.push({
                                         logId: po.rentLogId || ("PJG-" + po.orderId),
                                         orderId: po.orderId,
@@ -679,9 +692,6 @@ window.syncCriticalData = async function() {
                                         outlet: poOut || window.currentOutlet
                                     });
                                 }
-                            }
-                            if (window.loyaltyEnabled && po.finalStoredRewards && po.finalStoredRewards !== "{}") {
-                                try { m.wallet = JSON.parse(po.finalStoredRewards); } catch (e) {}
                             }
                         });
                     }
@@ -739,11 +749,13 @@ window.syncCriticalData = async function() {
                 // Jika piutang pelanggan di cabang ini sudah 0 di server (dan tidak ada antrean bayar_piutang lokal),
                 // nol-kan juga sisa debtAmount pada order lokal yang sudah Synced agar tidak nyangkut di tablet!
                 let zeroDebtPhones = new Set();
+                let knownServerPhones = new Set();
                 let activeInvoiceDebtByOrder = {};
                 window.globalMembersCache.forEach(m => {
                     let rawPhone = String(m.phone || "");
                     if (/-DUP\d+$/.test(rawPhone)) return; // Abaikan baris duplikat karena saldo piutang ada di baris utama
                     let bPhone = rawPhone.replace(/-DUP\d+$/, "");
+                    if (bPhone) knownServerPhones.add(bPhone);
                     if (pendingPaidByPhone[bPhone]) return;
                     let branchDebt = (m.piutangBreakdown && window.currentOutlet)
                         ? (m.piutangBreakdown[window.currentOutlet] ?? m.piutangBreakdown[window.currentOutlet.toUpperCase()] ?? 0)
@@ -768,7 +780,9 @@ window.syncCriticalData = async function() {
                             if (ord.syncStatus !== "Synced" || (ord.debtAmount || 0) <= 0) return;
                             if (window.currentOutlet && ord.outlet !== window.currentOutlet) return;
                             let ordPhone = String(ord.customerPhone || "").replace(/-DUP\d+$/, "");
-                            if (pendingPaidByPhone[ordPhone]) return;
+                            if (!knownServerPhones.has(ordPhone) || pendingPaidByPhone[ordPhone]) return;
+                            let ordAgeMs = Date.now() - (window.parseSafeTimeMs(ord.timestamp) || 0);
+                            if (activeInvoiceDebtByOrder[ord.orderId] === undefined && ordAgeMs < 180000) return;
 
                             let serverDebt = zeroDebtPhones.has(ordPhone) ? 0 : (activeInvoiceDebtByOrder[ord.orderId] ?? 0);
                             if (serverDebt !== ord.debtAmount) {
@@ -816,6 +830,7 @@ window.syncBackgroundData = async function() {
                         let req = ordStore.get(o.orderId);
                         req.onsuccess = (e) => {
                             let existing = e.target.result;
+                            o.hasSyncedOnce = true;
                             if (!existing) {
                                 ordStore.put(o);
                             } else {
@@ -3893,8 +3908,12 @@ window.runBackgroundSync = async function() {
                             let o = e.target.result; 
                             if(o && o.syncStatus === "Syncing"){ 
                                 o.syncStatus = isSuccess ? "Synced" : "Pending"; 
+                                if (isSuccess) {
+                                    o.hasSyncedOnce = true;
+                                    o.hasUnsyncedRental = false;
+                                }
                                 st.put(o); 
-                            } 
+                            }
                             res(); 
                         }; 
                     });
@@ -4567,6 +4586,7 @@ window.submitDeliveryDone = function() {
         if (pinjamQty > 0) {
             order.rentBottleQty = (order.rentBottleQty || 0) + pinjamQty;
             order.rentLogId = "PJG-" + Date.now(); // Generate ID instantly
+            order.hasUnsyncedRental = true;
             
             // Immediately attach it to the local customer profile
             window.db.transaction(["members"], "readwrite").objectStore("members").get(order.customerPhone).onsuccess = (memEv) => {
