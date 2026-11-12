@@ -3207,7 +3207,7 @@ window.initiateLogoutSequence = async function() {
             });
             if (navigator.onLine) {
                 try {
-                    let rAtt = await fetch(API_URL, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) });
+            let rAtt = await window.fetchWithSyncTimeout(API_URL, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) });
                     if ((await rAtt.json()).status === "Success") {
                         activeLog.syncStatus = "Synced";
                         await new Promise(res => {
@@ -3312,7 +3312,7 @@ window.executeFinalLogout = async function(netCash) {
     let syncSuccess = false;
     for (let tryCount = 1; tryCount <= 3; tryCount++) {
         try {
-            let r = await fetch(API_URL, {
+            let r = await window.fetchWithSyncTimeout(API_URL, {
                 method: "POST", 
                 redirect: "follow",  
                 headers: { "Content-Type": "text/plain;charset=utf-8" }, 
@@ -3981,6 +3981,11 @@ window.submitReturnGalon = function(phone, name, targetLogId, targetOrderId, max
                 }
             };
             
+            if (window.globalMembersCache) {
+                let idx = window.globalMembersCache.findIndex(x => x.phone === mem.phone);
+                if (idx > -1) window.globalMembersCache[idx] = mem;
+            }
+
             let tx2 = window.db.transaction(["members", "unsynced_members"], "readwrite");
             tx2.objectStore("members").put(mem);
             tx2.objectStore("unsynced_members").put(mem);
@@ -4191,9 +4196,14 @@ window.submitDeliveryDone = function() {
                     if (!mem.rentalBreakdown) mem.rentalBreakdown = [];
                     mem.rentalBreakdown.push({ logId: order.rentLogId, orderId: orderId, sisa: pinjamQty, date: window.getWibDate(), outlet: window.currentOutlet });
                     
+                    if (window.globalMembersCache) {
+                        let idx = window.globalMembersCache.findIndex(x => x.phone === mem.phone);
+                        if (idx > -1) window.globalMembersCache[idx] = mem;
+                    }
                     let t2 = window.db.transaction(["members", "unsynced_members"], "readwrite");
                     t2.objectStore("members").put(mem);
                     t2.objectStore("unsynced_members").put(mem);
+                    if (window.updateLeftBadges) window.updateLeftBadges();
                 }
             };
         }
