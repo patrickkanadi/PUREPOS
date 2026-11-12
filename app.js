@@ -3512,6 +3512,16 @@ window.drainSyncQueueWithLock = async function() {
     return finalCount === 0;
 };
 
+window.fetchWithSyncTimeout = async function(url, options = {}, timeoutMs = 25000) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+        clearTimeout(id);
+    }
+};
+
 window.syncPendingAgain = false;
 window.runBackgroundSync = async function() {
     if (!navigator.onLine) return;
@@ -3564,7 +3574,7 @@ window.runBackgroundSync = async function() {
                     }; 
                 });
                 try { 
-                    let r = await fetch(API_URL, {
+                    let r = await window.fetchWithSyncTimeout(API_URL, {
                         method: "POST", 
                         redirect: "follow",  
                         headers: { "Content-Type": "text/plain;charset=utf-8" }, 
@@ -3602,7 +3612,7 @@ window.runBackgroundSync = async function() {
         for (const bp of piutangs) {
             if (bp.syncStatus === "Pending") {
                 try {
-                    let r = await fetch(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncBayarPiutang", data: bp }) });
+                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncBayarPiutang", data: bp }) });
                     if ((await r.json()).status === "Success") {
                         bp.syncStatus = "Synced";
                         window.db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").put(bp);
@@ -3611,12 +3621,12 @@ window.runBackgroundSync = async function() {
             }
         }
         for (const drop of drops) {
-            if (drop.syncStatus === "Pending") { try { let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncCashDrop", data: drop }) }); if ((await r.json()).status === "Success") { drop.syncStatus = "Synced"; window.db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(drop); } } catch(e) {} }
+            if (drop.syncStatus === "Pending") { try { let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncCashDrop", data: drop }) }); if ((await r.json()).status === "Success") { drop.syncStatus = "Synced"; window.db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(drop); } } catch(e) {} }
         }
         for (const report of reports) {
             if (report.syncStatus === "Pending") {
                 try {
-                    let r = await fetch(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncShiftReport", data: report }) });
+                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncShiftReport", data: report }) });
                     if ((await r.json()).status === "Success") {
                         report.syncStatus = "Synced";
                         window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").put(report);
@@ -3625,17 +3635,17 @@ window.runBackgroundSync = async function() {
             }
         }
         for (const exp of expenses) {
-            if (exp.syncStatus === "Pending") { try { let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncExpense", data: exp }) }); if ((await r.json()).status === "Success") { exp.syncStatus = "Synced"; window.db.transaction(["expenses"], "readwrite").objectStore("expenses").put(exp); } } catch(e) {} }
+            if (exp.syncStatus === "Pending") { try { let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncExpense", data: exp }) }); if ((await r.json()).status === "Success") { exp.syncStatus = "Synced"; window.db.transaction(["expenses"], "readwrite").objectStore("expenses").put(exp); } } catch(e) {} }
         }
         for (const req of voids) {
             try {
                 const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid"; const payload = req.type === 'orders' ? { orderId: req.id, status: req.status, authName: req.authName } : { expenseId: req.id, status: req.status, authName: req.authName };
-                let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: actionType, ...payload }) }); if ((await r.json()).status === "Success") { window.db.transaction(["void_requests"], "readwrite").objectStore("void_requests").delete(req.id); }
+                let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: actionType, ...payload }) }); if ((await r.json()).status === "Success") { window.db.transaction(["void_requests"], "readwrite").objectStore("void_requests").delete(req.id); }
             } catch(e) {}
         }
         for (const mem of members) {
             try { 
-                let r = await fetch(API_URL, {
+                let r = await window.fetchWithSyncTimeout(API_URL, {
                     method: "POST", 
                     redirect: "follow",  
                     headers: { "Content-Type": "text/plain;charset=utf-8" }, 
@@ -3647,18 +3657,18 @@ window.runBackgroundSync = async function() {
             } catch(e) {}
         }
         for (const inb of inbounds) {
-            if (inb.syncStatus === "Pending") { try { let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncInbound", data: inb }) }); if ((await r.json()).status === "Success") { window.db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").delete(inb.logId); } } catch(e) {} }
+            if (inb.syncStatus === "Pending") { try { let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncInbound", data: inb }) }); if ((await r.json()).status === "Success") { window.db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").delete(inb.logId); } } catch(e) {} }
         }
         for (const log of cuciLogs) {
-            if (log.syncStatus === "Pending") { try { let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncCuciTandon", data: log }) }); if ((await r.json()).status === "Success") { window.db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").delete(log.logId); } } catch(e) {} }
+            if (log.syncStatus === "Pending") { try { let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncCuciTandon", data: log }) }); if ((await r.json()).status === "Success") { window.db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").delete(log.logId); } } catch(e) {} }
         }
         for (const log of laporLogs) {
-            if (log.syncStatus === "Pending") { try { let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncLaporMasalah", data: log }) }); if ((await r.json()).status === "Success") { window.db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").delete(log.logId); } } catch(e) {} }
+            if (log.syncStatus === "Pending") { try { let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncLaporMasalah", data: log }) }); if ((await r.json()).status === "Success") { window.db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").delete(log.logId); } } catch(e) {} }
         }
         for (const kmb of kembalis) {
             if (kmb.syncStatus === "Pending") {
                 try { 
-                    let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncKembaliGalon", data: kmb }) }); 
+                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncKembaliGalon", data: kmb }) }); 
                     if ((await r.json()).status === "Success") { 
                         window.db.transaction(["kembali_galon"], "readwrite").objectStore("kembali_galon").delete(kmb.logId); 
                     } 
@@ -3669,7 +3679,7 @@ window.runBackgroundSync = async function() {
         for (const att of attendances) {
             if (att.syncStatus === "Pending") { 
                 try { 
-                    let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncAttendance", data: att }) }); 
+                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncAttendance", data: att }) }); 
                     if ((await r.json()).status === "Success") { 
                         att.syncStatus = "Synced"; window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(att); 
                     } 
@@ -3677,7 +3687,7 @@ window.runBackgroundSync = async function() {
             }
             else if (att.syncStatus === "OutPending") { 
                 try { 
-                    let r = await fetch(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: att }) }); 
+                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: att }) }); 
                     if ((await r.json()).status === "Success") { 
                         att.syncStatus = "Synced"; window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(att); 
                     } 
