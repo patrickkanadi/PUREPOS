@@ -848,9 +848,11 @@ window.syncMasterData = async function() {
         await window.syncCriticalData();
         if (!document.getElementById("pos-screen").classList.contains("hidden")) { window.loadMenuUI(); }
 
-        // Priority 2: Background execution
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron Transaksi Cabang...";
-        await window.syncBackgroundData();
+        // Priority 2: Background execution (hanya jalankan jika kasir sudah masuk ke cabang tertentu agar layar Login cepat!)
+        if (window.currentOutlet) {
+            if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Sinkron Transaksi Cabang...";
+            await window.syncBackgroundData();
+        }
 
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
         if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
@@ -1755,14 +1757,38 @@ window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
     orderSelect.innerHTML = `<option value="">-- Lunasi Saldo Global --</option>`;
     
     window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-        // Abaikan nota yang sudah Voided atau sedang menunggu Void
-        const memberOrders = e.target.result.filter(o => 
-            o.customerPhone === window.piutangTargetMember.phone && 
-            (o.debtAmount || 0) > 0 && 
-            o.orderStatus !== "Voided" && 
-            o.orderStatus !== "Void Pending"
-        );
-        memberOrders.forEach(o => { orderSelect.innerHTML += `<option value="${o.orderId}">Nota: ${o.orderId} (Hutang Rp ${o.debtAmount.toLocaleString('id-ID')})</option>`; });
+        const targetBasePhone = String(window.piutangTargetMember.phone || "").replace(/-DUP\d+$/, "");
+        const curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
+        const invoiceMap = new Map();
+
+        // 1. Masukkan daftar tagihan aktif dari Piutang_Galon server (termasuk nota bulan lalu / arsip)
+        if (Array.isArray(window.piutangTargetMember.piutangInvoices)) {
+            window.piutangTargetMember.piutangInvoices.forEach(inv => {
+                if (!inv.orderId || inv.orderId === "-" || (Number(inv.sisa) || 0) <= 0) return;
+                if (curOutUp && String(inv.outlet || "").trim().toUpperCase() !== curOutUp) return;
+                invoiceMap.set(inv.orderId, { orderId: inv.orderId, debtAmount: Number(inv.sisa) || 0, date: inv.date || "" });
+            });
+        }
+
+        // 2. Gabungkan dengan nota lokal di tablet (prioritaskan sisa hutang lokal jika baru saja dicicil)
+        (e.target.result || []).forEach(o => {
+            let ordBasePhone = String(o.customerPhone || "").replace(/-DUP\d+$/, "");
+            if (ordBasePhone !== targetBasePhone) return;
+            if (curOutUp && String(o.outlet || "").trim().toUpperCase() !== curOutUp) return;
+            if (o.orderStatus === "Voided" || o.orderStatus === "Void Pending") {
+                invoiceMap.delete(o.orderId);
+                return;
+            }
+            if ((o.debtAmount || 0) > 0) {
+                invoiceMap.set(o.orderId, { orderId: o.orderId, debtAmount: Number(o.debtAmount) || 0, date: o.timestamp || "" });
+            } else if (o.debtAmount === 0) {
+                invoiceMap.delete(o.orderId);
+            }
+        });
+
+        Array.from(invoiceMap.values()).forEach(o => {
+            orderSelect.innerHTML += `<option value="${o.orderId}">Nota: ${o.orderId} (Hutang Rp ${o.debtAmount.toLocaleString('id-ID')})</option>`;
+        });
         
         if (linkedOrderId) orderSelect.value = linkedOrderId;
 
@@ -3729,20 +3755,35 @@ window.runBackgroundSync = async function() {
                 }
             }
         }
+        const dbPut = (storeName, val) => new Promise(res => {
+            let t = window.db.transaction([storeName], "readwrite");
+            t.objectStore(storeName).put(val);
+            t.oncomplete = () => res();
+            t.onerror = () => res();
+        });
+        const dbDel = (storeName, key) => new Promise(res => {
+            let t = window.db.transaction([storeName], "readwrite");
+            t.objectStore(storeName).delete(key);
+            t.oncomplete = () => res();
+            t.onerror = () => res();
+        });
+
         let syncedAnyPiutang = false;
         for (const bp of piutangs) {
             if (bp.syncStatus === "Pending") {
                 try {
-                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncBayarPiutang", data: bp }) });
+                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncBayarPiutang", data: bp }) }, 35000);
                     let bpRes = await r.json();
                     if (bpRes.status === "Success") {
                         bp.syncStatus = "Synced";
                         syncedAnyPiutang = true;
-                        window.db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").put(bp);
+                        await dbPut("bayar_piutang", bp);
                     } else if (bpRes.message) {
                         window.lastSyncServerError = `syncBayarPiutang (${bp.payId}): ${bpRes.message}`;
                     }
-                } catch(e) {}
+                } catch(e) {
+                    window.lastSyncServerError = `syncBayarPiutang (${bp.payId}): ${e.name === 'AbortError' ? 'Timeout 35s' : e.message}`;
+                }
             }
         }
         if (syncedAnyPiutang) {
@@ -3750,77 +3791,124 @@ window.runBackgroundSync = async function() {
             window.syncBackgroundData();
         }
         for (const drop of drops) {
-            if (drop.syncStatus === "Pending") { try { let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncCashDrop", data: drop }) }); if ((await r.json()).status === "Success") { drop.syncStatus = "Synced"; window.db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(drop); } } catch(e) {} }
+            if (drop.syncStatus === "Pending") {
+                try {
+                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncCashDrop", data: drop }) });
+                    let resJ = await r.json();
+                    if (resJ.status === "Success") { drop.syncStatus = "Synced"; await dbPut("cash_drops", drop); }
+                    else if (resJ.message) window.lastSyncServerError = `syncCashDrop: ${resJ.message}`;
+                } catch(e) { window.lastSyncServerError = `syncCashDrop: ${e.message}`; }
+            }
         }
         for (const report of reports) {
             if (report.syncStatus === "Pending") {
                 try {
                     let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncShiftReport", data: report }) });
-                    if ((await r.json()).status === "Success") {
-                        report.syncStatus = "Synced";
-                        window.db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").put(report);
-                    }
-                } catch(e) {}
+                    let resJ = await r.json();
+                    if (resJ.status === "Success") { report.syncStatus = "Synced"; await dbPut("shift_reports", report); }
+                    else if (resJ.message) window.lastSyncServerError = `syncShiftReport: ${resJ.message}`;
+                } catch(e) { window.lastSyncServerError = `syncShiftReport: ${e.message}`; }
             }
         }
         for (const exp of expenses) {
-            if (exp.syncStatus === "Pending") { try { let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncExpense", data: exp }) }); if ((await r.json()).status === "Success") { exp.syncStatus = "Synced"; window.db.transaction(["expenses"], "readwrite").objectStore("expenses").put(exp); } } catch(e) {} }
+            if (exp.syncStatus === "Pending") {
+                try {
+                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncExpense", data: exp }) });
+                    let resJ = await r.json();
+                    if (resJ.status === "Success") { exp.syncStatus = "Synced"; await dbPut("expenses", exp); }
+                    else if (resJ.message) window.lastSyncServerError = `syncExpense: ${resJ.message}`;
+                } catch(e) { window.lastSyncServerError = `syncExpense: ${e.message}`; }
+            }
         }
         for (const req of voids) {
             try {
-                const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid"; const payload = req.type === 'orders' ? { orderId: req.id, status: req.status, authName: req.authName } : { expenseId: req.id, status: req.status, authName: req.authName };
-                let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: actionType, ...payload }) }); if ((await r.json()).status === "Success") { window.db.transaction(["void_requests"], "readwrite").objectStore("void_requests").delete(req.id); }
-            } catch(e) {}
+                const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid";
+                const payload = req.type === 'orders'
+                    ? { orderId: req.id, status: req.status, authName: req.authName, outlet: window.currentOutlet }
+                    : { expenseId: req.id, status: req.status, authName: req.authName, outlet: window.currentOutlet };
+                let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: actionType, ...payload }) });
+                let resJ = await r.json();
+                if (resJ.status === "Success") { await dbDel("void_requests", req.id); }
+                else if (resJ.message) window.lastSyncServerError = `${actionType}: ${resJ.message}`;
+            } catch(e) { window.lastSyncServerError = `voidRequest (${req.id}): ${e.message}`; }
         }
         for (const mem of members) {
+            if (!mem || !mem.phone || mem.phone === "-") {
+                if (mem && mem.phone !== undefined) await dbDel("unsynced_members", mem.phone);
+                continue;
+            }
             try { 
                 let r = await window.fetchWithSyncTimeout(API_URL, {
                     method: "POST", 
                     redirect: "follow",  
                     headers: { "Content-Type": "text/plain;charset=utf-8" }, 
-                    body: JSON.stringify({ action: "addMember", data: mem }) // 🔥 Gunakan addMember agar server menambah/memperbarui
+                    body: JSON.stringify({ action: "addMember", data: mem })
                 }); 
-                if ((await r.json()).status === "Success") { 
-                    window.db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); 
-                } 
-            } catch(e) {}
+                let resJ = await r.json();
+                if (resJ.status === "Success") { 
+                    await dbDel("unsynced_members", mem.phone); 
+                } else if (resJ.message) {
+                    window.lastSyncServerError = `addMember (${mem.phone}): ${resJ.message}`;
+                }
+            } catch(e) { window.lastSyncServerError = `addMember (${mem.phone}): ${e.message}`; }
         }
         for (const inb of inbounds) {
-            if (inb.syncStatus === "Pending") { try { let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncInbound", data: inb }) }); if ((await r.json()).status === "Success") { window.db.transaction(["stock_inbound"], "readwrite").objectStore("stock_inbound").delete(inb.logId); } } catch(e) {} }
+            if (inb.syncStatus === "Pending") {
+                try {
+                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncInbound", data: inb }) });
+                    let resJ = await r.json();
+                    if (resJ.status === "Success") { await dbDel("stock_inbound", inb.logId); }
+                    else if (resJ.message) window.lastSyncServerError = `syncInbound: ${resJ.message}`;
+                } catch(e) { window.lastSyncServerError = `syncInbound: ${e.message}`; }
+            }
         }
         for (const log of cuciLogs) {
-            if (log.syncStatus === "Pending") { try { let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncCuciTandon", data: log }) }); if ((await r.json()).status === "Success") { window.db.transaction(["cuci_tandon"], "readwrite").objectStore("cuci_tandon").delete(log.logId); } } catch(e) {} }
+            if (log.syncStatus === "Pending") {
+                try {
+                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncCuciTandon", data: log }) });
+                    let resJ = await r.json();
+                    if (resJ.status === "Success") { await dbDel("cuci_tandon", log.logId); }
+                    else if (resJ.message) window.lastSyncServerError = `syncCuciTandon: ${resJ.message}`;
+                } catch(e) { window.lastSyncServerError = `syncCuciTandon: ${e.message}`; }
+            }
         }
         for (const log of laporLogs) {
-            if (log.syncStatus === "Pending") { try { let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncLaporMasalah", data: log }) }); if ((await r.json()).status === "Success") { window.db.transaction(["lapor_masalah"], "readwrite").objectStore("lapor_masalah").delete(log.logId); } } catch(e) {} }
+            if (log.syncStatus === "Pending") {
+                try {
+                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncLaporMasalah", data: log }) });
+                    let resJ = await r.json();
+                    if (resJ.status === "Success") { await dbDel("lapor_masalah", log.logId); }
+                    else if (resJ.message) window.lastSyncServerError = `syncLaporMasalah: ${resJ.message}`;
+                } catch(e) { window.lastSyncServerError = `syncLaporMasalah: ${e.message}`; }
+            }
         }
         for (const kmb of kembalis) {
             if (kmb.syncStatus === "Pending") {
                 try { 
-                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncKembaliGalon", data: kmb }) }); 
-                    if ((await r.json()).status === "Success") { 
-                        window.db.transaction(["kembali_galon"], "readwrite").objectStore("kembali_galon").delete(kmb.logId); 
-                    } 
-                } catch(e) {}
+                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncKembaliGalon", data: kmb }) }); 
+                    let resJ = await r.json();
+                    if (resJ.status === "Success") { await dbDel("kembali_galon", kmb.logId); }
+                    else if (resJ.message) window.lastSyncServerError = `syncKembaliGalon: ${resJ.message}`;
+                } catch(e) { window.lastSyncServerError = `syncKembaliGalon: ${e.message}`; }
             }
         }
         
         for (const att of attendances) {
             if (att.syncStatus === "Pending") { 
                 try { 
-                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncAttendance", data: att }) }); 
-                    if ((await r.json()).status === "Success") { 
-                        att.syncStatus = "Synced"; window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(att); 
-                    } 
-                } catch(e) {} 
+                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncAttendance", data: att }) }); 
+                    let resJ = await r.json();
+                    if (resJ.status === "Success") { att.syncStatus = "Synced"; await dbPut("attendance", att); }
+                    else if (resJ.message) window.lastSyncServerError = `syncAttendance: ${resJ.message}`;
+                } catch(e) { window.lastSyncServerError = `syncAttendance: ${e.message}`; } 
             }
             else if (att.syncStatus === "OutPending") { 
                 try { 
-                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow",  headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: att }) }); 
-                    if ((await r.json()).status === "Success") { 
-                        att.syncStatus = "Synced"; window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(att); 
-                    } 
-                } catch(e) {} 
+                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: att }) }); 
+                    let resJ = await r.json();
+                    if (resJ.status === "Success") { att.syncStatus = "Synced"; await dbPut("attendance", att); }
+                    else if (resJ.message) window.lastSyncServerError = `updateAttendanceOut: ${resJ.message}`;
+                } catch(e) { window.lastSyncServerError = `updateAttendanceOut: ${e.message}`; } 
             }
         }
 
@@ -4343,26 +4431,12 @@ window.submitDeliveryDone = function() {
         window.renderPeminjamList(); 
         if (window.updateLeftBadges) window.updateLeftBadges(); 
 
-        // 🔥 INSTANT DIRECT PUSH: Tell the server immediately that this delivery is Done
-        // so it never reappears on the next shift even if the tablet is closed right away!
-        if (navigator.onLine) {
-            fetch(API_URL, {
-                method: "POST",
-                redirect: "follow",
-                headers: { "Content-Type": "text/plain;charset=utf-8" },
-                body: JSON.stringify({
-                    action: "updateDeliveryStatus",
-                    orderId: orderId,
-                    orderStatus: "Completed",
-                    status: "Terkirim (" + window.getWibDate() + ")",
-                    courier: courier
-                })
-            }).catch(() => {});
-        }
-        
+        // Langsung jalankan runBackgroundSync() yang mengirim syncOrder lengkap (status Terkirim + Kurir + Pinjam Galon)
+        // tanpa mengirim POST ganda yang berebut ScriptLock di server!
+        if (window.updateUnsyncedBadge) window.updateUnsyncedBadge();
         setTimeout(() => {
             window.runBackgroundSync(); 
-        }, 100);
+        }, 50);
     };
 }
 window.renderAbsensi = async function() {
