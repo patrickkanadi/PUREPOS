@@ -705,14 +705,12 @@ window.syncCriticalData = async function() {
                             let ordPhone = String(ord.customerPhone || "").replace(/-DUP\d+$/, "");
                             if (pendingPaidByPhone[ordPhone]) return;
 
-                            if (zeroDebtPhones.has(ordPhone)) {
-                                ord.debtAmount = 0;
-                                if (String(ord.paymentMethod || "").includes("Piutang")) {
+                            let serverDebt = zeroDebtPhones.has(ordPhone) ? 0 : (activeInvoiceDebtByOrder[ord.orderId] ?? 0);
+                            if (serverDebt !== ord.debtAmount) {
+                                ord.debtAmount = serverDebt;
+                                if (serverDebt === 0 && String(ord.paymentMethod || "").includes("Piutang")) {
                                     ord.paymentMethod = String(ord.paymentMethod).replace(/Piutang(\s*\([^)]*\))?/i, "Lunas");
                                 }
-                                ordStoreClean.put(ord);
-                            } else if (activeInvoiceDebtByOrder[ord.orderId] !== undefined && activeInvoiceDebtByOrder[ord.orderId] !== ord.debtAmount) {
-                                ord.debtAmount = activeInvoiceDebtByOrder[ord.orderId];
                                 ordStoreClean.put(ord);
                             }
                         });
@@ -1894,14 +1892,16 @@ window.submitPiutang = function() {
         if(window.updateLeftBadges) window.updateLeftBadges();
         
         let remainingPay = payAmount;
+        let targetBasePhone = String(window.piutangTargetMember.phone || "").replace(/-DUP\d+$/, "");
+        let curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
         window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
-            let orders = e.target.result.filter(o => 
-                o.customerPhone === window.piutangTargetMember.phone && 
-                (o.debtAmount || 0) > 0 && 
-                o.orderStatus !== "Voided" && 
-                o.orderStatus !== "Void Pending"
-            );
-            orders.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+            let orders = (e.target.result || []).filter(o => {
+                let ordBasePhone = String(o.customerPhone || "").replace(/-DUP\d+$/, "");
+                if (ordBasePhone !== targetBasePhone) return false;
+                if (curOutUp && String(o.outlet || "").trim().toUpperCase() !== curOutUp) return false;
+                return (o.debtAmount || 0) > 0 && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending";
+            });
+            orders.sort((a, b) => window.parseSafeTimeMs(a.timestamp) - window.parseSafeTimeMs(b.timestamp));
             
             let tx2 = window.db.transaction(["orders"], "readwrite");
             let store2 = tx2.objectStore("orders");
@@ -1929,10 +1929,10 @@ window.submitPiutang = function() {
                 o.pelunasanQris = (Number(o.pelunasanQris) || 0) + addQ;
                 o.pelunasanTransfer = (Number(o.pelunasanTransfer) || 0) + addT;
 
-                if (o.debtAmount === 0 && String(o.paymentMethod).includes("Piutang")) {
-                    o.paymentMethod = String(o.paymentMethod).replace("Piutang", "Lunas ("+method+")");
-                } else if (o.debtAmount > 0 && String(o.paymentMethod).includes("Piutang")) {
-                    if (!String(o.paymentMethod).includes("Sebagian")) o.paymentMethod = String(o.paymentMethod).replace("Piutang", "Piutang (Sebagian)");
+                if (o.debtAmount === 0 && /Piutang/i.test(String(o.paymentMethod))) {
+                    o.paymentMethod = String(o.paymentMethod).replace(/Piutang(\s*\([^)]*\))?/i, "Lunas (" + method + ")");
+                } else if (o.debtAmount > 0 && /Piutang/i.test(String(o.paymentMethod))) {
+                    if (!String(o.paymentMethod).includes("Sebagian")) o.paymentMethod = String(o.paymentMethod).replace(/Piutang/i, "Piutang (Sebagian)");
                 }
                 store2.put(o);
             }
