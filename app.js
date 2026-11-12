@@ -2957,7 +2957,7 @@ window.submitCashDrop = function() {
         document.getElementById("cash-drop-modal").classList.add("hidden"); 
         
         if (window.isLoggingOut) { 
-            window.executeFinalLogout(leftInDrawer); 
+            window.executeFinalLogout(leftInDrawer, payload); 
         } else { 
             window.runBackgroundSync();
             alert(`Setor Uang Berhasil!\nTujuan: ${destination}\nSisa Tunai di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); 
@@ -3330,16 +3330,10 @@ window.initiateLogoutSequence = async function() {
     document.getElementById("shift-report-modal").classList.add("hidden"); window.openCashDrop(true); 
 }
 
-window.executeFinalLogout = async function(netCash) { 
+window.executeFinalLogout = async function(netCash, logoutCashDrop = null) { 
     if (!navigator.onLine) {
         let count = await window.getUnsyncedCount();
         return alert(`⛔ TIDAK BISA LOGOUT SAAT OFFLINE!\n\nTerdapat ${count} data lokal belum terkirim. Nyalakan koneksi internet agar data shift dan transaksi tidak hilang.`);
-    }
-
-    let drained = await window.drainSyncQueueWithLock();
-    if (!drained) {
-        let remaining = await window.getUnsyncedCount();
-        return alert(`⛔ LOGOUT GAGAL!\n\nMasih ada ${remaining} data yang belum terkirim ke server. Periksa jaringan internet Anda dan klik 'Sync' lagi sebelum logout.`);
     }
 
     const data = window.currentShiftData;
@@ -3361,7 +3355,7 @@ window.executeFinalLogout = async function(netCash) {
     if (overlay) {
         overlay.style.display = "flex";
         const descEl = document.getElementById("sync-lock-desc");
-        if (descEl) descEl.innerText = "Menyimpan Laporan Shift Akhir ke Google Sheets...";
+        if (descEl) descEl.innerText = "Menyimpan Setor Laci, Absensi, & Laporan Shift Akhir sekaligus...";
     }
 
     await new Promise(res => {
@@ -3373,7 +3367,6 @@ window.executeFinalLogout = async function(netCash) {
 
     const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result || []));
     const activeLog = attendances.find(a => a.staffName === window.currentCashier && !a.clockOut);
-    
     if (activeLog) {
         activeLog.clockOut = window.getWibDate();
         activeLog.syncStatus = "OutPending";
@@ -3382,20 +3375,9 @@ window.executeFinalLogout = async function(netCash) {
             txAtt.objectStore("attendance").put(activeLog);
             txAtt.oncomplete = res;
         });
-        try {
-            let rAtt = await window.fetchWithSyncTimeout(API_URL, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) });
-            if ((await rAtt.json()).status === "Success") {
-                activeLog.syncStatus = "Synced";
-                await new Promise(res => {
-                    let txAtt2 = window.db.transaction(["attendance"], "readwrite");
-                    txAtt2.objectStore("attendance").put(activeLog);
-                    txAtt2.oncomplete = res;
-                });
-            }
-        } catch(e) {}
     }
 
-    // Kirim Laporan Shift dengan 3x percobaan otomatis jika sinyal sempat goyang
+    // 🔥 KIRIM SEKALIGUS DALAM 1 REQUEST ATOMIK (1x ScriptLock untuk Setor Laci + Absensi Keluar + Laporan Shift)
     let syncSuccess = false;
     for (let tryCount = 1; tryCount <= 3; tryCount++) {
         try {
@@ -3403,21 +3385,40 @@ window.executeFinalLogout = async function(netCash) {
                 method: "POST", 
                 redirect: "follow",  
                 headers: { "Content-Type": "text/plain;charset=utf-8" }, 
-                body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) 
-            });
+                body: JSON.stringify({
+                    action: "syncEndShiftBundle",
+                    data: {
+                        cashDrop: logoutCashDrop,
+                        attendanceOut: activeLog || null,
+                        shiftReport: shiftPayload
+                    }
+                }) 
+            }, 45000);
             let res = await r.json();
             if (res.status === "Success") { 
                 syncSuccess = true;
                 shiftPayload.syncStatus = "Synced";
                 await new Promise(resolvePut => {
-                    let txSr = window.db.transaction(["shift_reports"], "readwrite");
-                    txSr.objectStore("shift_reports").put(shiftPayload);
-                    txSr.oncomplete = resolvePut;
+                    let stores = ["shift_reports"];
+                    if (logoutCashDrop) stores.push("cash_drops");
+                    if (activeLog) stores.push("attendance");
+                    let txDone = window.db.transaction(stores, "readwrite");
+                    txDone.objectStore("shift_reports").put(shiftPayload);
+                    if (logoutCashDrop) {
+                        logoutCashDrop.syncStatus = "Synced";
+                        txDone.objectStore("cash_drops").put(logoutCashDrop);
+                    }
+                    if (activeLog) {
+                        activeLog.syncStatus = "Synced";
+                        txDone.objectStore("attendance").put(activeLog);
+                    }
+                    txDone.oncomplete = resolvePut;
                 });
                 break;
             }
         } catch(e) {
-            await new Promise(r => setTimeout(r, 800));
+            // Random jitter (400–1300ms) agar 8 cabang tidak bertabrakan ulang secara bersamaan
+            await new Promise(r => setTimeout(r, 400 + Math.floor(Math.random() * 900)));
         }
     }
 
@@ -3647,7 +3648,7 @@ window.drainSyncQueueWithLock = async function() {
         }
 
         await window.runBackgroundSync();
-        await new Promise(r => setTimeout(r, 600));
+        await new Promise(r => setTimeout(r, 350 + Math.floor(Math.random() * 750)));
     }
 
     let finalCount = await window.getUnsyncedCount();
@@ -3656,7 +3657,7 @@ window.drainSyncQueueWithLock = async function() {
     return finalCount === 0;
 };
 
-window.fetchWithSyncTimeout = async function(url, options = {}, timeoutMs = 25000) {
+window.fetchWithSyncTimeout = async function(url, options = {}, timeoutMs = 45000) {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeoutMs);
     try {
