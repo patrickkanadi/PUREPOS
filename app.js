@@ -671,6 +671,53 @@ window.syncCriticalData = async function() {
                         memT.put(merged);
                     });
                 window.globalMembersCache = Array.from(mergedMap.values());
+
+                // 🔥 SINKRONISASI CLEAN SLATE / PELUNASAN SERVER KE ORDERS LOKAL:
+                // Jika piutang pelanggan di cabang ini sudah 0 di server (dan tidak ada antrean bayar_piutang lokal),
+                // nol-kan juga sisa debtAmount pada order lokal yang sudah Synced agar tidak nyangkut di tablet!
+                let zeroDebtPhones = new Set();
+                let activeInvoiceDebtByOrder = {};
+                window.globalMembersCache.forEach(m => {
+                    let bPhone = String(m.phone || "").replace(/-DUP\d+$/, "");
+                    if (pendingPaidByPhone[bPhone]) return;
+                    let branchDebt = (m.piutangBreakdown && window.currentOutlet)
+                        ? (m.piutangBreakdown[window.currentOutlet] || 0)
+                        : (m.piutang || 0);
+                    if (branchDebt <= 0 && bPhone) {
+                        zeroDebtPhones.add(bPhone);
+                    }
+                    if (Array.isArray(m.piutangInvoices)) {
+                        m.piutangInvoices.forEach(inv => {
+                            if (inv.orderId && inv.orderId !== "-") {
+                                activeInvoiceDebtByOrder[inv.orderId] = Number(inv.sisa) || 0;
+                            }
+                        });
+                    }
+                });
+
+                try {
+                    let txOrdClean = window.db.transaction(["orders"], "readwrite");
+                    let ordStoreClean = txOrdClean.objectStore("orders");
+                    ordStoreClean.getAll().onsuccess = (evOrd) => {
+                        (evOrd.target.result || []).forEach(ord => {
+                            if (ord.syncStatus !== "Synced" || (ord.debtAmount || 0) <= 0) return;
+                            if (window.currentOutlet && ord.outlet !== window.currentOutlet) return;
+                            let ordPhone = String(ord.customerPhone || "").replace(/-DUP\d+$/, "");
+                            if (pendingPaidByPhone[ordPhone]) return;
+
+                            if (zeroDebtPhones.has(ordPhone)) {
+                                ord.debtAmount = 0;
+                                if (String(ord.paymentMethod || "").includes("Piutang")) {
+                                    ord.paymentMethod = String(ord.paymentMethod).replace(/Piutang(\s*\([^)]*\))?/i, "Lunas");
+                                }
+                                ordStoreClean.put(ord);
+                            } else if (activeInvoiceDebtByOrder[ord.orderId] !== undefined && activeInvoiceDebtByOrder[ord.orderId] !== ord.debtAmount) {
+                                ord.debtAmount = activeInvoiceDebtByOrder[ord.orderId];
+                                ordStoreClean.put(ord);
+                            }
+                        });
+                    };
+                } catch (eClean) {}
             }
         }
     } catch(e) { console.error("Critical Sync Error:", e); }
@@ -3462,8 +3509,47 @@ window.updateUnsyncedBadge = async function() {
     return count;
 };
 
-// Menguras antrean sampai 0 dengan tampilan overlay loading
+window.lastSyncServerError = "";
+window.abortSyncLock = false;
+
+window.getUnsyncedDetailsList = async function() {
+    if (!window.db) return [];
+    try {
+        const tx = window.db.transaction([
+            "orders", "bayar_piutang", "cash_drops", "shift_reports",
+            "expenses", "void_requests", "unsynced_members", "stock_inbound",
+            "cuci_tandon", "lapor_masalah", "kembali_galon", "attendance"
+        ], "readonly");
+        const getAll = (store) => new Promise(res => {
+            const req = tx.objectStore(store).getAll();
+            req.onsuccess = e => res(e.target.result || []);
+            req.onerror = () => res([]);
+        });
+        const [orders, piutang, drops, reports, expenses, voids, members, inb, cuci, lapor, kmb, att] = await Promise.all([
+            getAll("orders"), getAll("bayar_piutang"), getAll("cash_drops"), getAll("shift_reports"),
+            getAll("expenses"), getAll("void_requests"), getAll("unsynced_members"), getAll("stock_inbound"),
+            getAll("cuci_tandon"), getAll("lapor_masalah"), getAll("kembali_galon"), getAll("attendance")
+        ]);
+        let list = [];
+        orders.filter(o => o.syncStatus === "Pending" || o.syncStatus === "Syncing").forEach(o => list.push(`Order: ${o.orderId} (${o.customerName})`));
+        piutang.filter(bp => bp.syncStatus === "Pending").forEach(bp => list.push(`Bayar Piutang: ${bp.payId} (${bp.customerName})`));
+        drops.filter(d => d.syncStatus === "Pending").forEach(d => list.push(`Setor Laci: ${d.dropId}`));
+        reports.filter(r => r.syncStatus === "Pending").forEach(r => list.push(`Shift Report: ${r.shiftId}`));
+        expenses.filter(e => e.syncStatus === "Pending").forEach(e => list.push(`Expense: ${e.expenseId}`));
+        voids.forEach(v => list.push(`Void Request: ${v.id}`));
+        members.forEach(m => list.push(`Member: ${m.name} (${m.phone})`));
+        inb.filter(i => i.syncStatus === "Pending").forEach(i => list.push(`Inbound: ${i.logId}`));
+        cuci.filter(c => c.syncStatus === "Pending").forEach(c => list.push(`Cuci Tandon: ${c.logId}`));
+        lapor.filter(l => l.syncStatus === "Pending").forEach(l => list.push(`Lapor Masalah: ${l.logId}`));
+        kmb.filter(k => k.syncStatus === "Pending").forEach(k => list.push(`Kembali Galon: ${k.logId}`));
+        att.filter(a => a.syncStatus === "Pending" || a.syncStatus === "OutPending").forEach(a => list.push(`Absensi: ${a.staffName} (${a.syncStatus})`));
+        return list;
+    } catch (e) { return []; }
+};
+
+// Menguras antrean sampai 0 dengan tampilan overlay loading + diagnostik error
 window.drainSyncQueueWithLock = async function() {
+    window.abortSyncLock = false;
     let overlay = document.getElementById("sync-lock-overlay");
     if (!overlay) {
         overlay = document.createElement("div");
@@ -3480,36 +3566,50 @@ window.drainSyncQueueWithLock = async function() {
         overlay.style.justifyContent = "center";
         overlay.style.alignItems = "center";
         overlay.style.color = "white";
+        overlay.style.padding = "20px";
         overlay.innerHTML = `
             <div style="font-size:48px; margin-bottom:15px; animation: spin 2s linear infinite;">⏳</div>
             <h2 id="sync-lock-title" style="margin:0 0 10px 0;">Menyinkronkan Data ke Spreadsheet...</h2>
-            <p id="sync-lock-desc" style="font-size:16px; color:#ecf0f1; max-width:400px; text-align:center;">Harap tunggu. Jangan matikan tablet atau me-refresh aplikasi.</p>
+            <p id="sync-lock-desc" style="font-size:16px; color:#ecf0f1; max-width:480px; text-align:center;">Harap tunggu. Jangan matikan tablet atau me-refresh aplikasi.</p>
+            <div id="sync-lock-detail" style="font-size:13px; color:#f1c40f; max-width:520px; text-align:center; margin-top:8px; background:rgba(0,0,0,0.35); padding:10px 14px; border-radius:8px; display:none;"></div>
+            <button id="sync-lock-cancel-btn" onclick="window.abortSyncLock=true;" style="display:none; margin-top:18px; padding:10px 18px; background:#e74c3c; color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">⚠️ Tutup Layar Sync (Cek Error)</button>
         `;
         document.body.appendChild(overlay);
     }
     overlay.style.display = "flex";
+    const cancelBtn = document.getElementById("sync-lock-cancel-btn");
+    const detailEl = document.getElementById("sync-lock-detail");
+    if (cancelBtn) cancelBtn.style.display = "none";
+    if (detailEl) detailEl.style.display = "none";
 
-    // Tunggu jika ada background sync yang sedang berjalan
     let waitLoops = 0;
     while (window.isSyncing && waitLoops < 25) {
         await new Promise(r => setTimeout(r, 200));
         waitLoops++;
     }
 
-    let maxAttempts = 25;
+    let maxAttempts = 10;
     let attempt = 0;
 
-    while (attempt < maxAttempts) {
+    while (attempt < maxAttempts && !window.abortSyncLock) {
         attempt++;
         let count = await window.getUnsyncedCount();
         const descEl = document.getElementById("sync-lock-desc");
-        if (descEl) descEl.innerText = `Mengirim sisa ${count} transaksi ke server... (Percobaan ${attempt})`;
+        if (descEl) descEl.innerText = `Mengirim sisa ${count} data ke server... (Percobaan ${attempt}/${maxAttempts})`;
 
         if (count === 0) {
             overlay.style.display = "none";
             if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
             return true;
         }
+
+        if (attempt >= 2 && detailEl) {
+            let items = await window.getUnsyncedDetailsList();
+            let errTxt = window.lastSyncServerError ? `<br><span style="color:#ff7675;">Error Server: ${window.lastSyncServerError}</span>` : "";
+            detailEl.innerHTML = `<strong>Antrean Tertahan:</strong><br>${items.join("<br>")}${errTxt}`;
+            detailEl.style.display = "block";
+        }
+        if (attempt >= 3 && cancelBtn) cancelBtn.style.display = "inline-block";
 
         if (!navigator.onLine) {
             overlay.style.display = "none";
@@ -3598,7 +3698,9 @@ window.runBackgroundSync = async function() {
                         headers: { "Content-Type": "text/plain;charset=utf-8" }, 
                         body: JSON.stringify({ action: "syncOrder", data: order }) 
                     }); 
-                    let isSuccess = (await r.json()).status === "Success";
+                    let resJson = await r.json();
+                    let isSuccess = resJson.status === "Success";
+                    if (!isSuccess && resJson.message) window.lastSyncServerError = `syncOrder (${order.orderId}): ${resJson.message}`;
                     await new Promise(res => { 
                         let tx = window.db.transaction(["orders"], "readwrite"); 
                         let st = tx.objectStore("orders"); 
@@ -3632,10 +3734,13 @@ window.runBackgroundSync = async function() {
             if (bp.syncStatus === "Pending") {
                 try {
                     let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncBayarPiutang", data: bp }) });
-                    if ((await r.json()).status === "Success") {
+                    let bpRes = await r.json();
+                    if (bpRes.status === "Success") {
                         bp.syncStatus = "Synced";
                         syncedAnyPiutang = true;
                         window.db.transaction(["bayar_piutang"], "readwrite").objectStore("bayar_piutang").put(bp);
+                    } else if (bpRes.message) {
+                        window.lastSyncServerError = `syncBayarPiutang (${bp.payId}): ${bpRes.message}`;
                     }
                 } catch(e) {}
             }
