@@ -990,14 +990,30 @@ window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localP
     let lockedQueue = window.isCustomerLocked(phone);
     if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan pesanan di sana terlebih dahulu.`); }
 
-    // Jika member tanpa WA, kolom input dibiarkan kosong; bersihkan juga akhiran -DUP jika ada
-    document.getElementById("cust-phone").value = String(phone).startsWith("TANPA-WA") ? "" : String(phone).replace(/-DUP\d+$/, "");
+    let canonicalPhone = String(phone || "").replace(/-DUP\d+$/i, "");
+    document.getElementById("cust-phone").value = canonicalPhone.startsWith("TANPA-WA") ? "" : canonicalPhone;
     document.getElementById("cust-name").value = name; 
     document.getElementById("cust-address").value = (address && address !== "-") ? address : ""; 
     
     let wallet = {}; try { wallet = JSON.parse(walletStr.replace(/&quot;/g, '"')); } catch(e) {}
-    // Simpan phone ID asli (termasuk TANPA-WA-xx) agar riwayat & poin tersimpan utuh
-    window.activeCustomerProfile = { phone: phone, name: name, address: address, wallet: wallet, bottlesBorrowed: dbBottlesBorrowed, piutang: localPiutang, firstOutlet: firstOutlet, recentOutlets: recentOutlets, lastPurchase: lastPurchase, avgRO: avgRO, avgStd: avgStd, frequency: frequency };
+    let primaryMem = (window.globalMembersCache || []).find(m => m.phone === canonicalPhone);
+    window.activeCustomerProfile = {
+        phone: canonicalPhone,
+        name: name,
+        address: address,
+        wallet: (primaryMem && primaryMem.wallet) ? primaryMem.wallet : wallet,
+        bottlesBorrowed: primaryMem ? (primaryMem.bottlesBorrowed || 0) : dbBottlesBorrowed,
+        piutang: primaryMem ? (primaryMem.piutang || 0) : localPiutang,
+        piutangBreakdown: primaryMem ? primaryMem.piutangBreakdown : undefined,
+        piutangInvoices: primaryMem ? primaryMem.piutangInvoices : undefined,
+        rentalBreakdown: primaryMem ? primaryMem.rentalBreakdown : undefined,
+        firstOutlet: firstOutlet,
+        recentOutlets: recentOutlets,
+        lastPurchase: lastPurchase,
+        avgRO: avgRO,
+        avgStd: avgStd,
+        frequency: frequency
+    };
     window.updatePromoBanner(window.activeCustomerProfile);
 };
 
@@ -1863,6 +1879,7 @@ window.submitPiutang = function() {
     
     if(totalReceived < 0) return alert("Jumlah bayar tidak valid"); 
     if(payAmount < 0 && totalReceived > 0) return alert("Jumlah uang masuk tidak cukup untuk menutupi biaya Parkir & Tip!");
+    if(payAmount === 0 && totalReceived > 0) return alert("Nominal pelunasan piutang Rp 0 (seluruh uang terpakai untuk Parkir/Tip). Tambahkan nominal pembayaran piutang ke kolom Tunai/QRIS/Transfer!");
     if(payAmount > window.piutangTargetMember.piutang) return alert("Jumlah yang dimasukkan melebihi total piutang pelanggan!");
     
     if (payAmount === 0 && totalReceived === 0) {
@@ -4470,7 +4487,12 @@ window.submitDeliveryDone = function() {
                 if (mem) {
                     mem.bottlesBorrowed = (mem.bottlesBorrowed || 0) + pinjamQty;
                     if (!mem.rentalBreakdown) mem.rentalBreakdown = [];
-                    mem.rentalBreakdown.push({ logId: order.rentLogId, orderId: orderId, sisa: pinjamQty, date: window.getWibDate(), outlet: window.currentOutlet });
+                    let existingRent = mem.rentalBreakdown.find(x => x.orderId === orderId);
+                    if (existingRent) {
+                        existingRent.sisa = (Number(existingRent.sisa) || 0) + pinjamQty;
+                    } else {
+                        mem.rentalBreakdown.push({ logId: order.rentLogId, orderId: orderId, sisa: pinjamQty, date: window.getWibDate(), outlet: window.currentOutlet });
+                    }
                     
                     if (window.globalMembersCache) {
                         let idx = window.globalMembersCache.findIndex(x => x.phone === mem.phone);
@@ -4653,16 +4675,11 @@ window.saveEditedCustomer = function() {
     document.getElementById("active-cust-phone").innerText = String(finalPhone).startsWith("TANPA-WA") ? "(Tanpa WA)" : (finalPhone && finalPhone !== "-" ? `(${finalPhone})` : "");
     document.getElementById("edit-customer-modal").classList.add("hidden");
 
-    // Simpan ke IndexedDB lokal dan sinkronkan ke server
+    // Simpan ke IndexedDB lokal dan sinkronkan lewat antrean terpadu
     if (finalPhone && finalPhone !== "-") {
         window.saveMemberToDB(finalPhone, name, window.activeCustomerProfile.wallet, window.activeCustomerProfile.bottlesBorrowed, window.activeCustomerProfile.piutang, window.activeCustomerProfile.firstOutlet, window.activeCustomerProfile.recentOutlets, address);
-        if (navigator.onLine) {
-            fetch(API_URL, {
-                method: "POST",
-                redirect: "follow",
-                headers: { "Content-Type": "text/plain;charset=utf-8" },
-                body: JSON.stringify({ action: "syncMember", data: { phone: finalPhone, name: name, address: address, outlet: window.currentOutlet } })
-            }).catch(() => {});
+        if (navigator.onLine && window.runBackgroundSync) {
+            window.runBackgroundSync();
         }
     }
     
