@@ -1492,6 +1492,21 @@ window.syncBackgroundData = async function() {
 
             if (result.data.authStatuses) await window.processServerUpdates(result.data.authStatuses);
             if (window.updateLeftBadges) window.updateLeftBadges();
+
+            // Bersihkan cache order lokal yang sudah Synced > 14 hari & lunas agar IndexedDB tetap ringan
+            try {
+                const cutoffMs = Date.now() - (14 * 86400000);
+                const txPrune = window.db.transaction(["orders"], "readwrite");
+                const storePrune = txPrune.objectStore("orders");
+                storePrune.getAll().onsuccess = (ev) => {
+                    (ev.target.result || []).forEach(o => {
+                        if (o.syncStatus === "Synced" && (o.debtAmount || 0) <= 0 && o.deliveryStatus !== "Pending" && o.orderStatus !== "Void Pending") {
+                            let ms = window.parseSafeTimeMs(o.timestamp);
+                            if (ms > 0 && ms < cutoffMs) storePrune.delete(o.orderId);
+                        }
+                    });
+                };
+            } catch (_) {}
         }
     } catch(e) { console.error("Background Sync Error:", e); }
 };
@@ -3751,13 +3766,22 @@ window.calculateLiveDrawer = function(callback) {
 
 window.openCashDrop = function(forLogout = false) {
     window.isLoggingOut = forLogout; 
+    const dropModal = document.getElementById("cash-drop-modal");
+    if (dropModal && !dropModal._logoutObserverAttached) {
+        dropModal._logoutObserverAttached = true;
+        new MutationObserver(() => {
+            if (dropModal.classList.contains("hidden") && !window.isSubmittingCashDrop && !window.isSyncing) {
+                window.isLoggingOut = false;
+            }
+        }).observe(dropModal, { attributes: true, attributeFilter: ["class"] });
+    }
     document.getElementById("cash-drop-title").innerText = window.isLoggingOut ? "🔒 Tutup Shift & Setor Laci" : "🏦 Simpan / Tarik Uang Laci";
     const cancelBtn = document.getElementById("btn-drop-cancel");
     if (cancelBtn) {
         cancelBtn.innerText = window.isLoggingOut ? "Batal Logout" : "Batal";
         cancelBtn.onclick = () => {
             window.isLoggingOut = false;
-            document.getElementById("cash-drop-modal").classList.add("hidden");
+            dropModal.classList.add("hidden");
         };
     }
     document.getElementById("btn-drop-confirm").innerText = window.isLoggingOut ? "Konfirmasi & Logout" : "Simpan Data";
