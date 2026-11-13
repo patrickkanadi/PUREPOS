@@ -1761,10 +1761,9 @@ window.selectCategory = function(name) {
 
 window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localPiutang, firstOutlet, recentOutlets, address, lastPurchase, avgRO, avgStd, frequency) {
     document.getElementById("autocomplete-results").classList.add("hidden");
-    let lockedQueue = window.isCustomerLocked(phone);
-    if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan pesanan di sana terlebih dahulu.`); }
-
     let canonicalPhone = String(phone || "").replace(/-DUP\d+$/i, "");
+    let lockedQueue = window.isCustomerLocked(canonicalPhone);
+    if (lockedQueue) { return alert(`⚠️ PELANGGAN TERKUNCI:\nPelanggan ini sedang diproses di Antrean ${lockedQueue}. Selesaikan pesanan di sana terlebih dahulu.`); }
     document.getElementById("cust-phone").value = canonicalPhone.startsWith("TANPA-WA") ? "" : canonicalPhone;
     document.getElementById("cust-name").value = name; 
     document.getElementById("cust-address").value = (address && address !== "-") ? address : ""; 
@@ -2443,6 +2442,7 @@ window.unlockMenu = function() {
     
     let cleanedPhone = phoneRaw.replace(/\D/g, '');
     if (phoneRaw.startsWith('62')) cleanedPhone = '0' + cleanedPhone.substring(2);
+    if (cleanedPhone.length > 0 && !cleanedPhone.startsWith('0')) cleanedPhone = '0' + cleanedPhone;
 
     // === QUEUE LOCK CHECK ===
     let lockedQueue = null;
