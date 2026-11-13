@@ -243,6 +243,21 @@ window.initMobilePosWizard = function() {
                 z-index: 95;
                 box-shadow: 0 -3px 12px rgba(0,0,0,0.25);
             }
+            body.mob-step-3:not(.mob-other-tab) #mobile-step3-footer {
+                display: flex !important;
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                background: #2c3e50;
+                color: #fff;
+                padding: 10px 14px;
+                justify-content: space-between;
+                align-items: center;
+                gap: 8px;
+                z-index: 95;
+                box-shadow: 0 -3px 12px rgba(0,0,0,0.25);
+            }
 
             /* TAB LAIN (PENGIRIMAN / PIUTANG / PINJAM GALON) */
             body.mob-other-tab .mob-right-panel { display: none !important; }
@@ -1894,6 +1909,7 @@ window.renderCart = function() {
         f3Btn.disabled = (activeTotalQty === 0);
         f3Btn.style.opacity = (activeTotalQty === 0) ? "0.55" : "1";
     }
+
     if (window.globalMenuData && window.globalMenuData.length > 0 && document.getElementById("product-grid")) {
         window.renderProductGrid();
     }
