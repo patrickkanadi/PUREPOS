@@ -687,16 +687,17 @@ window.syncCriticalData = async function() {
                                 }
                             }
 
-                            if ((!po.hasSyncedOnce || po.hasUnsyncedRental) && (Number(po.rentBottleQty) || 0) > 0) {
+                            let netPendingRent = Math.max(0, (Number(po.rentBottleQty) || 0) - (Number(po.returnedBottleQty) || 0));
+                            if ((!po.hasSyncedOnce || po.hasUnsyncedRental) && netPendingRent > 0) {
                                 if (!Array.isArray(m.rentalBreakdown)) m.rentalBreakdown = [];
                                 let existingRent = m.rentalBreakdown.find(r => r.orderId === po.orderId);
                                 if (existingRent) {
-                                    existingRent.sisa = Math.max(Number(existingRent.sisa) || 0, Number(po.rentBottleQty) || 0);
+                                    existingRent.sisa = Math.max(Number(existingRent.sisa) || 0, netPendingRent);
                                 } else {
                                     m.rentalBreakdown.push({
                                         logId: po.rentLogId || ("PJG-" + po.orderId),
                                         orderId: po.orderId,
-                                        sisa: Number(po.rentBottleQty) || 0,
+                                        sisa: netPendingRent,
                                         date: po.timestamp || window.getWibDate(),
                                         outlet: poOut || window.currentOutlet
                                     });
@@ -760,10 +761,11 @@ window.syncCriticalData = async function() {
                                 memObj.piutangInvoices.push({ idTagihan: "HUT-LOCAL-" + po.orderId, orderId: po.orderId, sisa: poOrigDebt, date: po.timestamp || window.getWibDate(), outlet: poOut || window.currentOutlet });
                             }
                         }
-                        if ((Number(po.rentBottleQty) || 0) > 0) {
+                        let netLocalRent = Math.max(0, (Number(po.rentBottleQty) || 0) - (Number(po.returnedBottleQty) || 0));
+                        if (netLocalRent > 0) {
                             if (!Array.isArray(memObj.rentalBreakdown)) memObj.rentalBreakdown = [];
                             if (!memObj.rentalBreakdown.some(x => x.orderId === po.orderId)) {
-                                memObj.rentalBreakdown.push({ logId: po.rentLogId || ("PJG-" + po.orderId), orderId: po.orderId, sisa: Number(po.rentBottleQty) || 0, date: po.timestamp || window.getWibDate(), outlet: poOut || window.currentOutlet });
+                                memObj.rentalBreakdown.push({ logId: po.rentLogId || ("PJG-" + po.orderId), orderId: po.orderId, sisa: netLocalRent, date: po.timestamp || window.getWibDate(), outlet: poOut || window.currentOutlet });
                             }
                             memObj.bottlesBorrowed = memObj.rentalBreakdown.reduce((s, x) => s + (Number(x.sisa) || 0), 0);
                         }
@@ -3246,7 +3248,15 @@ window.submitNewMember = async function() {
     if (btn) { btn.innerText = "Menyimpan..."; btn.disabled = true; }
 
     try {
-        let newMember = {
+        if (!window.globalMembersCache) window.globalMembersCache = [];
+        let existingIdx = window.globalMembersCache.findIndex(m => m.phone === formatPhone);
+        let existingMem = existingIdx > -1 ? window.globalMembersCache[existingIdx] : null;
+
+        let newMember = existingMem ? {
+            ...existingMem,
+            name: (name && name !== "Tanpa Nama") ? name : existingMem.name,
+            address: address || existingMem.address || ""
+        } : {
             phone: formatPhone, 
             name: name, 
             address: address,
@@ -3259,8 +3269,6 @@ window.submitNewMember = async function() {
         };
         
         // 1. Save to RAM Cache + local DB + queue in unsynced_members
-        if (!window.globalMembersCache) window.globalMembersCache = [];
-        let existingIdx = window.globalMembersCache.findIndex(m => m.phone === formatPhone);
         if (existingIdx > -1) window.globalMembersCache[existingIdx] = newMember;
         else window.globalMembersCache.unshift(newMember);
 
