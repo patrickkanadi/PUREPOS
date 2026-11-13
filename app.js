@@ -579,6 +579,13 @@ window.syncCriticalData = async function() {
         const res = await fetch(url, { method: "GET", redirect: "follow" });
         const result = await res.json();
         if (result.status === "Success") {
+            if (result.codeVersion) {
+                let prevVer = localStorage.getItem("serverCodeVersion");
+                if (prevVer && prevVer !== result.codeVersion && "serviceWorker" in navigator) {
+                    navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.update())).catch(() => {});
+                }
+                localStorage.setItem("serverCodeVersion", result.codeVersion);
+            }
             
             // 1. Fetch offline/unsynced members, pending orders, pending piutang payments, AND pending gallon returns BEFORE opening the main write transaction
             const [unsyncedList, pendingOrdersList, pendingPiutangList, pendingKembaliList] = await Promise.all([
@@ -4083,9 +4090,9 @@ window.runBackgroundSync = async function() {
         let anySuccess = false;
         let hitLockTimeout = false;
 
-        // Kirim dalam paket batch (maks 12 item per request = 1x ScriptLock untuk seluruh antrean!)
-        for (let idx = 0; idx < batchItems.length; idx += 12) {
-            let chunk = batchItems.slice(idx, idx + 12);
+        // Kirim dalam paket batch kecil (maks 5 item per request) agar setiap ScriptLock selesai < 2 detik
+        for (let idx = 0; idx < batchItems.length; idx += 5) {
+            let chunk = batchItems.slice(idx, idx + 5);
             try {
                 let r = await window.fetchWithSyncTimeout(API_URL, {
                     method: "POST",
@@ -4135,8 +4142,8 @@ window.runBackgroundSync = async function() {
         }
 
         if (hitLockTimeout) {
-            // Jeda acak 1.5–4 detik agar 8 cabang tidak menabrak ScriptLock di detik yang sama
-            await new Promise(r => setTimeout(r, 1500 + Math.floor(Math.random() * 2500)));
+            // Jeda acak 2–5.5 detik agar 8 cabang tidak menabrak ScriptLock di detik yang sama
+            await new Promise(r => setTimeout(r, 2000 + Math.floor(Math.random() * 3500)));
         }
 
         if (anySuccess) {
