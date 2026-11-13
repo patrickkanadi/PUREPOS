@@ -581,10 +581,17 @@ window.syncCriticalData = async function() {
         if (result.status === "Success") {
             if (result.codeVersion) {
                 let prevVer = localStorage.getItem("serverCodeVersion");
-                if (prevVer && prevVer !== result.codeVersion && "serviceWorker" in navigator) {
-                    navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.update())).catch(() => {});
-                }
                 localStorage.setItem("serverCodeVersion", result.codeVersion);
+                if (prevVer && prevVer !== result.codeVersion) {
+                    if ("serviceWorker" in navigator) {
+                        navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.update())).catch(() => {});
+                    }
+                    let allCartsEmpty = (window.posSessions || []).every(s => !s.cart || s.cart.length === 0);
+                    if (allCartsEmpty && !window.isSyncing && !window.isFinalizingOrder) {
+                        window.location.reload();
+                        return;
+                    }
+                }
             }
             
             // 1. Fetch offline/unsynced members, pending orders, pending piutang payments, AND pending gallon returns BEFORE opening the main write transaction
@@ -2123,7 +2130,7 @@ window.submitPiutang = function() {
             }
             window.piutangTargetMember.piutangInvoices = invList.filter(inv => (Number(inv.sisa) || 0) > 0);
         }
-        window.saveMemberToDB(window.piutangTargetMember.phone, window.piutangTargetMember.name, window.piutangTargetMember.wallet, window.piutangTargetMember.bottlesBorrowed, window.piutangTargetMember.piutang, window.piutangTargetMember.firstOutlet, window.piutangTargetMember.recentOutlets);
+        window.saveMemberToDB(window.piutangTargetMember.phone, window.piutangTargetMember.name, window.piutangTargetMember.wallet, window.piutangTargetMember.bottlesBorrowed, window.piutangTargetMember.piutang, window.piutangTargetMember.firstOutlet, window.piutangTargetMember.recentOutlets, undefined, false);
         
         if (window.activeCustomerProfile && window.activeCustomerProfile.phone === window.piutangTargetMember.phone) { 
             window.activeCustomerProfile = window.piutangTargetMember; window.updatePromoBanner(window.activeCustomerProfile); 
@@ -4094,9 +4101,10 @@ window.runBackgroundSync = async function() {
         let anySuccess = false;
         let hitLockTimeout = false;
 
-        // Kirim dalam paket batch kecil (maks 5 item per request) agar setiap ScriptLock selesai < 2 detik
-        for (let idx = 0; idx < batchItems.length; idx += 5) {
-            let chunk = batchItems.slice(idx, idx + 5);
+        // Kirim maksimal 6 item per siklus dengan jeda acak antar-batch agar 8 cabang tidak pernah menabrak ScriptLock bersamaan
+        if (batchItems.length > 0) {
+            let chunk = batchItems.slice(0, 6);
+            if (batchItems.length > 6) window.syncPendingAgain = true;
             try {
                 let r = await window.fetchWithSyncTimeout(API_URL, {
                     method: "POST",
@@ -4114,7 +4122,6 @@ window.runBackgroundSync = async function() {
                         if (batchHandlers[itemRes.key]) await batchHandlers[itemRes.key](isOk);
                     }
                 } else if (String(resJson.message || "").includes("Unknown action")) {
-                    // Fallback otomatis jika server masih versi lama sebelum deploy syncBatch
                     for (const singleItem of chunk) {
                         let { key, ...singlePayload } = singleItem;
                         let rSingle = await window.fetchWithSyncTimeout(API_URL, {
@@ -4146,8 +4153,7 @@ window.runBackgroundSync = async function() {
         }
 
         if (hitLockTimeout) {
-            // Jeda acak 2–5.5 detik agar 8 cabang tidak menabrak ScriptLock di detik yang sama
-            await new Promise(r => setTimeout(r, 2000 + Math.floor(Math.random() * 3500)));
+            await new Promise(r => setTimeout(r, 2500 + Math.floor(Math.random() * 4500)));
         }
 
         if (anySuccess) {
@@ -4666,9 +4672,8 @@ window.submitDeliveryDone = function() {
                         let idx = window.globalMembersCache.findIndex(x => x.phone === mem.phone);
                         if (idx > -1) window.globalMembersCache[idx] = mem;
                     }
-                    let t2 = window.db.transaction(["members", "unsynced_members"], "readwrite");
+                    let t2 = window.db.transaction(["members"], "readwrite");
                     t2.objectStore("members").put(mem);
-                    t2.objectStore("unsynced_members").put(mem);
                     if (window.updateLeftBadges) window.updateLeftBadges();
                 }
             };
