@@ -440,7 +440,9 @@ window.initMobilePosWizard = function() {
         el.addEventListener("blur", () => {
             setTimeout(() => {
                 const activeId = document.activeElement ? document.activeElement.id : "";
-                if (activeId !== "cust-phone" && activeId !== "cust-name") {
+                const resBox = document.getElementById("autocomplete-results");
+                const isAcOpen = resBox && !resBox.classList.contains("hidden");
+                if (activeId !== "cust-phone" && activeId !== "cust-name" && !isAcOpen) {
                     document.body.classList.remove("mob-kb-open");
                 }
             }, 220);
@@ -2429,7 +2431,7 @@ window.unlockMenu = function() {
     };
 
     // Jika sudah dipilih dari Autocomplete dan nama/nomor masih cocok, gunakan profil tersebut secara langsung
-    if (window.activeCustomerProfile && String(window.activeCustomerProfile.name || "").toLowerCase() === name.toLowerCase() && (String(window.activeCustomerProfile.phone).replace(/-DUP\d+$/, "") === searchPhone || isTanpaWaProfile)) {
+    if (window.activeCustomerProfile && String(window.activeCustomerProfile.name || "").trim().toLowerCase() === name.toLowerCase() && (String(window.activeCustomerProfile.phone).replace(/-DUP\d+$/, "") === searchPhone || isTanpaWaProfile)) {
         applyUnlockedMember(window.activeCustomerProfile);
         return;
     }
@@ -4495,6 +4497,11 @@ window.drainSyncQueueWithLock = async function() {
         }
 
         await window.runBackgroundSync(true);
+        if ((await window.getUnsyncedCount()) === 0) {
+            overlay.style.display = "none";
+            if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
+            return true;
+        }
         await new Promise(r => setTimeout(r, Math.min(5000, 900 * attempt) + Math.floor(Math.random() * 1400)));
     }
 
@@ -5739,8 +5746,9 @@ window.onload = async () => {
     document.addEventListener('click', (e) => { 
         if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { 
             const resBox = document.getElementById('autocomplete-results');
-            if(resBox) resBox.classList.add('hidden'); 
-        } 
+            if(resBox) resBox.classList.add('hidden');
+            document.body.classList.remove("mob-kb-open");
+        }
         if(e.target.id !== 'exp-category') {
             const catBox = document.getElementById('cat-autocomplete-results');
             if(catBox) catBox.classList.add('hidden');
