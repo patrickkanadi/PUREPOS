@@ -1219,7 +1219,7 @@ window.handleAutocomplete = function(e) {
     }, 70);
 };
 
-window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rOut, address) {
+window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rOut, address, queueSync = true) {
     if (!phone || phone === "-") return Promise.resolve();
     let cachedMem = (window.globalMembersCache || []).find(x => x.phone === phone);
     let initBreakdown = (window.activeCustomerProfile && window.activeCustomerProfile.phone === phone && Array.isArray(window.activeCustomerProfile.rentalBreakdown))
@@ -1256,9 +1256,10 @@ window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rO
 
     return new Promise(resolve => {
         if (!window.db) return resolve(mem);
-        let tx = window.db.transaction(["members", "unsynced_members"], "readwrite");
+        let stores = queueSync ? ["members", "unsynced_members"] : ["members"];
+        let tx = window.db.transaction(stores, "readwrite");
         tx.objectStore("members").put(mem);
-        tx.objectStore("unsynced_members").put(mem);
+        if (queueSync) tx.objectStore("unsynced_members").put(mem);
         tx.oncomplete = () => resolve(mem);
         tx.onerror = () => resolve(mem);
     });
@@ -2277,7 +2278,7 @@ window.finalizeOrder = async function(shouldPrint) {
             window.activeCustomerProfile.rentalBreakdown.push({ logId: localRentLogId, orderId: currentOrderId, sisa: rentBottleQty, date: window.getWibDate(), outlet: window.currentOutlet });
         }
 
-        // 🔥 Simpan profil member yang loyalitasnya aktif
+        // 🔥 Simpan profil member yang loyalitasnya aktif (syncOrder sudah otomatis update Members di server)
         window.saveMemberToDB(
             window.activeCustomerProfile.phone, 
             window.activeCustomerProfile.name, 
@@ -2286,7 +2287,8 @@ window.finalizeOrder = async function(shouldPrint) {
             newPiutang, 
             window.activeCustomerProfile.firstOutlet, 
             window.activeCustomerProfile.recentOutlets,
-            custAddress
+            custAddress,
+            false
         );
     } else if (custPhone !== "-") {
         // 🔥 Simpan pelanggan biasa (non-loyalty) yang pinjam galon / berhutang / punya alamat
@@ -2298,7 +2300,6 @@ window.finalizeOrder = async function(shouldPrint) {
             window.activeCustomerProfile.rentalBreakdown.push({ logId: localRentLogId, orderId: currentOrderId, sisa: rentBottleQty, date: window.getWibDate(), outlet: window.currentOutlet });
         }
 
-        // ✅ PERBAIKAN:
         let totalBottles = (window.activeCustomerProfile ? (window.activeCustomerProfile.bottlesBorrowed || 0) : 0) + rentBottleQty;
         window.saveMemberToDB(
             custPhone, 
@@ -2307,8 +2308,9 @@ window.finalizeOrder = async function(shouldPrint) {
             totalBottles, 
             newPiutang, 
             fOut, 
-            rOut,
-            custAddress
+            rOut, 
+            custAddress,
+            false
         );
     }
 
@@ -3864,13 +3866,12 @@ window.runBackgroundSync = async function() {
     }
     window.isSyncing = true;
     
-    // Grab the button and store its original state
     let syncBtn = document.getElementById("btn-sync");
     let originalText = syncBtn ? syncBtn.innerHTML : "Sync";
     
     if (syncBtn) {
         syncBtn.innerHTML = "⏳ Syncing...";
-        syncBtn.style.backgroundColor = "#f39c12"; // Yellow
+        syncBtn.style.backgroundColor = "#f39c12";
         syncBtn.style.color = "white";
         syncBtn.disabled = true;
     }
@@ -3878,12 +3879,7 @@ window.runBackgroundSync = async function() {
     try {
         if (!window.db) { await window.initDB(); }
         
-        // 🔥 Background sync now focuses purely on pulling/pushing live transactions and data rapidly,
-        // keeping your POS data fully refreshed every 25 seconds without redundant shift scans.
-        
-        // 1. READ EVERYTHING INTO MEMORY FIRST (Safely in parallel)
         let tx = window.db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah", "bayar_piutang", "attendance", "kembali_galon"], "readonly");
-        
         const fetchAll = (storeName) => new Promise(res => tx.objectStore(storeName).getAll().onsuccess = e => res(e.target.result || []));
 
         const [orders, piutangs, drops, reports, expenses, voids, members, inbounds, cuciLogs, laporLogs, attendances, kembalis] = await Promise.all([
@@ -3892,62 +3888,6 @@ window.runBackgroundSync = async function() {
             fetchAll("cuci_tandon"), fetchAll("lapor_masalah"), fetchAll("attendance"), fetchAll("kembali_galon")
         ]);
 
-        // 2. THEN DO THE INTERNET FETCHES
-        // 🔄 UBAH BARIS INI:
-        for (const order of orders) {
-            // Tangkap status "Pending" MAUPUN "Syncing" yang sempat macet akibat refresh/jaringan putus!
-            if (order.syncStatus === "Pending" || order.syncStatus === "Syncing") {
-                await new Promise(res => { 
-                    let tx = window.db.transaction(["orders"], "readwrite"); 
-                    let st = tx.objectStore("orders"); 
-                    st.get(order.orderId).onsuccess = e => { 
-                        let o = e.target.result; 
-                        if(o){ o.syncStatus = "Syncing"; st.put(o); } 
-                        res(); 
-                    }; 
-                });
-                try { 
-                    let r = await window.fetchWithSyncTimeout(API_URL, {
-                        method: "POST", 
-                        redirect: "follow",  
-                        headers: { "Content-Type": "text/plain;charset=utf-8" }, 
-                        body: JSON.stringify({ action: "syncOrder", data: order }) 
-                    }); 
-                    let resJson = await r.json();
-                    let isSuccess = resJson.status === "Success";
-                    if (!isSuccess && resJson.message) window.lastSyncServerError = `syncOrder (${order.orderId}): ${resJson.message}`;
-                    await new Promise(res => { 
-                        let tx = window.db.transaction(["orders"], "readwrite"); 
-                        let st = tx.objectStore("orders"); 
-                        st.get(order.orderId).onsuccess = e => { 
-                            let o = e.target.result; 
-                            if(o && o.syncStatus === "Syncing"){ 
-                                o.syncStatus = isSuccess ? "Synced" : "Pending"; 
-                                if (isSuccess) {
-                                    o.hasSyncedOnce = true;
-                                    o.hasUnsyncedRental = false;
-                                }
-                                st.put(o); 
-                            }
-                            res(); 
-                        }; 
-                    });
-                } catch(e) { 
-                    await new Promise(res => { 
-                        let tx = window.db.transaction(["orders"], "readwrite"); 
-                        let st = tx.objectStore("orders"); 
-                        st.get(order.orderId).onsuccess = e => { 
-                            let o = e.target.result; 
-                            if(o && o.syncStatus === "Syncing"){ 
-                                o.syncStatus = "Pending"; 
-                                st.put(o); 
-                            } 
-                            res(); 
-                        }; 
-                    });
-                }
-            }
-        }
         const dbPut = (storeName, val) => new Promise(res => {
             let t = window.db.transaction([storeName], "readwrite");
             t.objectStore(storeName).put(val);
@@ -3961,160 +3901,181 @@ window.runBackgroundSync = async function() {
             t.onerror = () => res();
         });
 
-        let syncedAnyPiutang = false;
-        let syncedAnyOrderOrGalon = orders.some(o => o.syncStatus === "Pending" || o.syncStatus === "Syncing") ||
-            kembalis.some(k => k.syncStatus === "Pending") ||
-            expenses.some(e => e.syncStatus === "Pending") ||
-            drops.some(d => d.syncStatus === "Pending") ||
-            voids.length > 0;
+        let batchItems = [];
+        let batchHandlers = {};
+
+        for (const order of orders) {
+            if (order.syncStatus === "Pending" || order.syncStatus === "Syncing") {
+                let k = "ORD:" + order.orderId;
+                batchItems.push({ key: k, action: "syncOrder", data: order });
+                batchHandlers[k] = async (ok) => {
+                    order.syncStatus = ok ? "Synced" : "Pending";
+                    if (ok) { order.hasSyncedOnce = true; order.hasUnsyncedRental = false; }
+                    await dbPut("orders", order);
+                };
+            }
+        }
         for (const bp of piutangs) {
             if (bp.syncStatus === "Pending") {
-                try {
-                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncBayarPiutang", data: bp }) }, 35000);
-                    let bpRes = await r.json();
-                    if (bpRes.status === "Success") {
-                        bp.syncStatus = "Synced";
-                        syncedAnyPiutang = true;
-                        await dbPut("bayar_piutang", bp);
-                    } else if (bpRes.message) {
-                        window.lastSyncServerError = `syncBayarPiutang (${bp.payId}): ${bpRes.message}`;
-                    }
-                } catch(e) {
-                    window.lastSyncServerError = `syncBayarPiutang (${bp.payId}): ${e.name === 'AbortError' ? 'Timeout 35s' : e.message}`;
-                }
+                let k = "BP:" + bp.payId;
+                batchItems.push({ key: k, action: "syncBayarPiutang", data: bp });
+                batchHandlers[k] = async (ok) => {
+                    if (ok) { bp.syncStatus = "Synced"; await dbPut("bayar_piutang", bp); }
+                };
             }
         }
         for (const drop of drops) {
             if (drop.syncStatus === "Pending") {
-                try {
-                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncCashDrop", data: drop }) });
-                    let resJ = await r.json();
-                    if (resJ.status === "Success") { drop.syncStatus = "Synced"; await dbPut("cash_drops", drop); }
-                    else if (resJ.message) window.lastSyncServerError = `syncCashDrop: ${resJ.message}`;
-                } catch(e) { window.lastSyncServerError = `syncCashDrop: ${e.message}`; }
+                let k = "DRP:" + drop.dropId;
+                batchItems.push({ key: k, action: "syncCashDrop", data: drop });
+                batchHandlers[k] = async (ok) => {
+                    if (ok) { drop.syncStatus = "Synced"; await dbPut("cash_drops", drop); }
+                };
             }
         }
         for (const report of reports) {
             if (report.syncStatus === "Pending") {
-                try {
-                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncShiftReport", data: report }) });
-                    let resJ = await r.json();
-                    if (resJ.status === "Success") { report.syncStatus = "Synced"; await dbPut("shift_reports", report); }
-                    else if (resJ.message) window.lastSyncServerError = `syncShiftReport: ${resJ.message}`;
-                } catch(e) { window.lastSyncServerError = `syncShiftReport: ${e.message}`; }
+                let k = "SR:" + report.shiftId;
+                batchItems.push({ key: k, action: "syncShiftReport", data: report });
+                batchHandlers[k] = async (ok) => {
+                    if (ok) { report.syncStatus = "Synced"; await dbPut("shift_reports", report); }
+                };
             }
         }
         for (const exp of expenses) {
             if (exp.syncStatus === "Pending") {
-                try {
-                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncExpense", data: exp }) });
-                    let resJ = await r.json();
-                    if (resJ.status === "Success") { exp.syncStatus = "Synced"; await dbPut("expenses", exp); }
-                    else if (resJ.message) window.lastSyncServerError = `syncExpense: ${resJ.message}`;
-                } catch(e) { window.lastSyncServerError = `syncExpense: ${e.message}`; }
+                let k = "EXP:" + exp.expenseId;
+                batchItems.push({ key: k, action: "syncExpense", data: exp });
+                batchHandlers[k] = async (ok) => {
+                    if (ok) { exp.syncStatus = "Synced"; await dbPut("expenses", exp); }
+                };
             }
         }
         for (const req of voids) {
-            try {
-                const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid";
-                const payload = req.type === 'orders'
-                    ? { orderId: req.id, status: req.status, authName: req.authName, outlet: window.currentOutlet }
-                    : { expenseId: req.id, status: req.status, authName: req.authName, outlet: window.currentOutlet };
-                let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: actionType, ...payload }) });
-                let resJ = await r.json();
-                if (resJ.status === "Success") { await dbDel("void_requests", req.id); }
-                else if (resJ.message) window.lastSyncServerError = `${actionType}: ${resJ.message}`;
-            } catch(e) { window.lastSyncServerError = `voidRequest (${req.id}): ${e.message}`; }
+            let k = "VOID:" + req.id;
+            const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid";
+            const payload = req.type === 'orders'
+                ? { orderId: req.id, status: req.status, authName: req.authName, outlet: window.currentOutlet }
+                : { expenseId: req.id, status: req.status, authName: req.authName, outlet: window.currentOutlet };
+            batchItems.push({ key: k, action: actionType, ...payload });
+            batchHandlers[k] = async (ok) => { if (ok) await dbDel("void_requests", req.id); };
         }
         for (const mem of members) {
             if (!mem || !mem.phone || mem.phone === "-") {
                 if (mem && mem.phone !== undefined) await dbDel("unsynced_members", mem.phone);
                 continue;
             }
-            try { 
-                let r = await window.fetchWithSyncTimeout(API_URL, {
-                    method: "POST", 
-                    redirect: "follow",  
-                    headers: { "Content-Type": "text/plain;charset=utf-8" }, 
-                    body: JSON.stringify({ action: "addMember", data: mem })
-                }); 
-                let resJ = await r.json();
-                if (resJ.status === "Success") { 
-                    await dbDel("unsynced_members", mem.phone); 
-                } else if (resJ.message) {
-                    window.lastSyncServerError = `addMember (${mem.phone}): ${resJ.message}`;
-                }
-            } catch(e) { window.lastSyncServerError = `addMember (${mem.phone}): ${e.message}`; }
+            let k = "MEM:" + mem.phone;
+            batchItems.push({ key: k, action: "addMember", data: mem });
+            batchHandlers[k] = async (ok) => { if (ok) await dbDel("unsynced_members", mem.phone); };
         }
         for (const inb of inbounds) {
             if (inb.syncStatus === "Pending") {
-                try {
-                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncInbound", data: inb }) });
-                    let resJ = await r.json();
-                    if (resJ.status === "Success") { await dbDel("stock_inbound", inb.logId); }
-                    else if (resJ.message) window.lastSyncServerError = `syncInbound: ${resJ.message}`;
-                } catch(e) { window.lastSyncServerError = `syncInbound: ${e.message}`; }
+                let k = "INB:" + inb.logId;
+                batchItems.push({ key: k, action: "syncInbound", data: inb });
+                batchHandlers[k] = async (ok) => { if (ok) await dbDel("stock_inbound", inb.logId); };
             }
         }
         for (const log of cuciLogs) {
             if (log.syncStatus === "Pending") {
-                try {
-                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncCuciTandon", data: log }) });
-                    let resJ = await r.json();
-                    if (resJ.status === "Success") { await dbDel("cuci_tandon", log.logId); }
-                    else if (resJ.message) window.lastSyncServerError = `syncCuciTandon: ${resJ.message}`;
-                } catch(e) { window.lastSyncServerError = `syncCuciTandon: ${e.message}`; }
+                let k = "CUC:" + log.logId;
+                batchItems.push({ key: k, action: "syncCuciTandon", data: log });
+                batchHandlers[k] = async (ok) => { if (ok) await dbDel("cuci_tandon", log.logId); };
             }
         }
         for (const log of laporLogs) {
             if (log.syncStatus === "Pending") {
-                try {
-                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncLaporMasalah", data: log }) });
-                    let resJ = await r.json();
-                    if (resJ.status === "Success") { await dbDel("lapor_masalah", log.logId); }
-                    else if (resJ.message) window.lastSyncServerError = `syncLaporMasalah: ${resJ.message}`;
-                } catch(e) { window.lastSyncServerError = `syncLaporMasalah: ${e.message}`; }
+                let k = "LPR:" + log.logId;
+                batchItems.push({ key: k, action: "syncLaporMasalah", data: log });
+                batchHandlers[k] = async (ok) => { if (ok) await dbDel("lapor_masalah", log.logId); };
             }
         }
         for (const kmb of kembalis) {
             if (kmb.syncStatus === "Pending") {
-                try { 
-                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncKembaliGalon", data: kmb }) }); 
-                    let resJ = await r.json();
-                    if (resJ.status === "Success") { await dbDel("kembali_galon", kmb.logId); }
-                    else if (resJ.message) window.lastSyncServerError = `syncKembaliGalon: ${resJ.message}`;
-                } catch(e) { window.lastSyncServerError = `syncKembaliGalon: ${e.message}`; }
+                let k = "KMB:" + kmb.logId;
+                batchItems.push({ key: k, action: "syncKembaliGalon", data: kmb });
+                batchHandlers[k] = async (ok) => { if (ok) await dbDel("kembali_galon", kmb.logId); };
             }
         }
-        
         for (const att of attendances) {
-            if (att.syncStatus === "Pending") { 
-                try { 
-                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "syncAttendance", data: att }) }); 
-                    let resJ = await r.json();
-                    if (resJ.status === "Success") { att.syncStatus = "Synced"; await dbPut("attendance", att); }
-                    else if (resJ.message) window.lastSyncServerError = `syncAttendance: ${resJ.message}`;
-                } catch(e) { window.lastSyncServerError = `syncAttendance: ${e.message}`; } 
-            }
-            else if (att.syncStatus === "OutPending") { 
-                try { 
-                    let r = await window.fetchWithSyncTimeout(API_URL, {method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: att }) }); 
-                    let resJ = await r.json();
-                    if (resJ.status === "Success") { att.syncStatus = "Synced"; await dbPut("attendance", att); }
-                    else if (resJ.message) window.lastSyncServerError = `updateAttendanceOut: ${resJ.message}`;
-                } catch(e) { window.lastSyncServerError = `updateAttendanceOut: ${e.message}`; } 
+            if (att.syncStatus === "Pending") {
+                let k = "ATT:" + att.logId;
+                batchItems.push({ key: k, action: "syncAttendance", data: att });
+                batchHandlers[k] = async (ok) => { if (ok) { att.syncStatus = "Synced"; await dbPut("attendance", att); } };
+            } else if (att.syncStatus === "OutPending") {
+                let k = "ATTOUT:" + att.logId;
+                batchItems.push({ key: k, action: "updateAttendanceOut", data: att });
+                batchHandlers[k] = async (ok) => { if (ok) { att.syncStatus = "Synced"; await dbPut("attendance", att); } };
             }
         }
 
-        if (syncedAnyPiutang || syncedAnyOrderOrGalon) {
+        let anySuccess = false;
+        let hitLockTimeout = false;
+
+        // Kirim dalam paket batch (maks 12 item per request = 1x ScriptLock untuk seluruh antrean!)
+        for (let idx = 0; idx < batchItems.length; idx += 12) {
+            let chunk = batchItems.slice(idx, idx + 12);
+            try {
+                let r = await window.fetchWithSyncTimeout(API_URL, {
+                    method: "POST",
+                    redirect: "follow",
+                    headers: { "Content-Type": "text/plain;charset=utf-8" },
+                    body: JSON.stringify({ action: "syncBatch", items: chunk })
+                }, 45000);
+                let resJson = await r.json();
+
+                if (resJson.status === "Success" && Array.isArray(resJson.results)) {
+                    for (const itemRes of resJson.results) {
+                        let isOk = itemRes.status === "Success";
+                        if (isOk) anySuccess = true;
+                        else if (itemRes.message) window.lastSyncServerError = `${itemRes.key}: ${itemRes.message}`;
+                        if (batchHandlers[itemRes.key]) await batchHandlers[itemRes.key](isOk);
+                    }
+                } else if (String(resJson.message || "").includes("Unknown action")) {
+                    // Fallback otomatis jika server masih versi lama sebelum deploy syncBatch
+                    for (const singleItem of chunk) {
+                        let { key, ...singlePayload } = singleItem;
+                        let rSingle = await window.fetchWithSyncTimeout(API_URL, {
+                            method: "POST",
+                            redirect: "follow",
+                            headers: { "Content-Type": "text/plain;charset=utf-8" },
+                            body: JSON.stringify(singlePayload)
+                        }, 45000);
+                        let resSingle = await rSingle.json();
+                        let isOk = resSingle.status === "Success";
+                        if (isOk) anySuccess = true;
+                        else if (resSingle.message) window.lastSyncServerError = `${key}: ${resSingle.message}`;
+                        if (batchHandlers[key]) await batchHandlers[key](isOk);
+                    }
+                } else {
+                    let msg = String(resJson.message || "Batch sync error");
+                    window.lastSyncServerError = msg;
+                    if (msg.toLowerCase().includes("penguncian") || msg.toLowerCase().includes("lock")) hitLockTimeout = true;
+                    for (const singleItem of chunk) {
+                        if (batchHandlers[singleItem.key]) await batchHandlers[singleItem.key](false);
+                    }
+                }
+            } catch (err) {
+                window.lastSyncServerError = err.name === "AbortError" ? "Timeout 45s" : err.message;
+                for (const singleItem of chunk) {
+                    if (batchHandlers[singleItem.key]) await batchHandlers[singleItem.key](false);
+                }
+            }
+        }
+
+        if (hitLockTimeout) {
+            // Jeda acak 1.5–4 detik agar 8 cabang tidak menabrak ScriptLock di detik yang sama
+            await new Promise(r => setTimeout(r, 1500 + Math.floor(Math.random() * 2500)));
+        }
+
+        if (anySuccess) {
             await window.syncCriticalData();
             await window.syncBackgroundData();
         }
 
-        // On Success: Turn Green
         if (syncBtn) {
             syncBtn.innerHTML = "✅ Synced";
-            syncBtn.style.backgroundColor = "#27ae60"; // Green
+            syncBtn.style.backgroundColor = "#27ae60";
             setTimeout(() => {
                 if (syncBtn) {
                     syncBtn.innerHTML = originalText;
@@ -4127,11 +4088,9 @@ window.runBackgroundSync = async function() {
     } catch (e) {
         console.error("Background Sync Error:", e);
         if (e.name === 'InvalidStateError') { await window.initDB(); }
-        
-        // On Error: Turn Red
         if (syncBtn) {
             syncBtn.innerHTML = "❌ Sync Failed";
-            syncBtn.style.backgroundColor = "#e74c3c"; // Red
+            syncBtn.style.backgroundColor = "#e74c3c";
             setTimeout(() => {
                 if (syncBtn) {
                     syncBtn.innerHTML = originalText;
@@ -4145,10 +4104,10 @@ window.runBackgroundSync = async function() {
         if (window.updateUnsyncedBadge) window.updateUnsyncedBadge();
         if (window.syncPendingAgain && navigator.onLine) {
             window.syncPendingAgain = false;
-            setTimeout(() => window.runBackgroundSync(), 200);
+            setTimeout(() => window.runBackgroundSync(), 300 + Math.floor(Math.random() * 700));
         }
     }
-}
+};
 
 window.updateTabStyles = function(activeId) {
     const tabs = [
@@ -4400,9 +4359,8 @@ window.submitReturnGalon = function(phone, name, targetLogId, targetOrderId, max
                 if (idx > -1) window.globalMembersCache[idx] = mem;
             }
 
-            let tx2 = window.db.transaction(["members", "unsynced_members"], "readwrite");
+            let tx2 = window.db.transaction(["members"], "readwrite");
             tx2.objectStore("members").put(mem);
-            tx2.objectStore("unsynced_members").put(mem);
 
             alert(`${qty} Galon berhasil dikembalikan dari nota ${targetOrderId}!`);
             window.renderPeminjamList();
