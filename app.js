@@ -739,7 +739,49 @@ window.syncCriticalData = async function() {
                     memT.put(m);
                 });
                 
-                // Keep unsynced local members alive without overwriting authoritative server balances!
+                // Pastikan pelanggan baru lokal (baik dari unsynced_members maupun order Pending) tetap memiliki saldo hutang/galon yang akurat sebelum masuk server
+                const applyLocalPendingOrderBalances = (memObj) => {
+                    let bPhone = String(memObj.phone || "").replace(/-DUP\d+$/, "");
+                    if (!bPhone || bPhone === "-" || bPhone === "Walk-in") return memObj;
+                    pendingOrdersList.forEach(po => {
+                        if (String(po.customerPhone || "").replace(/-DUP\d+$/, "") !== bPhone) return;
+                        let poOut = String(po.outlet || window.currentOutlet || "").trim();
+                        let poOutUp = poOut.toUpperCase();
+                        let poOrigDebt = (Number(po.debtAmount) || 0) + (Number(po.pelunasanCash) || 0) + (Number(po.pelunasanQris) || 0) + (Number(po.pelunasanTransfer) || 0);
+                        if (poOrigDebt > 0) {
+                            if (!memObj.piutangBreakdown) memObj.piutangBreakdown = {};
+                            if (poOutUp) memObj.piutangBreakdown[poOutUp] = (memObj.piutangBreakdown[poOutUp] || 0) + poOrigDebt;
+                            if (poOut && poOut !== poOutUp) memObj.piutangBreakdown[poOut] = (memObj.piutangBreakdown[poOut] || 0) + poOrigDebt;
+                            if (!window.currentOutlet || poOutUp === window.currentOutlet.toUpperCase()) {
+                                memObj.piutang = (memObj.piutang || 0) + poOrigDebt;
+                            }
+                            if (!Array.isArray(memObj.piutangInvoices)) memObj.piutangInvoices = [];
+                            if (!memObj.piutangInvoices.some(x => x.orderId === po.orderId)) {
+                                memObj.piutangInvoices.push({ idTagihan: "HUT-LOCAL-" + po.orderId, orderId: po.orderId, sisa: poOrigDebt, date: po.timestamp || window.getWibDate(), outlet: poOut || window.currentOutlet });
+                            }
+                        }
+                        if ((Number(po.rentBottleQty) || 0) > 0) {
+                            if (!Array.isArray(memObj.rentalBreakdown)) memObj.rentalBreakdown = [];
+                            if (!memObj.rentalBreakdown.some(x => x.orderId === po.orderId)) {
+                                memObj.rentalBreakdown.push({ logId: po.rentLogId || ("PJG-" + po.orderId), orderId: po.orderId, sisa: Number(po.rentBottleQty) || 0, date: po.timestamp || window.getWibDate(), outlet: poOut || window.currentOutlet });
+                            }
+                            memObj.bottlesBorrowed = memObj.rentalBreakdown.reduce((s, x) => s + (Number(x.sisa) || 0), 0);
+                        }
+                    });
+                    if (pendingPaidByPhone[bPhone]) {
+                        for (let outKey in pendingPaidByPhone[bPhone]) {
+                            let paidAmt = pendingPaidByPhone[bPhone][outKey];
+                            if (memObj.piutangBreakdown && memObj.piutangBreakdown[outKey] !== undefined) {
+                                memObj.piutangBreakdown[outKey] = Math.max(0, memObj.piutangBreakdown[outKey] - paidAmt);
+                            }
+                            if (!window.currentOutlet || outKey === window.currentOutlet.toUpperCase()) {
+                                memObj.piutang = Math.max(0, (memObj.piutang || 0) - paidAmt);
+                            }
+                        }
+                    }
+                    return memObj;
+                };
+
                 unsyncedList.forEach(um => {
                     let srv = mergedMap.get(um.phone);
                     let merged = srv ? {
@@ -748,9 +790,30 @@ window.syncCriticalData = async function() {
                         address: (um.address && um.address !== "-") ? um.address : srv.address,
                         firstOutlet: um.firstOutlet || srv.firstOutlet,
                         recentOutlets: um.recentOutlets || srv.recentOutlets
-                    } : um;
+                    } : applyLocalPendingOrderBalances({ ...um, piutang: 0, piutangBreakdown: {}, piutangInvoices: [], bottlesBorrowed: 0, rentalBreakdown: [] });
                     mergedMap.set(um.phone, merged);
                     memT.put(merged);
+                });
+
+                pendingOrdersList.forEach(po => {
+                    let bPhone = String(po.customerPhone || "").replace(/-DUP\d+$/, "");
+                    if (!bPhone || bPhone === "-" || bPhone === "Walk-in" || mergedMap.has(bPhone)) return;
+                    let synthMem = applyLocalPendingOrderBalances({
+                        phone: bPhone,
+                        name: po.customerName || "Pelanggan",
+                        address: po.customerAddress || "",
+                        wallet: {},
+                        spent: 0,
+                        bottlesBorrowed: 0,
+                        piutang: 0,
+                        piutangBreakdown: {},
+                        piutangInvoices: [],
+                        rentalBreakdown: [],
+                        firstOutlet: po.outlet || window.currentOutlet,
+                        recentOutlets: po.outlet || window.currentOutlet
+                    });
+                    mergedMap.set(bPhone, synthMem);
+                    memT.put(synthMem);
                 });
                 window.globalMembersCache = Array.from(mergedMap.values());
 
@@ -4074,8 +4137,9 @@ window.runBackgroundSync = async function() {
         }
 
         if (syncBtn) {
-            syncBtn.innerHTML = "✅ Synced";
-            syncBtn.style.backgroundColor = "#27ae60";
+            let allFailed = (batchItems.length > 0 && !anySuccess);
+            syncBtn.innerHTML = allFailed ? "⚠️ Antre Sync" : "✅ Synced";
+            syncBtn.style.backgroundColor = allFailed ? "#e67e22" : "#27ae60";
             setTimeout(() => {
                 if (syncBtn) {
                     syncBtn.innerHTML = originalText;
