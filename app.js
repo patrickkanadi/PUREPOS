@@ -24,6 +24,39 @@ window.initMobilePosWizard = function() {
     style.textContent = `
         #mobile-wizard-stepper, #mobile-step2-footer, #mobile-step3-footer, #mobile-step2-custbar, #mobile-step3-header, #mobile-step1-nextbar, .mob-card-qty-badge { display: none; }
 
+        /* Daftar autocomplete pelanggan: rata kiri, ringkas (Nama, WA, Alamat), tanpa tombol Pilih */
+        #autocomplete-results .autocomplete-item {
+            display: block !important;
+            text-align: left !important;
+            padding: 9px 14px !important;
+            border-bottom: 1px solid #e5e8e8 !important;
+            cursor: pointer !important;
+            transition: background 0.12s ease;
+        }
+        #autocomplete-results .autocomplete-item:hover {
+            background: #f0f7ff !important;
+        }
+        #autocomplete-results .autocomplete-name {
+            display: flex !important;
+            flex-wrap: wrap !important;
+            align-items: center !important;
+            justify-content: flex-start !important;
+            text-align: left !important;
+            gap: 6px !important;
+            font-size: 14.5px !important;
+            font-weight: 700 !important;
+            color: #2c3e50 !important;
+        }
+        #autocomplete-results .autocomplete-addr {
+            display: block !important;
+            text-align: left !important;
+            font-size: 12.5px !important;
+            margin-top: 3px !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+        }
+
         @media (max-width: 768px) {
             html, body { overflow-x: hidden !important; max-width: 100vw !important; }
             #pos-screen { padding-bottom: 84px !important; }
@@ -180,18 +213,14 @@ window.initMobilePosWizard = function() {
                 box-sizing: border-box !important;
             }
             body.mob-step-1:not(.mob-other-tab) #autocomplete-results .autocomplete-item {
-                display: flex !important;
-                flex-direction: row !important;
-                justify-content: space-between !important;
-                align-items: center !important;
+                display: block !important;
                 text-align: left !important;
                 width: 100% !important;
-                padding: 12px 10px !important;
-                gap: 10px !important;
+                padding: 11px 12px !important;
                 box-sizing: border-box !important;
             }
             body.mob-step-1:not(.mob-other-tab) #autocomplete-results .autocomplete-name {
-                font-size: 16px !important;
+                font-size: 15.5px !important;
                 font-weight: 800 !important;
                 color: #1e272e !important;
                 line-height: 1.3 !important;
@@ -1840,16 +1869,13 @@ window.handleAutocomplete = function(e) {
                     ? `<span style="color:#d35400; font-weight:bold;">🏠 ${m.address}</span>`
                     : `<span style="color:#95a5a6; font-style:italic;">🏠 Alamat belum diisi</span>`;
 
-                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhoneKey}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')" style="padding:10px 12px; border-bottom:1px solid #e5e8e8; cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-                    <div style="flex:1; min-width:0;">
-                        <div class="autocomplete-name" style="font-size:14.5px; font-weight:bold; color:#2c3e50; display:flex; flex-wrap:wrap; align-items:center; gap:5px;">
-                            <span>👤 ${m.name}</span>
-                            <span style="font-size:12px; background:#e8f8f5; color:#117a65; border:1px solid #16a085; padding:1px 7px; border-radius:10px;">📱 ${rawPhoneDisplay}</span>
-                            ${piutangBadge}
-                        </div>
-                        <div class="autocomplete-addr" style="font-size:12px; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${addressDisplay}</div>
+                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhoneKey}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')" style="padding:9px 14px; border-bottom:1px solid #e5e8e8; cursor:pointer; text-align:left;">
+                    <div class="autocomplete-name" style="font-size:14.5px; font-weight:bold; color:#2c3e50; display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-start; gap:6px;">
+                        <span>👤 ${m.name}</span>
+                        <span style="font-size:12px; background:#e8f8f5; color:#117a65; border:1px solid #16a085; padding:1px 7px; border-radius:10px;">📱 ${rawPhoneDisplay}</span>
+                        ${piutangBadge}
                     </div>
-                    <span style="background:#27ae60; color:white; padding:7px 11px; border-radius:6px; font-size:12.5px; font-weight:bold; flex-shrink:0;">Pilih ➔</span>
+                    <div class="autocomplete-addr" style="font-size:12.5px; margin-top:3px; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${addressDisplay}</div>
                 </div>`;
             };
 
