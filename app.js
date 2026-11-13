@@ -5,11 +5,281 @@ const APP_VERSION = "30";
 window.db = null;
 
 // Core State
-window.posSessions = [{ cart: [], customer: null }, { cart: [], customer: null }, { cart: [], customer: null }];
+window.posSessions = [
+    { cart: [], customer: null, mobileStep: 1 },
+    { cart: [], customer: null, mobileStep: 1 },
+    { cart: [], customer: null, mobileStep: 1 }
+];
 window.activeSessionIndex = 0; 
 window.currentCart = window.posSessions[0].cart; 
 window.activeCustomerProfile = window.posSessions[0].customer;
 window.piutangTargetMember = null;
+window.mobilePosStep = 1;
+
+window.initMobilePosWizard = function() {
+    if (document.getElementById("mobile-pos-wizard-style")) return;
+
+    const style = document.createElement("style");
+    style.id = "mobile-pos-wizard-style";
+    style.textContent = `
+        #mobile-wizard-stepper, #mobile-step2-footer, #mobile-step3-header { display: none; }
+
+        @media (max-width: 768px) {
+            body { overflow-x: hidden !important; }
+            #pos-screen { padding-bottom: 78px !important; }
+
+            /* Rapikan header atas agar tidak meluber di layar HP */
+            #pos-screen > div:first-child {
+                flex-wrap: wrap !important;
+                gap: 6px !important;
+                padding: 8px 10px !important;
+            }
+            #pos-screen > div:first-child button {
+                padding: 6px 9px !important;
+                font-size: 12px !important;
+            }
+
+            /* Stepper 4-Lapisan Khusus HP */
+            #mobile-wizard-stepper {
+                display: flex !important;
+                align-items: center;
+                justify-content: space-between;
+                background: #1e272e;
+                padding: 8px 10px;
+                gap: 4px;
+                position: sticky;
+                top: 0;
+                z-index: 90;
+                border-bottom: 2px solid #3498db;
+            }
+            body.mob-other-tab #mobile-wizard-stepper { display: none !important; }
+
+            .mob-step-pill {
+                flex: 1;
+                text-align: center;
+                padding: 7px 4px;
+                border-radius: 6px;
+                font-size: 11.5px;
+                font-weight: bold;
+                color: #95a5a6;
+                background: #2f3640;
+                border: 1px solid transparent;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .mob-step-pill.active {
+                background: #3498db;
+                color: #ffffff;
+                border-color: #74b9ff;
+            }
+            .mob-step-pill.done {
+                background: #1e8449;
+                color: #eafaf1;
+            }
+
+            /* Ubah layout 2 kolom menjadi 1 layar penuh per langkah */
+            .mob-main-workspace {
+                display: block !important;
+                width: 100% !important;
+                height: auto !important;
+                overflow: visible !important;
+            }
+            .mob-left-panel, .mob-right-panel {
+                width: 100% !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                height: auto !important;
+                max-height: none !important;
+                border: none !important;
+                margin: 0 !important;
+            }
+
+            /* LAYER 1: PELANGGAN */
+            body.mob-step-1:not(.mob-other-tab) .mob-right-panel { display: none !important; }
+            body.mob-step-1:not(.mob-other-tab) #category-container,
+            body.mob-step-1:not(.mob-other-tab) #product-grid,
+            body.mob-step-1:not(.mob-other-tab) #glass-overlay,
+            body.mob-step-1:not(.mob-other-tab) .mob-menu-wrapper { display: none !important; }
+            body.mob-step-1:not(.mob-other-tab) #command-bar {
+                display: block !important;
+                padding: 14px !important;
+            }
+            body.mob-step-1:not(.mob-other-tab) #customer-input-section input,
+            body.mob-step-1:not(.mob-other-tab) #customer-input-section button {
+                min-height: 44px !important;
+                font-size: 15px !important;
+            }
+
+            /* LAYER 2: PILIH MENU */
+            body.mob-step-2:not(.mob-other-tab) .mob-right-panel { display: none !important; }
+            body.mob-step-2:not(.mob-other-tab) #customer-input-section,
+            body.mob-step-2:not(.mob-other-tab) #glass-overlay { display: none !important; }
+            body.mob-step-2:not(.mob-other-tab) #command-bar {
+                display: block !important;
+                padding: 8px 10px !important;
+            }
+            body.mob-step-2:not(.mob-other-tab) #category-container {
+                display: flex !important;
+                overflow-x: auto !important;
+                white-space: nowrap !important;
+                padding: 8px 10px !important;
+                gap: 6px !important;
+            }
+            body.mob-step-2:not(.mob-other-tab) #product-grid {
+                display: grid !important;
+                grid-template-columns: repeat(2, 1fr) !important;
+                gap: 10px !important;
+                padding: 10px !important;
+            }
+            body.mob-step-2:not(.mob-other-tab) .product-card {
+                min-height: 92px !important;
+                padding: 12px !important;
+            }
+            body.mob-step-2:not(.mob-other-tab) #mobile-step2-footer {
+                display: flex !important;
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                background: #2c3e50;
+                color: #fff;
+                padding: 10px 14px;
+                justify-content: space-between;
+                align-items: center;
+                z-index: 95;
+                box-shadow: 0 -3px 12px rgba(0,0,0,0.25);
+            }
+
+            /* LAYER 3: KONFIRMASI KERANJANG */
+            body.mob-step-3:not(.mob-other-tab) .mob-left-panel { display: none !important; }
+            body.mob-step-3:not(.mob-other-tab) .mob-right-panel {
+                display: flex !important;
+                flex-direction: column !important;
+                padding: 10px !important;
+                min-height: calc(100vh - 130px) !important;
+            }
+            body.mob-step-3:not(.mob-other-tab) #mobile-step3-header {
+                display: flex !important;
+                justify-content: space-between;
+                align-items: center;
+                background: #ecf0f1;
+                padding: 10px 12px;
+                border-radius: 8px;
+                margin-bottom: 10px;
+                border: 1px solid #bdc3c7;
+            }
+            body.mob-step-3:not(.mob-other-tab) #cart-items {
+                max-height: none !important;
+                flex: 1 !important;
+            }
+
+            /* TAB LAIN (PENGIRIMAN / PIUTANG / PINJAM GALON) */
+            body.mob-other-tab .mob-right-panel { display: none !important; }
+
+            /* LAYER 4 & MODAL FULL-SCREEN DI HP */
+            #review-modal > div,
+            #piutang-modal > div,
+            #edit-customer-modal > div,
+            #add-member-modal > div {
+                width: 100vw !important;
+                max-width: 100vw !important;
+                min-height: 100dvh !important;
+                max-height: 100dvh !important;
+                margin: 0 !important;
+                border-radius: 0 !important;
+                overflow-y: auto !important;
+            }
+        }
+    `;
+    document.head.appendChild(style);
+
+    const commandBar = document.getElementById("command-bar");
+    const cartItems = document.getElementById("cart-items");
+    const productGrid = document.getElementById("product-grid");
+    if (!commandBar || !cartItems) return;
+
+    const leftPanel = commandBar.parentElement;
+    const mainWorkspace = leftPanel.parentElement;
+    const rightPanel = Array.from(mainWorkspace.children).find(el => el !== leftPanel && el.contains(cartItems));
+
+    mainWorkspace.classList.add("mob-main-workspace");
+    leftPanel.classList.add("mob-left-panel");
+    if (rightPanel) rightPanel.classList.add("mob-right-panel");
+    if (productGrid && productGrid.parentElement !== leftPanel) {
+        productGrid.parentElement.classList.add("mob-menu-wrapper");
+    }
+
+    // 1. Stepper 4-Layer di atas layar HP
+    const stepper = document.createElement("div");
+    stepper.id = "mobile-wizard-stepper";
+    stepper.innerHTML = `
+        <div class="mob-step-pill active" id="mob-pill-1" onclick="window.setMobilePosStep(1)">1. Pelanggan</div>
+        <div class="mob-step-pill" id="mob-pill-2" onclick="window.setMobilePosStep(2)">2. Menu</div>
+        <div class="mob-step-pill" id="mob-pill-3" onclick="window.setMobilePosStep(3)">3. Keranjang</div>
+        <div class="mob-step-pill" id="mob-pill-4" onclick="window.reviewOrder()">4. Bayar</div>
+    `;
+    mainWorkspace.parentNode.insertBefore(stepper, mainWorkspace);
+
+    // 2. Sticky Footer di Layer 2 (Menu -> Konfirmasi Keranjang)
+    const step2Footer = document.createElement("div");
+    step2Footer.id = "mobile-step2-footer";
+    step2Footer.innerHTML = `
+        <div>
+            <div id="mob-f2-count" style="font-size:12px; color:#bdc3c7;">0 Item dipilih</div>
+            <div id="mob-f2-total" style="font-size:17px; font-weight:bold; color:#2ecc71;">Rp 0</div>
+        </div>
+        <button type="button" id="mob-f2-next-btn" onclick="window.setMobilePosStep(3)" style="background:#27ae60; color:white; border:none; padding:12px 18px; border-radius:8px; font-weight:bold; font-size:14px; cursor:pointer;">
+            Keranjang ➔
+        </button>
+    `;
+    document.body.appendChild(step2Footer);
+
+    // 3. Header Navigasi Balik di Layer 3 (Keranjang -> Tambah Menu)
+    if (rightPanel) {
+        const step3Header = document.createElement("div");
+        step3Header.id = "mobile-step3-header";
+        step3Header.innerHTML = `
+            <button type="button" onclick="window.setMobilePosStep(2)" style="background:#3498db; color:white; border:none; padding:8px 12px; border-radius:6px; font-weight:bold; font-size:13px; cursor:pointer;">
+                ⬅ Tambah Menu
+            </button>
+            <div id="mob-s3-cust" style="font-size:13px; font-weight:bold; color:#2c3e50; text-align:right;">
+                👤 Pelanggan
+            </div>
+        `;
+        rightPanel.insertBefore(step3Header, rightPanel.firstChild);
+    }
+
+    window.setMobilePosStep(1);
+};
+
+window.setMobilePosStep = function(step) {
+    if (step >= 2 && window.isMenuLocked) {
+        step = 1;
+    }
+    window.mobilePosStep = step;
+    if (window.posSessions && window.posSessions[window.activeSessionIndex]) {
+        window.posSessions[window.activeSessionIndex].mobileStep = step;
+    }
+
+    document.body.classList.remove("mob-step-1", "mob-step-2", "mob-step-3");
+    document.body.classList.add("mob-step-" + step);
+
+    for (let i = 1; i <= 4; i++) {
+        const pill = document.getElementById("mob-pill-" + i);
+        if (!pill) continue;
+        pill.classList.remove("active", "done");
+        if (i === step) pill.classList.add("active");
+        else if (i < step) pill.classList.add("done");
+    }
+
+    const s3Cust = document.getElementById("mob-s3-cust");
+    if (s3Cust) {
+        const cName = (window.activeCustomerProfile && window.activeCustomerProfile.name) || document.getElementById("cust-name")?.value || "Walk-in";
+        s3Cust.innerText = "👤 " + cName;
+    }
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+};
 
 // App Context
 window.currentCashier = ""; window.currentPin = ""; window.currentShiftId = ""; window.currentLoginTime = ""; window.currentOutlet = "";
@@ -1455,11 +1725,24 @@ window.renderCart = function() {
     });
     document.getElementById("cart-total").innerText = `Rp ${total.toLocaleString('id-ID')}`; window.cartSubtotal = total; window.cartGrandTotal = total; 
     
+    let activeTotalQty = 0;
     window.posSessions.forEach((session, i) => {
-        let qty = session.cart.reduce((sum, item) => sum + item.qty, 0); let btn = document.getElementById(`tab-btn-${i}`);
+        let qty = session.cart.reduce((sum, item) => sum + item.qty, 0);
+        if (i === window.activeSessionIndex) activeTotalQty = qty;
+        let btn = document.getElementById(`tab-btn-${i}`);
         if (qty > 0) { btn.innerHTML = `🛒 Antrean ${i+1} <span style="background:#e74c3c; color:white; border-radius:12px; padding:2px 6px; font-size:11px; margin-left:5px;">${qty}</span>`; } 
         else { btn.innerHTML = `🛒 Antrean ${i+1}`; }
     });
+
+    const f2Count = document.getElementById("mob-f2-count");
+    const f2Total = document.getElementById("mob-f2-total");
+    const f2Btn = document.getElementById("mob-f2-next-btn");
+    if (f2Count) f2Count.innerText = `${activeTotalQty} Item di Antrean ${window.activeSessionIndex + 1}`;
+    if (f2Total) f2Total.innerText = `Rp ${total.toLocaleString('id-ID')}`;
+    if (f2Btn) {
+        f2Btn.disabled = (activeTotalQty === 0);
+        f2Btn.style.opacity = (activeTotalQty === 0) ? "0.55" : "1";
+    }
 }
 
 window.clearCart = function() { window.lockMenu(); }
@@ -1622,7 +1905,11 @@ window.closeReview = function() { document.getElementById("review-modal").classL
 window.switchCart = function(index) {
     window.showNewOrder(); // Ensure it forces the POS view open
     
-    window.posSessions[window.activeSessionIndex].customer = window.activeCustomerProfile; window.activeSessionIndex = index; window.currentCart = window.posSessions[window.activeSessionIndex].cart; window.activeCustomerProfile = window.posSessions[window.activeSessionIndex].customer;
+    window.posSessions[window.activeSessionIndex].customer = window.activeCustomerProfile;
+    window.posSessions[window.activeSessionIndex].mobileStep = window.mobilePosStep || 1;
+    window.activeSessionIndex = index;
+    window.currentCart = window.posSessions[window.activeSessionIndex].cart;
+    window.activeCustomerProfile = window.posSessions[window.activeSessionIndex].customer;
     
     document.querySelectorAll(".cart-tab").forEach((btn, i) => {
         if (i === index) { btn.classList.add("active"); btn.style.background = "#2c3e50"; btn.style.color = "white"; btn.style.borderTop = "3px solid #3498db"; } 
@@ -1646,6 +1933,7 @@ window.switchCart = function(index) {
         document.getElementById("customer-input-section").classList.add("hidden"); document.getElementById("active-customer-banner").classList.remove("hidden");
         window.isMenuLocked = false; document.getElementById("glass-overlay").style.opacity = "0"; document.getElementById("glass-overlay").style.pointerEvents = "none";
         window.updatePromoBanner(window.activeCustomerProfile);
+        if (window.setMobilePosStep) window.setMobilePosStep(window.posSessions[index].mobileStep || 2);
     } else {
         document.getElementById("customer-input-section").classList.remove("hidden"); document.getElementById("active-customer-banner").classList.add("hidden");
         document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
@@ -1659,6 +1947,7 @@ window.switchCart = function(index) {
         const piutangBanner = document.getElementById("piutang-indicator-banner"); if(piutangBanner) piutangBanner.classList.add("hidden");
         const outletDisplay = document.getElementById("active-cust-outlets"); if(outletDisplay) outletDisplay.innerHTML = "";
         window.isMenuLocked = true;
+        if (window.setMobilePosStep) window.setMobilePosStep(1);
     }
 }
 
@@ -1767,6 +2056,7 @@ window.lockMenu = function() {
     const promoBanner = document.getElementById("promo-indicator-banner"); if(promoBanner) promoBanner.classList.add("hidden");
     const piutangBanner = document.getElementById("piutang-indicator-banner"); if(piutangBanner) piutangBanner.classList.add("hidden");
     const outletDisplay = document.getElementById("active-cust-outlets"); if(outletDisplay) outletDisplay.innerHTML = "";
+    if (window.setMobilePosStep) window.setMobilePosStep(1);
 }
 
 window.unlockMenu = function() {
@@ -1813,6 +2103,7 @@ window.unlockMenu = function() {
         window.isMenuLocked = false; 
         document.getElementById("glass-overlay").style.opacity = "0"; 
         setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
+        if (window.setMobilePosStep) window.setMobilePosStep(2);
         return;
     }
 
@@ -1864,6 +2155,7 @@ window.unlockMenu = function() {
         window.isMenuLocked = false; 
         document.getElementById("glass-overlay").style.opacity = "0"; 
         setTimeout(() => { document.getElementById("glass-overlay").style.pointerEvents = "none"; }, 300);
+        if (window.setMobilePosStep) window.setMobilePosStep(2);
     };
 
     // Jika sudah dipilih dari Autocomplete dan nama/nomor masih cocok, gunakan profil tersebut secara langsung
@@ -4248,6 +4540,7 @@ window.updateTabStyles = function(activeId) {
 }
 
 window.showNewOrder = function() {
+    document.body.classList.remove("mob-other-tab");
     document.getElementById("pengiriman-section").classList.add("hidden");
     document.getElementById("piutang-section").classList.add("hidden");
     let pSec = document.getElementById("peminjam-section"); if (pSec) pSec.classList.add("hidden");
@@ -4261,6 +4554,7 @@ window.showNewOrder = function() {
 }
 
 window.showPengirimanTab = function() {
+    document.body.classList.add("mob-other-tab");
     document.getElementById("command-bar").classList.add("hidden");
     document.getElementById("category-container").classList.add("hidden");
     document.getElementById("product-grid").classList.add("hidden");
@@ -4275,6 +4569,7 @@ window.showPengirimanTab = function() {
 }
 
 window.showPiutangTab = function() {
+    document.body.classList.add("mob-other-tab");
     document.getElementById("command-bar").classList.add("hidden");
     document.getElementById("category-container").classList.add("hidden");
     document.getElementById("product-grid").classList.add("hidden");
@@ -4290,6 +4585,7 @@ window.showPiutangTab = function() {
 }
 
 window.showPeminjamTab = function() {
+    document.body.classList.add("mob-other-tab");
     document.getElementById("command-bar").classList.add("hidden");
     document.getElementById("category-container").classList.add("hidden");
     document.getElementById("product-grid").classList.add("hidden");
@@ -5158,9 +5454,12 @@ window.onload = async () => {
         }
     }
 
-    // Apply pretty tab styles instantly on load
+    // Apply pretty tab styles & mobile 4-layer wizard instantly on load
     if (typeof window.updateTabStyles === "function") {
         window.updateTabStyles("tab-new-order");
+    }
+    if (typeof window.initMobilePosWizard === "function") {
+        window.initMobilePosWizard();
     }
 
     // 🔥 DYNAMIC LOADING TEXT FOR FIRST BOOT
