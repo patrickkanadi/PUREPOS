@@ -2320,8 +2320,13 @@ window.renderPiutangList = async function() {
 };
 
 window.triggerBayarPiutang = function(phone, linkedOrderId = null) {
-    window.db.transaction(["members"], "readonly").objectStore("members").get(phone).onsuccess = (e) => {
-        let m = e.target.result; 
+    let basePhone = String(phone || "").replace(/-DUP\d+$/i, "");
+    let cachedM = (window.globalMembersCache || []).find(x => x.phone === basePhone || x.phone === phone);
+    if (cachedM) {
+        return window.openPiutangModal({ ...cachedM }, linkedOrderId);
+    }
+    window.db.transaction(["members"], "readonly").objectStore("members").get(basePhone).onsuccess = (e) => {
+        let m = e.target.result;
         if (m) {
             window.openPiutangModal(m, linkedOrderId);
         } else {
@@ -2964,6 +2969,10 @@ window.buildEscPosReceipt = async function(orderId, order, deposit, debt, payMet
 
 window.printShiftReport = async function() {
     if (!window.currentShiftData) return alert("Data shift belum siap.");
+    if (!window.printDevice) {
+        const ok = await window.connectBluetoothPrinter(true);
+        if (!ok) return;
+    }
     const payloadBytes = await window.buildEscPosShiftReport(window.currentShiftData);
     await window.printViaBluetooth(payloadBytes);
 }
@@ -4822,45 +4831,46 @@ window.submitReturnGalon = function(phone, name, targetLogId, targetOrderId, max
 
     if(!confirm(`Kembalikan ${qty} galon untuk nota ${targetOrderId}?`)) return;
 
-    let payload = { logId: "KMB-" + Date.now(), timestamp: window.getWibDate(), customerName: name, customerPhone: phone, qtyReturn: qty, targetLogId: targetLogId, targetOrderId: targetOrderId, cashier: window.currentCashier, outlet: window.currentOutlet, syncStatus: "Pending" };
-    window.db.transaction(["kembali_galon"], "readwrite").objectStore("kembali_galon").add(payload);
+    let basePhone = String(phone || "").replace(/-DUP\d+$/i, "");
+    let payload = { logId: "KMB-" + Date.now(), timestamp: window.getWibDate(), customerName: name, customerPhone: basePhone, qtyReturn: qty, targetLogId: targetLogId, targetOrderId: targetOrderId, cashier: window.currentCashier, outlet: window.currentOutlet, syncStatus: "Pending" };
 
-    window.db.transaction(["members"], "readwrite").objectStore("members").get(phone).onsuccess = (e) => {
+    let tx = window.db.transaction(["kembali_galon", "members", "orders"], "readwrite");
+    tx.objectStore("kembali_galon").add(payload);
+
+    tx.objectStore("members").get(basePhone).onsuccess = (e) => {
         let mem = e.target.result;
         if (mem) {
-            mem.bottlesBorrowed = Math.max(0, mem.bottlesBorrowed - qty);
-            
-            // Instantly update the UI breakdown
+            mem.bottlesBorrowed = Math.max(0, (Number(mem.bottlesBorrowed) || 0) - qty);
             if (mem.rentalBreakdown) {
-                let r = mem.rentalBreakdown.find(x => x.logId === targetLogId || (targetOrderId && x.orderId === targetOrderId));
+                let r = mem.rentalBreakdown.find(x => x.logId === targetLogId || (targetOrderId && targetOrderId !== "-" && x.orderId === targetOrderId));
                 if (r) {
                     r.sisa -= qty;
                     if (r.sisa <= 0) mem.rentalBreakdown = mem.rentalBreakdown.filter(x => x !== r);
                 }
             }
-
-            // Catat jumlah yang sudah dikembalikan tanpa mengubah total pinjam awal (rentBottleQty)
-            window.db.transaction(["orders"], "readwrite").objectStore("orders").get(targetOrderId).onsuccess = (ordEv) => {
-                let ord = ordEv.target.result;
-                if (ord) {
-                    ord.returnedBottleQty = (Number(ord.returnedBottleQty) || 0) + qty;
-                    window.db.transaction(["orders"], "readwrite").objectStore("orders").put(ord);
-                }
-            };
-            
             if (window.globalMembersCache) {
                 let idx = window.globalMembersCache.findIndex(x => x.phone === mem.phone);
                 if (idx > -1) window.globalMembersCache[idx] = mem;
             }
-
-            let tx2 = window.db.transaction(["members"], "readwrite");
-            tx2.objectStore("members").put(mem);
-
-            alert(`${qty} Galon berhasil dikembalikan dari nota ${targetOrderId}!`);
-            window.renderPeminjamList();
-            if (window.updateLeftBadges) window.updateLeftBadges();
-            window.runBackgroundSync();
+            tx.objectStore("members").put(mem);
         }
+    };
+
+    if (targetOrderId && targetOrderId !== "-") {
+        tx.objectStore("orders").get(targetOrderId).onsuccess = (ordEv) => {
+            let ord = ordEv.target.result;
+            if (ord) {
+                ord.returnedBottleQty = (Number(ord.returnedBottleQty) || 0) + qty;
+                tx.objectStore("orders").put(ord);
+            }
+        };
+    }
+
+    tx.oncomplete = () => {
+        alert(`${qty} Galon berhasil dikembalikan dari nota ${targetOrderId || "-"}!`);
+        window.renderPeminjamList();
+        if (window.updateLeftBadges) window.updateLeftBadges();
+        window.runBackgroundSync();
     };
 }
 
@@ -4959,8 +4969,9 @@ window.markDeliveryDone = async function(orderId) {
         // Even if local member sync failed, force the Piutang modal to open using the Order data
         let fallbackMember = { phone: order.customerPhone, name: order.customerName, piutang: order.debtAmount };
         
-        window.db.transaction(["members"], "readonly").objectStore("members").get(order.customerPhone).onsuccess = (e) => {
-            let m = e.target.result; 
+        let baseCustPhone = String(order.customerPhone || "").replace(/-DUP\d+$/i, "");
+        window.db.transaction(["members"], "readonly").objectStore("members").get(baseCustPhone).onsuccess = (e) => {
+            let m = e.target.result;
             if (m) {
                 // 🔥 THE FIX: Prevent silent crash! Force piutang amount to be AT LEAST the order's debt, 
                 // in case the background sync temporarily overwrote it with '0'.
@@ -5039,7 +5050,7 @@ window.submitDeliveryDone = function() {
 
     if (!orderId || !courier) return;
 
-    let tx = window.db.transaction(["orders"], "readwrite");
+    let tx = window.db.transaction(["orders", "members"], "readwrite");
     tx.objectStore("orders").get(orderId).onsuccess = (e) => {
         let order = e.target.result;
         if (!order) return;
@@ -5060,8 +5071,8 @@ window.submitDeliveryDone = function() {
             if (!order.rentLogId) order.rentLogId = "PJG-" + Date.now();
             order.hasUnsyncedRental = true;
             
-            // Immediately attach it to the local customer profile
-            window.db.transaction(["members"], "readwrite").objectStore("members").get(order.customerPhone).onsuccess = (memEv) => {
+            let basePhone = String(order.customerPhone || "").replace(/-DUP\d+$/i, "");
+            tx.objectStore("members").get(basePhone).onsuccess = (memEv) => {
                 let mem = memEv.target.result;
                 if (mem) {
                     mem.bottlesBorrowed = (mem.bottlesBorrowed || 0) + pinjamQty;
@@ -5077,9 +5088,7 @@ window.submitDeliveryDone = function() {
                         let idx = window.globalMembersCache.findIndex(x => x.phone === mem.phone);
                         if (idx > -1) window.globalMembersCache[idx] = mem;
                     }
-                    let t2 = window.db.transaction(["members"], "readwrite");
-                    t2.objectStore("members").put(mem);
-                    if (window.updateLeftBadges) window.updateLeftBadges();
+                    tx.objectStore("members").put(mem);
                 }
             };
         }
@@ -5502,6 +5511,10 @@ window.showArchivedOrderDetail = function(idx) {
 window.reprintArchivedOrder = async function(idx) {
     const o = window.lastHistorySearchResults[idx];
     if (!o) return;
+    if (!window.printDevice) {
+        const ok = await window.connectBluetoothPrinter(true);
+        if (!ok) return;
+    }
     let printOrderObj = {
         orderId: o.orderId,
         timestamp: o.timestamp,
