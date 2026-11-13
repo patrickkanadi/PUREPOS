@@ -1094,6 +1094,19 @@ window.syncCriticalData = async function() {
                                 }
                             if (!window.currentOutlet || outKey === window.currentOutlet.toUpperCase()) {
                                 m.piutang = Math.max(0, (m.piutang || 0) - paidAmt);
+                                if (Array.isArray(m.piutangInvoices)) {
+                                    let remCut = paidAmt;
+                                    for (let inv of m.piutangInvoices) {
+                                        if (remCut <= 0) break;
+                                        if (String(inv.outlet || "").trim().toUpperCase() !== outKey) continue;
+                                        let s = Number(inv.sisa) || 0;
+                                        if (s <= 0) continue;
+                                        let cut = Math.min(s, remCut);
+                                        inv.sisa = s - cut;
+                                        remCut -= cut;
+                                    }
+                                    m.piutangInvoices = m.piutangInvoices.filter(inv => (Number(inv.sisa) || 0) > 0);
+                                }
                             }
                         }
                     }
@@ -1612,14 +1625,14 @@ window.handleAutocomplete = function(e) {
             let html = "";
 
             const renderCard = (m, isLocal) => {
-                let wStr = JSON.stringify(m.wallet || {}).replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
-                let nameStr = String(m.name || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                let fOut = String(m.firstOutlet || "").replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
-                let rOutStr = String(m.recentOutlets || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                let wStr = JSON.stringify(m.wallet || {}).replace(/\r?\n/g, ' ').replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
+                let nameStr = String(m.name || "").replace(/\r?\n/g, ' ').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                let fOut = String(m.firstOutlet || "").replace(/\r?\n/g, ' ').replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
+                let rOutStr = String(m.recentOutlets || "").replace(/\r?\n/g, ' ').replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 let rawPhoneDisplay = String(m.phone || "").startsWith("TANPA-WA") ? "Tanpa WA" : String(m.phone || "").replace(/-DUP\d+$/, "");
                 // Kirim ID asli m.phone agar tidak hilang saat dipilih
                 let safePhoneKey = String(m.phone || "-").replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                let safeAddress = String(m.address || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                let safeAddress = String(m.address || "").replace(/\r?\n/g, ' ').replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 
                 let curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
                 let localPiutang = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] ?? m.piutangBreakdown[curOutUp] ?? 0) : (m.piutang || 0);
@@ -5072,9 +5085,20 @@ window.submitDeliveryDone = function() {
             order.hasUnsyncedRental = true;
             
             let basePhone = String(order.customerPhone || "").replace(/-DUP\d+$/i, "");
-            tx.objectStore("members").get(basePhone).onsuccess = (memEv) => {
-                let mem = memEv.target.result;
-                if (mem) {
+            if (basePhone && basePhone !== "-" && basePhone !== "Walk-in") {
+                tx.objectStore("members").get(basePhone).onsuccess = (memEv) => {
+                    let mem = memEv.target.result || {
+                        phone: basePhone,
+                        name: order.customerName || "Pelanggan",
+                        address: order.customerAddress || "",
+                        wallet: {},
+                        spent: 0,
+                        bottlesBorrowed: 0,
+                        piutang: 0,
+                        firstOutlet: order.outlet || window.currentOutlet,
+                        recentOutlets: order.outlet || window.currentOutlet,
+                        rentalBreakdown: []
+                    };
                     mem.bottlesBorrowed = (mem.bottlesBorrowed || 0) + pinjamQty;
                     if (!mem.rentalBreakdown) mem.rentalBreakdown = [];
                     let existingRent = mem.rentalBreakdown.find(x => x.orderId === orderId);
@@ -5087,10 +5111,11 @@ window.submitDeliveryDone = function() {
                     if (window.globalMembersCache) {
                         let idx = window.globalMembersCache.findIndex(x => x.phone === mem.phone);
                         if (idx > -1) window.globalMembersCache[idx] = mem;
+                        else window.globalMembersCache.unshift(mem);
                     }
                     tx.objectStore("members").put(mem);
-                }
-            };
+                };
+            }
         }
 
         order.syncStatus = "Pending";
