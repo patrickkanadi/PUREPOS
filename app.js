@@ -71,7 +71,8 @@ window.initMobilePosWizard = function() {
                 z-index: 90;
                 border-bottom: 2px solid #3498db;
             }
-            body.mob-other-tab #mobile-wizard-stepper { display: none !important; }
+            body.mob-other-tab #mobile-wizard-stepper,
+            body.mob-other-tab .mob-cart-tab-bar { display: none !important; }
 
             .mob-step-pill {
                 flex: 1;
@@ -3960,7 +3961,6 @@ window.openCurrentShiftReport = async function() {
         document.getElementById("sr-expense").innerText = `Rp ${tExpense.toLocaleString('id-ID')}`;
         document.getElementById("sr-piutang-given").innerText = `Rp ${tPiutangGiven.toLocaleString('id-ID')}`;
         document.getElementById("sr-piutang-paid").innerText = `Rp ${tPiutangPaidCash.toLocaleString('id-ID')}`;
-        document.getElementById("sr-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`;
 
         let itemsHtml = "";
         for (const [key, val] of Object.entries(foodSummary)) {
@@ -4343,11 +4343,12 @@ window.getUnsyncedDetailsList = async function() {
             getAll("expenses"), getAll("void_requests"), getAll("unsynced_members"), getAll("stock_inbound"),
             getAll("cuci_tandon"), getAll("lapor_masalah"), getAll("kembali_galon"), getAll("attendance")
         ]);
+        let includeBundled = !window.isSyncing;
         let list = [];
         orders.filter(o => o.syncStatus === "Pending" || o.syncStatus === "Syncing").forEach(o => list.push(`Order: ${o.orderId} (${o.customerName})`));
         piutang.filter(bp => bp.syncStatus === "Pending").forEach(bp => list.push(`Bayar Piutang: ${bp.payId} (${bp.customerName})`));
-        drops.filter(d => d.syncStatus === "Pending").forEach(d => list.push(`Setor Laci: ${d.dropId}`));
-        reports.filter(r => r.syncStatus === "Pending").forEach(r => list.push(`Shift Report: ${r.shiftId}`));
+        drops.filter(d => d.syncStatus === "Pending" || (includeBundled && d.syncStatus === "Bundled")).forEach(d => list.push(`Setor Laci: ${d.dropId}`));
+        reports.filter(r => r.syncStatus === "Pending" || (includeBundled && r.syncStatus === "Bundled")).forEach(r => list.push(`Shift Report: ${r.shiftId}`));
         expenses.filter(e => e.syncStatus === "Pending").forEach(e => list.push(`Expense: ${e.expenseId}`));
         voids.forEach(v => list.push(`Void Request: ${v.id}`));
         members.forEach(m => list.push(`Member: ${m.name} (${m.phone})`));
@@ -4355,7 +4356,7 @@ window.getUnsyncedDetailsList = async function() {
         cuci.filter(c => c.syncStatus === "Pending").forEach(c => list.push(`Cuci Tandon: ${c.logId}`));
         lapor.filter(l => l.syncStatus === "Pending").forEach(l => list.push(`Lapor Masalah: ${l.logId}`));
         kmb.filter(k => k.syncStatus === "Pending").forEach(k => list.push(`Kembali Galon: ${k.logId}`));
-        att.filter(a => a.syncStatus === "Pending" || a.syncStatus === "OutPending").forEach(a => list.push(`Absensi: ${a.staffName} (${a.syncStatus})`));
+        att.filter(a => a.syncStatus === "Pending" || a.syncStatus === "OutPending" || (includeBundled && a.syncStatus === "Bundled")).forEach(a => list.push(`Absensi: ${a.staffName} (${a.syncStatus})`));
         return list;
     } catch (e) { return []; }
 };
@@ -4941,13 +4942,15 @@ window.submitReturnGalon = function(phone, name, targetLogId, targetOrderId, max
     tx.objectStore("members").get(basePhone).onsuccess = (e) => {
         let mem = e.target.result;
         if (mem) {
-            mem.bottlesBorrowed = Math.max(0, (Number(mem.bottlesBorrowed) || 0) - qty);
-            if (mem.rentalBreakdown) {
+            if (Array.isArray(mem.rentalBreakdown) && mem.rentalBreakdown.length > 0) {
                 let r = mem.rentalBreakdown.find(x => x.logId === targetLogId || (targetOrderId && targetOrderId !== "-" && x.orderId === targetOrderId));
                 if (r) {
                     r.sisa -= qty;
                     if (r.sisa <= 0) mem.rentalBreakdown = mem.rentalBreakdown.filter(x => x !== r);
                 }
+                mem.bottlesBorrowed = mem.rentalBreakdown.reduce((s, x) => s + (Number(x.sisa) || 0), 0);
+            } else {
+                mem.bottlesBorrowed = Math.max(0, (Number(mem.bottlesBorrowed) || 0) - qty);
             }
             if (window.globalMembersCache) {
                 let idx = window.globalMembersCache.findIndex(x => x.phone === mem.phone);
