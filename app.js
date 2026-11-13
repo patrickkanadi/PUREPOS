@@ -22,7 +22,7 @@ window.initMobilePosWizard = function() {
     const style = document.createElement("style");
     style.id = "mobile-pos-wizard-style";
     style.textContent = `
-        #mobile-wizard-stepper, #mobile-step2-footer, #mobile-step2-custbar, #mobile-step3-header, #mobile-step1-nextbar, .mob-card-qty-badge { display: none; }
+        #mobile-wizard-stepper, #mobile-step2-footer, #mobile-step3-footer, #mobile-step2-custbar, #mobile-step3-header, #mobile-step1-nextbar, .mob-card-qty-badge { display: none; }
 
         @media (max-width: 768px) {
             html, body { overflow-x: hidden !important; max-width: 100vw !important; }
@@ -206,7 +206,6 @@ window.initMobilePosWizard = function() {
                 display: flex !important;
                 flex-direction: column !important;
                 padding: 10px !important;
-                min-height: calc(100vh - 130px) !important;
             }
             body.mob-step-3:not(.mob-other-tab) #mobile-step3-header {
                 display: flex !important;
@@ -220,16 +219,29 @@ window.initMobilePosWizard = function() {
             }
             body.mob-step-3:not(.mob-other-tab) #cart-items {
                 max-height: none !important;
-                flex: 1 !important;
             }
             body.mob-step-3:not(.mob-other-tab) #cart-items button {
                 width: 38px !important;
                 height: 38px !important;
                 font-size: 18px !important;
             }
-            body.mob-step-3:not(.mob-other-tab) .mob-right-panel > div:last-child button {
-                min-height: 48px !important;
-                font-size: 15px !important;
+            body.mob-step-3:not(.mob-other-tab) .mob-right-panel > div:last-child {
+                display: none !important;
+            }
+            body.mob-step-3:not(.mob-other-tab) #mobile-step3-footer {
+                display: flex !important;
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                background: #2c3e50;
+                color: #fff;
+                padding: 10px 14px;
+                justify-content: space-between;
+                align-items: center;
+                gap: 8px;
+                z-index: 95;
+                box-shadow: 0 -3px 12px rgba(0,0,0,0.25);
             }
 
             /* TAB LAIN (PENGIRIMAN / PIUTANG / PINJAM GALON) */
@@ -323,6 +335,25 @@ window.initMobilePosWizard = function() {
         </button>
     `;
     document.body.appendChild(step2Footer);
+
+    // 3b. Sticky Footer di Layer 3 (Konfirmasi Keranjang -> Bayar)
+    const step3Footer = document.createElement("div");
+    step3Footer.id = "mobile-step3-footer";
+    step3Footer.innerHTML = `
+        <div>
+            <div style="font-size:11px; color:#bdc3c7;">Total Keranjang</div>
+            <div id="mob-f3-total" style="font-size:17px; font-weight:bold; color:#2ecc71;">Rp 0</div>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+            <button type="button" onclick="window.clearCart()" style="background:#e74c3c; color:white; border:none; padding:12px 12px; border-radius:8px; font-weight:bold; font-size:13px; cursor:pointer;">
+                🗑️ Hapus
+            </button>
+            <button type="button" id="mob-f3-pay-btn" onclick="window.reviewOrder()" style="background:#27ae60; color:white; border:none; padding:12px 18px; border-radius:8px; font-weight:bold; font-size:14px; cursor:pointer;">
+                Lanjut Bayar ➔
+            </button>
+        </div>
+    `;
+    document.body.appendChild(step3Footer);
 
     // 3. Header Navigasi Balik di Layer 3 (Keranjang -> Tambah Menu)
     if (rightPanel) {
@@ -1703,6 +1734,9 @@ window.saveMemberToDB = function(phone, name, wallet, bottles, piutang, fOut, rO
     if (window.activeCustomerProfile && window.activeCustomerProfile.phone === phone && Array.isArray(window.activeCustomerProfile.rentalBreakdown)) {
         mem.rentalBreakdown = window.activeCustomerProfile.rentalBreakdown;
     }
+    if (Array.isArray(mem.rentalBreakdown) && mem.rentalBreakdown.length > 0) {
+        mem.bottlesBorrowed = mem.rentalBreakdown.reduce((s, r) => s + (Number(r.sisa) || 0), 0);
+    }
 
     // Update RAM cache synchronously (0ms) so UI badges & lists are immediately accurate
     if (!window.globalMembersCache) window.globalMembersCache = [];
@@ -1851,6 +1885,14 @@ window.renderCart = function() {
     if (f2Btn) {
         f2Btn.disabled = (activeTotalQty === 0);
         f2Btn.style.opacity = (activeTotalQty === 0) ? "0.55" : "1";
+    }
+
+    const f3Total = document.getElementById("mob-f3-total");
+    const f3Btn = document.getElementById("mob-f3-pay-btn");
+    if (f3Total) f3Total.innerText = `Rp ${total.toLocaleString('id-ID')}`;
+    if (f3Btn) {
+        f3Btn.disabled = (activeTotalQty === 0);
+        f3Btn.style.opacity = (activeTotalQty === 0) ? "0.55" : "1";
     }
     if (window.globalMenuData && window.globalMenuData.length > 0 && document.getElementById("product-grid")) {
         window.renderProductGrid();
@@ -3423,7 +3465,7 @@ window.processServerUpdates = function(authStatuses) {
                         order.debtAmount = 0;
                         changed = true;
                     }
-                } else if (remote.status !== "Void Pending" && remote.status !== "Voided" && order.orderStatus === "Void Pending" && String(remote.auth || "").includes("reject")) {
+                } else if (remote.status !== "Void Pending" && remote.status !== "Voided" && order.orderStatus === "Void Pending") {
                     order.orderStatus = remote.status;
                     changed = true;
                 }
@@ -3452,7 +3494,7 @@ window.processServerUpdates = function(authStatuses) {
                     exp.status = "Voided";
                     expStore.put(exp);
                     uiNeedsRefresh = true;
-                } else if (remote.status !== "Void Pending" && remote.status !== "Voided" && exp.status === "Void Pending" && String(remote.auth || "").includes("reject")) {
+                } else if (remote.status !== "Void Pending" && remote.status !== "Voided" && exp.status === "Void Pending") {
                     exp.status = remote.status;
                     expStore.put(exp);
                     uiNeedsRefresh = true;
@@ -5063,28 +5105,33 @@ window.submitDeliveryDone = function() {
 
     if (!orderId || !courier) return;
 
+    let pinjamQty = 0;
+    if (isSwap && document.getElementById("kurir-pinjam-qty")) {
+        pinjamQty = Number(document.getElementById("kurir-pinjam-qty").value) || 0;
+    }
+
     let tx = window.db.transaction(["orders", "members"], "readwrite");
     tx.objectStore("orders").get(orderId).onsuccess = (e) => {
         let order = e.target.result;
         if (!order) return;
+
+        let basePhone = String(order.customerPhone || "").replace(/-DUP\d+$/i, "");
+        if (pinjamQty > 0 && (!basePhone || basePhone === "-" || basePhone === "Walk-in")) {
+            alert("⚠️ TRANSAKSI DITOLAK:\nPesanan ini tidak memiliki Nomor WhatsApp / ID Pelanggan sehingga tidak dapat mencatat Pinjam Galon.");
+            tx.abort();
+            return;
+        }
         
         order.deliveryStatus = "Terkirim (" + window.getWibDate() + ")";
         order.orderStatus = "Completed"; 
         order.courier = courier; 
         order.swapGalon = isSwap; 
 
-        // Capture Pinjam Galon if the courier left gallons behind during swap
-        let pinjamQty = 0;
-        if (isSwap && document.getElementById("kurir-pinjam-qty")) {
-            pinjamQty = Number(document.getElementById("kurir-pinjam-qty").value) || 0;
-        }
-
         if (pinjamQty > 0) {
             order.rentBottleQty = (order.rentBottleQty || 0) + pinjamQty;
             if (!order.rentLogId) order.rentLogId = "PJG-" + Date.now();
             order.hasUnsyncedRental = true;
             
-            let basePhone = String(order.customerPhone || "").replace(/-DUP\d+$/i, "");
             if (basePhone && basePhone !== "-" && basePhone !== "Walk-in") {
                 tx.objectStore("members").get(basePhone).onsuccess = (memEv) => {
                     let mem = memEv.target.result || {
