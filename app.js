@@ -45,6 +45,12 @@ window.initMobilePosWizard = function() {
                 white-space: normal !important;
                 line-height: 1.2 !important;
             }
+            .mob-cart-tab-bar {
+                display: flex !important;
+                width: 100% !important;
+                background: #34495e !important;
+                border-bottom: 1px solid #1e272e !important;
+            }
             .cart-tab {
                 min-width: 0 !important;
                 flex: 1 !important;
@@ -243,26 +249,15 @@ window.initMobilePosWizard = function() {
                 z-index: 95;
                 box-shadow: 0 -3px 12px rgba(0,0,0,0.25);
             }
-            body.mob-step-3:not(.mob-other-tab) #mobile-step3-footer {
-                display: flex !important;
-                position: fixed;
-                bottom: 0;
-                left: 0;
-                right: 0;
-                background: #2c3e50;
-                color: #fff;
-                padding: 10px 14px;
-                justify-content: space-between;
-                align-items: center;
-                gap: 8px;
-                z-index: 95;
-                box-shadow: 0 -3px 12px rgba(0,0,0,0.25);
-            }
 
             /* TAB LAIN (PENGIRIMAN / PIUTANG / PINJAM GALON) */
             body.mob-other-tab .mob-right-panel { display: none !important; }
 
             /* LAYER 4 & MODAL FULL-SCREEN DI HP */
+            #review-modal, #piutang-modal, #edit-customer-modal, #add-member-modal,
+            #kurir-modal, #history-modal, #member-history-modal, #shift-report-modal, #cash-drop-modal {
+                z-index: 200 !important;
+            }
             #review-modal > div,
             #piutang-modal > div,
             #edit-customer-modal > div,
@@ -312,6 +307,26 @@ window.initMobilePosWizard = function() {
         <div class="mob-step-pill" id="mob-pill-4" onclick="window.reviewOrder()">4. Bayar</div>
     `;
     mainWorkspace.parentNode.insertBefore(stepper, mainWorkspace);
+
+    // 1a. Pindahkan Tab Antrean 1-3 ke bagian atas layar HP agar bisa dipilih sejak awal
+    const tabBtn0 = document.getElementById("tab-btn-0");
+    const cartTabBar = tabBtn0 ? tabBtn0.parentElement : null;
+    const cartTabOrigParent = cartTabBar ? cartTabBar.parentElement : null;
+    const cartTabOrigNext = cartTabBar ? cartTabBar.nextSibling : null;
+    if (cartTabBar) {
+        cartTabBar.classList.add("mob-cart-tab-bar");
+        const syncCartTabPlacement = () => {
+            if (window.innerWidth <= 768) {
+                if (cartTabBar.parentNode !== mainWorkspace.parentNode) {
+                    mainWorkspace.parentNode.insertBefore(cartTabBar, stepper);
+                }
+            } else if (cartTabOrigParent && cartTabBar.parentNode !== cartTabOrigParent) {
+                cartTabOrigParent.insertBefore(cartTabBar, cartTabOrigNext);
+            }
+        };
+        syncCartTabPlacement();
+        window.addEventListener("resize", syncCartTabPlacement);
+    }
 
     // 1b. Tombol Lanjut ke Menu di Layer 1 saat melihat profil pelanggan aktif
     const activeBanner = document.getElementById("active-customer-banner");
@@ -2115,19 +2130,33 @@ window.switchCart = function(index) {
         window.updatePromoBanner(window.activeCustomerProfile);
         if (window.setMobilePosStep) window.setMobilePosStep(window.posSessions[index].mobileStep || 2);
     } else {
-        document.getElementById("customer-input-section").classList.remove("hidden"); document.getElementById("active-customer-banner").classList.add("hidden");
-        document.getElementById("glass-overlay").style.opacity = "1"; document.getElementById("glass-overlay").style.pointerEvents = "auto";
-        
-        document.getElementById("cust-phone").value = ""; 
-        document.getElementById("cust-name").value = ""; 
-        let addressField = document.getElementById("cust-address"); 
-        if (addressField) addressField.value = "";
-        
+        const isWalkInActive = (window.currentCart && window.currentCart.length > 0) || ((window.posSessions[index].mobileStep || 1) >= 2);
         const promoBanner = document.getElementById("promo-indicator-banner"); if(promoBanner) promoBanner.classList.add("hidden");
         const piutangBanner = document.getElementById("piutang-indicator-banner"); if(piutangBanner) piutangBanner.classList.add("hidden");
         const outletDisplay = document.getElementById("active-cust-outlets"); if(outletDisplay) outletDisplay.innerHTML = "";
-        window.isMenuLocked = true;
-        if (window.setMobilePosStep) window.setMobilePosStep(1);
+        let addressField = document.getElementById("cust-address");
+        if (addressField) addressField.value = "";
+        document.getElementById("cust-phone").value = "";
+
+        if (isWalkInActive) {
+            document.getElementById("cust-name").value = "Walk-in";
+            document.getElementById("active-cust-name").innerText = "Walk-in";
+            document.getElementById("active-cust-phone").innerText = "";
+            document.getElementById("customer-input-section").classList.add("hidden");
+            document.getElementById("active-customer-banner").classList.remove("hidden");
+            window.isMenuLocked = false;
+            document.getElementById("glass-overlay").style.opacity = "0";
+            document.getElementById("glass-overlay").style.pointerEvents = "none";
+            if (window.setMobilePosStep) window.setMobilePosStep(window.posSessions[index].mobileStep || 2);
+        } else {
+            document.getElementById("cust-name").value = "";
+            document.getElementById("customer-input-section").classList.remove("hidden");
+            document.getElementById("active-customer-banner").classList.add("hidden");
+            document.getElementById("glass-overlay").style.opacity = "1";
+            document.getElementById("glass-overlay").style.pointerEvents = "auto";
+            window.isMenuLocked = true;
+            if (window.setMobilePosStep) window.setMobilePosStep(1);
+        }
     }
 }
 
@@ -4241,11 +4270,12 @@ window.getUnsyncedCount = async function() {
             getAll("cuci_tandon"), getAll("lapor_masalah"), getAll("kembali_galon"), getAll("attendance")
         ]);
 
+        let includeBundled = !window.isSyncing;
         let count = 0;
         count += orders.filter(o => o.syncStatus === "Pending" || o.syncStatus === "Syncing").length;
         count += piutang.filter(bp => bp.syncStatus === "Pending").length;
-        count += drops.filter(d => d.syncStatus === "Pending").length;
-        count += reports.filter(r => r.syncStatus === "Pending").length;
+        count += drops.filter(d => d.syncStatus === "Pending" || (includeBundled && d.syncStatus === "Bundled")).length;
+        count += reports.filter(r => r.syncStatus === "Pending" || (includeBundled && r.syncStatus === "Bundled")).length;
         count += expenses.filter(e => e.syncStatus === "Pending").length;
         count += voids.length;
         count += members.length;
@@ -4253,7 +4283,7 @@ window.getUnsyncedCount = async function() {
         count += cuci.filter(c => c.syncStatus === "Pending").length;
         count += lapor.filter(l => l.syncStatus === "Pending").length;
         count += kmb.filter(k => k.syncStatus === "Pending").length;
-        count += att.filter(a => a.syncStatus === "Pending" || a.syncStatus === "OutPending").length;
+        count += att.filter(a => a.syncStatus === "Pending" || a.syncStatus === "OutPending" || (includeBundled && a.syncStatus === "Bundled")).length;
 
         return count;
     } catch (e) {
@@ -4495,7 +4525,7 @@ window.runBackgroundSync = async function() {
             }
         }
         for (const drop of drops) {
-            if (drop.syncStatus === "Pending") {
+            if (drop.syncStatus === "Pending" || drop.syncStatus === "Bundled") {
                 let k = "DRP:" + drop.dropId;
                 batchItems.push({ key: k, action: "syncCashDrop", data: drop });
                 batchHandlers[k] = async (ok) => {
@@ -4504,7 +4534,7 @@ window.runBackgroundSync = async function() {
             }
         }
         for (const report of reports) {
-            if (report.syncStatus === "Pending") {
+            if (report.syncStatus === "Pending" || report.syncStatus === "Bundled") {
                 let k = "SR:" + report.shiftId;
                 batchItems.push({ key: k, action: "syncShiftReport", data: report });
                 batchHandlers[k] = async (ok) => {
@@ -4572,7 +4602,7 @@ window.runBackgroundSync = async function() {
                 let k = "ATT:" + att.logId;
                 batchItems.push({ key: k, action: "syncAttendance", data: att });
                 batchHandlers[k] = async (ok) => { if (ok) { att.syncStatus = "Synced"; await dbPut("attendance", att); } };
-            } else if (att.syncStatus === "OutPending") {
+            } else if (att.syncStatus === "OutPending" || att.syncStatus === "Bundled") {
                 let k = "ATTOUT:" + att.logId;
                 batchItems.push({ key: k, action: "updateAttendanceOut", data: att });
                 batchHandlers[k] = async (ok) => { if (ok) { att.syncStatus = "Synced"; await dbPut("attendance", att); } };
