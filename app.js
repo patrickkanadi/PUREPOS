@@ -1066,7 +1066,8 @@ window.syncCriticalData = async function() {
                         navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.update())).catch(() => {});
                     }
                     let allCartsEmpty = (window.posSessions || []).every(s => !s.cart || s.cart.length === 0);
-                    if (allCartsEmpty && !window.isSyncing && !window.isFinalizingOrder) {
+                    let noModalOpen = document.querySelectorAll(".modal:not(.hidden)").length === 0;
+                    if (allCartsEmpty && noModalOpen && !window.isSyncing && !window.isFinalizingOrder) {
                         window.location.reload();
                         return;
                     }
@@ -3763,33 +3764,44 @@ window.openCashDrop = function(forLogout = false) {
     });
 }
 
+window.isSubmittingCashDrop = false;
 window.submitCashDrop = function() {
+    if (window.isSubmittingCashDrop) return;
     const pullAmount = Number(document.getElementById("drop-amount").value) || 0;
     if (pullAmount < 0) return alert("⚠️ ERROR: Nominal uang tidak valid.");
     if (pullAmount === 0 && !window.isLoggingOut) return alert("⚠️ ERROR: Harap masukkan nominal uang yang diambil dari laci.");
     
+    window.isSubmittingCashDrop = true;
+    const confirmBtn = document.getElementById("btn-drop-confirm");
+    if (confirmBtn) confirmBtn.disabled = true;
+
     const destination = document.getElementById("drop-destination").value; 
     const customNotes = document.getElementById("drop-notes").value || (window.isLoggingOut ? "Tutup Shift" : "Tarik Uang Tengah Shift");
     let adminAmt = 0; let bankAmt = 0; if (destination === "Bank") bankAmt = pullAmount; else adminAmt = pullAmount;
     const finalNotes = `[Ke ${destination}] ${customNotes}`;
     
     window.calculateLiveDrawer(async (liveAmount) => {
-        const leftInDrawer = liveAmount - pullAmount;
-        const payload = { dropId: "DRP-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId, toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: finalNotes, outlet: window.currentOutlet, syncStatus: window.isLoggingOut ? "Bundled" : "Pending" };
-        
-        await new Promise(res => {
-            let tx = window.db.transaction(["cash_drops"], "readwrite");
-            tx.objectStore("cash_drops").add(payload);
-            tx.oncomplete = res;
-        });
+        try {
+            const leftInDrawer = liveAmount - pullAmount;
+            const payload = { dropId: "DRP-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId, toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: finalNotes, outlet: window.currentOutlet, syncStatus: window.isLoggingOut ? "Bundled" : "Pending" };
+            
+            await new Promise(res => {
+                let tx = window.db.transaction(["cash_drops"], "readwrite");
+                tx.objectStore("cash_drops").add(payload);
+                tx.oncomplete = res;
+            });
 
-        document.getElementById("cash-drop-modal").classList.add("hidden"); 
-        
-        if (window.isLoggingOut) { 
-            window.executeFinalLogout(leftInDrawer, payload); 
-        } else { 
-            window.runBackgroundSync();
-            alert(`Setor Uang Berhasil!\nTujuan: ${destination}\nSisa Tunai di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); 
+            document.getElementById("cash-drop-modal").classList.add("hidden"); 
+            
+            if (window.isLoggingOut) { 
+                await window.executeFinalLogout(leftInDrawer, payload); 
+            } else { 
+                window.runBackgroundSync();
+                alert(`Setor Uang Berhasil!\nTujuan: ${destination}\nSisa Tunai di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); 
+            }
+        } finally {
+            window.isSubmittingCashDrop = false;
+            if (confirmBtn) confirmBtn.disabled = false;
         }
     });
 };
@@ -4175,10 +4187,11 @@ window.executeFinalLogout = async function(netCash, logoutCashDrop = null) {
 
     // Tunggu jika ada proses sync latar belakang yang sedang berjalan agar tidak bertabrakan
     let waitSync = 0;
-    while (window.isSyncing && waitSync < 40) {
+    while (window.isSyncing && waitSync < 190) {
         await new Promise(r => setTimeout(r, 250));
         waitSync++;
     }
+    window.syncPendingAgain = false;
     window.isSyncing = true;
 
     const shiftNetCash = (Number(data.totalCash) || 0) + (Number(data.piutangPaid) || 0) - (Number(data.totalExpenses) || 0);
