@@ -3814,11 +3814,12 @@ window.submitCashDrop = function() {
     window.calculateLiveDrawer(async (liveAmount) => {
         try {
             const leftInDrawer = liveAmount - pullAmount;
-            const payload = { dropId: "DRP-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId, toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: finalNotes, outlet: window.currentOutlet, syncStatus: window.isLoggingOut ? "Bundled" : "Pending" };
+            const dropId = window.isLoggingOut ? ("DRP-END-" + (window.currentShiftId || Date.now())) : ("DRP-" + Date.now());
+            const payload = { dropId: dropId, timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId, toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: finalNotes, outlet: window.currentOutlet, syncStatus: window.isLoggingOut ? "Bundled" : "Pending" };
             
             await new Promise(res => {
                 let tx = window.db.transaction(["cash_drops"], "readwrite");
-                tx.objectStore("cash_drops").add(payload);
+                tx.objectStore("cash_drops").put(payload);
                 tx.oncomplete = res;
             });
 
@@ -4193,13 +4194,40 @@ window.initiateLogoutSequence = async function() {
 }
 
 window.executeFinalLogout = async function(netCash, logoutCashDrop = null) { 
+    const rollbackUncommittedLogout = async (attRecord, prevAttStatus) => {
+        await new Promise(resolveRevert => {
+            let stores = ["shift_reports", "local_shift_history"];
+            if (logoutCashDrop) stores.push("cash_drops");
+            if (attRecord) stores.push("attendance");
+            let txRev = window.db.transaction(stores, "readwrite");
+            if (window.currentShiftId) {
+                txRev.objectStore("shift_reports").delete(window.currentShiftId);
+                txRev.objectStore("local_shift_history").delete(window.currentShiftId);
+            }
+            if (logoutCashDrop && logoutCashDrop.dropId) {
+                txRev.objectStore("cash_drops").delete(logoutCashDrop.dropId);
+            }
+            if (attRecord) {
+                attRecord.clockOut = null;
+                attRecord.syncStatus = prevAttStatus || "Synced";
+                txRev.objectStore("attendance").put(attRecord);
+            }
+            txRev.oncomplete = resolveRevert;
+            txRev.onerror = resolveRevert;
+        });
+    };
+
     if (!navigator.onLine) {
+        await rollbackUncommittedLogout(null, null);
+        window.isLoggingOut = false;
         let count = await window.getUnsyncedCount();
         return alert(`⛔ TIDAK BISA LOGOUT SAAT OFFLINE!\n\nTerdapat ${count} data lokal belum terkirim. Nyalakan koneksi internet agar data shift dan transaksi tidak hilang.`);
     }
 
     const data = window.currentShiftData;
     if (!data) {
+        await rollbackUncommittedLogout(null, null);
+        window.isLoggingOut = false;
         return alert("⚠️ Data shift belum siap. Silakan buka Laporan Shift terlebih dahulu.");
     }
 
@@ -4235,6 +4263,7 @@ window.executeFinalLogout = async function(netCash, logoutCashDrop = null) {
 
     const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result || []));
     const activeLog = attendances.slice().reverse().find(a => a.staffName === window.currentCashier && !a.clockOut);
+    const prevAttStatus = activeLog ? activeLog.syncStatus : null;
     if (activeLog) {
         activeLog.clockOut = window.getWibDate();
         activeLog.syncStatus = "Bundled";
@@ -4307,26 +4336,10 @@ window.executeFinalLogout = async function(netCash, logoutCashDrop = null) {
     if (overlay) overlay.style.display = "none";
 
     if (!syncSuccess) {
-        await new Promise(resolveRevert => {
-            let stores = ["shift_reports"];
-            if (logoutCashDrop) stores.push("cash_drops");
-            if (activeLog) stores.push("attendance");
-            let txRev = window.db.transaction(stores, "readwrite");
-            shiftPayload.syncStatus = "Pending";
-            txRev.objectStore("shift_reports").put(shiftPayload);
-            if (logoutCashDrop) {
-                logoutCashDrop.syncStatus = "Pending";
-                txRev.objectStore("cash_drops").put(logoutCashDrop);
-            }
-            if (activeLog) {
-                activeLog.syncStatus = "OutPending";
-                txRev.objectStore("attendance").put(activeLog);
-            }
-            txRev.oncomplete = resolveRevert;
-        });
+        await rollbackUncommittedLogout(activeLog, prevAttStatus);
         window.isLoggingOut = false;
         window.isSyncing = false;
-        return alert(`⚠️ PERINGATAN:\nLaporan Shift belum berhasil tersimpan ke Google Sheets karena gangguan jaringan (${window.lastSyncServerError || "Koneksi terputus"}).\n\nSesi Anda TIDAK ditutup agar Anda bisa memeriksa koneksi internet lalu menekan tombol Logout kembali.`);
+        return alert(`⚠️ PERINGATAN:\nLaporan Shift belum berhasil tersimpan ke Google Sheets karena gangguan jaringan (${window.lastSyncServerError || "Koneksi terputus"}).\n\nSesi & Saldo Laci Anda telah dikembalikan seperti semula agar Anda bisa memeriksa koneksi internet lalu menekan tombol Logout kembali.`);
     }
 
     // Hapus sesi aktif HANYA setelah semua transaksi & Laporan Shift resmi masuk ke Google Sheets
