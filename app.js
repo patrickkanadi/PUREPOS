@@ -747,7 +747,7 @@ window.forceCloseShift = async function(shift) {
     });
     
     // --- NEW: IGNORE EMPTY SHIFTS AND AUTO CLOCK OUT ---
-    const hasActivity = tOrders > 0 || tExpense > 0 || tPiutangGiven > 0 || tPiutangPaidCash > 0;
+    const hasActivity = tOrders > 0 || tExpense > 0 || tPiutangGiven > 0 || tPiutangPaidCash > 0 || tQris > 0 || tTransfer > 0;
     if (!hasActivity) {
         window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(shift.pin);
         
@@ -3752,7 +3752,14 @@ window.calculateLiveDrawer = function(callback) {
 window.openCashDrop = function(forLogout = false) {
     window.isLoggingOut = forLogout; 
     document.getElementById("cash-drop-title").innerText = window.isLoggingOut ? "🔒 Tutup Shift & Setor Laci" : "🏦 Simpan / Tarik Uang Laci";
-    document.getElementById("btn-drop-cancel").innerText = window.isLoggingOut ? "Batal Logout" : "Batal"; 
+    const cancelBtn = document.getElementById("btn-drop-cancel");
+    if (cancelBtn) {
+        cancelBtn.innerText = window.isLoggingOut ? "Batal Logout" : "Batal";
+        cancelBtn.onclick = () => {
+            window.isLoggingOut = false;
+            document.getElementById("cash-drop-modal").classList.add("hidden");
+        };
+    }
     document.getElementById("btn-drop-confirm").innerText = window.isLoggingOut ? "Konfirmasi & Logout" : "Simpan Data";
     document.getElementById("drop-amount").value = ""; 
     document.getElementById("drop-destination").value = "Admin"; 
@@ -3921,12 +3928,11 @@ window.openCurrentShiftReport = async function() {
         }
     }
 
-    // Jika sedang online, dorong antrean lokal & tarik Saldo_Laci + status Void terbaru terlebih dahulu
+    // Jika ada antrean lokal, dorong di latar belakang tanpa memblokir pembukaan modal Laporan Shift
     if (navigator.onLine) {
-        try {
-            await window.drainSyncQueue();
-            await window.syncBackgroundData();
-        } catch (e) {}
+        window.getUnsyncedCount().then(cnt => {
+            if (cnt > 0 && !window.isSyncing) window.runBackgroundSync(true);
+        }).catch(() => {});
     }
 
     // 2. Hitung Laporan Shift dari database lokal yang sudah sinkron 100%
@@ -4087,11 +4093,6 @@ window.openCurrentShiftReport = async function() {
         };
 
         document.getElementById("shift-report-modal").classList.remove("hidden");
-
-        // Kirim transaksi lokal yang belum terkirim di latar belakang
-        if (navigator.onLine) {
-            window.runBackgroundSync();
-        }
     });
 };
 
@@ -4116,7 +4117,7 @@ window.initiateLogoutSequence = async function() {
 
     const data = window.currentShiftData;
     
-    const hasActivity = data.totalOrders > 0 || data.totalExpenses > 0 || data.piutangGiven > 0 || data.piutangPaid > 0;
+    const hasActivity = data.totalOrders > 0 || data.totalExpenses > 0 || data.piutangGiven > 0 || data.piutangPaid > 0 || data.totalQris > 0 || data.totalTransfer > 0;
     if (!hasActivity) {
         const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result || []));
         const activeLog = attendances.slice().reverse().find(a => a.staffName === window.currentCashier && !a.clockOut);
@@ -4222,8 +4223,15 @@ window.executeFinalLogout = async function(netCash, logoutCashDrop = null) {
 
     // 🔥 KIRIM SEKALIGUS DALAM 1 REQUEST ATOMIK (1x ScriptLock untuk Setor Laci + Absensi Keluar + Laporan Shift)
     let syncSuccess = false;
-    for (let tryCount = 1; tryCount <= 3; tryCount++) {
+    const maxTries = 4;
+    for (let tryCount = 1; tryCount <= maxTries; tryCount++) {
         try {
+            const descEl = document.getElementById("sync-lock-desc");
+            if (descEl) {
+                descEl.innerText = tryCount === 1
+                    ? "Menyimpan Setor Laci, Absensi, & Laporan Shift Akhir sekaligus..."
+                    : `Server sedang sibuk, mencoba ulang (${tryCount}/${maxTries})...`;
+            }
             let r = await window.fetchWithSyncTimeout(API_URL, {
                 method: "POST", 
                 redirect: "follow",  
@@ -4258,10 +4266,17 @@ window.executeFinalLogout = async function(netCash, logoutCashDrop = null) {
                     txDone.oncomplete = resolvePut;
                 });
                 break;
+            } else {
+                window.lastSyncServerError = res.message || "Server busy";
+                if (tryCount < maxTries) {
+                    await new Promise(r => setTimeout(r, 1200 * tryCount + Math.floor(Math.random() * 1500)));
+                }
             }
         } catch(e) {
-            // Random jitter (400–1300ms) agar 8 cabang tidak bertabrakan ulang secara bersamaan
-            await new Promise(r => setTimeout(r, 400 + Math.floor(Math.random() * 900)));
+            window.lastSyncServerError = e.name === "AbortError" ? "Timeout 45s" : e.message;
+            if (tryCount < maxTries) {
+                await new Promise(r => setTimeout(r, 1000 * tryCount + Math.floor(Math.random() * 1500)));
+            }
         }
     }
 
@@ -4285,8 +4300,9 @@ window.executeFinalLogout = async function(netCash, logoutCashDrop = null) {
             }
             txRev.oncomplete = resolveRevert;
         });
+        window.isLoggingOut = false;
         window.isSyncing = false;
-        return alert(`⚠️ PERINGATAN:\nLaporan Shift belum berhasil tersimpan ke Google Sheets karena gangguan jaringan.\n\nSesi Anda TIDAK ditutup agar Anda bisa memeriksa koneksi internet lalu menekan tombol Logout kembali.`);
+        return alert(`⚠️ PERINGATAN:\nLaporan Shift belum berhasil tersimpan ke Google Sheets karena gangguan jaringan (${window.lastSyncServerError || "Koneksi terputus"}).\n\nSesi Anda TIDAK ditutup agar Anda bisa memeriksa koneksi internet lalu menekan tombol Logout kembali.`);
     }
 
     // Hapus sesi aktif HANYA setelah semua transaksi & Laporan Shift resmi masuk ke Google Sheets
@@ -4537,6 +4553,7 @@ window.fetchWithSyncTimeout = async function(url, options = {}, timeoutMs = 4500
 window.syncPendingAgain = false;
 window.runBackgroundSync = async function(skipPullAfter = false) {
     if (!navigator.onLine) return;
+    if (window.isLoggingOut && !skipPullAfter) return;
     if (window.isSyncing) {
         window.syncPendingAgain = true;
         return;
@@ -4605,8 +4622,9 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
                 };
             }
         }
+        const allowBundled = !window.isLoggingOut;
         for (const drop of drops) {
-            if (drop.syncStatus === "Pending" || drop.syncStatus === "Bundled") {
+            if (drop.syncStatus === "Pending" || (allowBundled && drop.syncStatus === "Bundled")) {
                 let k = "DRP:" + drop.dropId;
                 batchItems.push({ key: k, action: "syncCashDrop", data: drop });
                 batchHandlers[k] = async (ok) => {
@@ -4615,7 +4633,7 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
             }
         }
         for (const report of reports) {
-            if (report.syncStatus === "Pending" || report.syncStatus === "Bundled") {
+            if (report.syncStatus === "Pending" || (allowBundled && report.syncStatus === "Bundled")) {
                 let k = "SR:" + report.shiftId;
                 batchItems.push({ key: k, action: "syncShiftReport", data: report });
                 batchHandlers[k] = async (ok) => {
@@ -4683,7 +4701,7 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
                 let k = "ATT:" + att.logId;
                 batchItems.push({ key: k, action: "syncAttendance", data: att });
                 batchHandlers[k] = async (ok) => { if (ok) { att.syncStatus = "Synced"; await dbPut("attendance", att); } };
-            } else if (att.syncStatus === "OutPending" || att.syncStatus === "Bundled") {
+            } else if (att.syncStatus === "OutPending" || (allowBundled && att.syncStatus === "Bundled")) {
                 let k = "ATTOUT:" + att.logId;
                 batchItems.push({ key: k, action: "updateAttendanceOut", data: att });
                 batchHandlers[k] = async (ok) => { if (ok) { att.syncStatus = "Synced"; await dbPut("attendance", att); } };
