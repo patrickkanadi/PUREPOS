@@ -1851,28 +1851,30 @@ window.handleAutocomplete = function(e) {
         if (matches.length > 0) {
             let html = "";
 
+            const escJsAttr = (v) => String(v ?? "").replace(/\\/g, "\\\\").replace(/\r?\n/g, ' ').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+            const escHtml = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
             const renderCard = (m, isLocal) => {
-                let wStr = JSON.stringify(m.wallet || {}).replace(/\r?\n/g, ' ').replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
-                let nameStr = String(m.name || "").replace(/\r?\n/g, ' ').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                let fOut = String(m.firstOutlet || "").replace(/\r?\n/g, ' ').replace(/'/g, "\\'").replace(/"/g, '&quot;'); 
-                let rOutStr = String(m.recentOutlets || "").replace(/\r?\n/g, ' ').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                let wStr = escJsAttr(JSON.stringify(m.wallet || {})); 
+                let nameStr = escJsAttr(m.name || "");
+                let fOut = escJsAttr(m.firstOutlet || ""); 
+                let rOutStr = escJsAttr(m.recentOutlets || "");
                 let rawPhoneDisplay = String(m.phone || "").startsWith("TANPA-WA") ? "Tanpa WA" : String(m.phone || "").replace(/-DUP\d+$/, "");
-                // Kirim ID asli m.phone agar tidak hilang saat dipilih
-                let safePhoneKey = String(m.phone || "-").replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                let safeAddress = String(m.address || "").replace(/\r?\n/g, ' ').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                let safePhoneKey = escJsAttr(m.phone || "-");
+                let safeAddress = escJsAttr(m.address || "");
                 
                 let curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
                 let localPiutang = m.piutangBreakdown ? (m.piutangBreakdown[window.currentOutlet] ?? m.piutangBreakdown[curOutUp] ?? 0) : (m.piutang || 0);
                 let piutangBadge = localPiutang > 0 ? `<span style="font-size:11px; background:#fadbd8; color:#922b21; padding:2px 7px; border-radius:10px; font-weight:bold; margin-left:6px;">Hutang: Rp ${localPiutang.toLocaleString('id-ID')}</span>` : '';
 
                 let addressDisplay = (m.address && m.address !== "-")
-                    ? `<span style="color:#d35400; font-weight:bold;">🏠 ${m.address}</span>`
+                    ? `<span style="color:#d35400; font-weight:bold;">🏠 ${escHtml(m.address)}</span>`
                     : `<span style="color:#95a5a6; font-style:italic;">🏠 Alamat belum diisi</span>`;
 
-                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhoneKey}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')" style="padding:9px 14px; border-bottom:1px solid #e5e8e8; cursor:pointer; text-align:left;">
+                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhoneKey}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${escJsAttr(m.lastPurchase || "")}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${escJsAttr(m.frequency || "")}')" style="padding:9px 14px; border-bottom:1px solid #e5e8e8; cursor:pointer; text-align:left;">
                     <div class="autocomplete-name" style="font-size:14.5px; font-weight:bold; color:#2c3e50; display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-start; gap:6px;">
-                        <span>👤 ${m.name}</span>
-                        <span style="font-size:12px; background:#e8f8f5; color:#117a65; border:1px solid #16a085; padding:1px 7px; border-radius:10px;">📱 ${rawPhoneDisplay}</span>
+                        <span>👤 ${escHtml(m.name)}</span>
+                        <span style="font-size:12px; background:#e8f8f5; color:#117a65; border:1px solid #16a085; padding:1px 7px; border-radius:10px;">📱 ${escHtml(rawPhoneDisplay)}</span>
                         ${piutangBadge}
                     </div>
                     <div class="autocomplete-addr" style="font-size:12.5px; margin-top:3px; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${addressDisplay}</div>
