@@ -74,6 +74,10 @@ window.initMobilePosWizard = function() {
             body.mob-other-tab #mobile-wizard-stepper,
             body.mob-other-tab .mob-cart-tab-bar { display: none !important; }
 
+            /* Sembunyikan toolbar atas saat keyboard mencari pelanggan terbuka agar daftar member terlihat jelas */
+            body.mob-step-1.mob-kb-open #pos-screen > div:first-child { display: none !important; }
+            body.mob-step-1.mob-kb-open .mob-main-tabs-bar { display: none !important; }
+
             .mob-step-pill {
                 flex: 1;
                 text-align: center;
@@ -122,16 +126,24 @@ window.initMobilePosWizard = function() {
             body.mob-step-1:not(.mob-other-tab) .mob-menu-wrapper { display: none !important; }
             body.mob-step-1:not(.mob-other-tab) #command-bar {
                 display: block !important;
-                padding: 12px !important;
+                padding: 8px 10px !important;
+            }
+            body.mob-step-1:not(.mob-other-tab) #cust-address {
+                display: none !important;
             }
             body.mob-step-1:not(.mob-other-tab) #customer-input-section input,
             body.mob-step-1:not(.mob-other-tab) #customer-input-section button {
-                min-height: 46px !important;
-                font-size: 16px !important;
+                min-height: 42px !important;
+                font-size: 15px !important;
             }
             body.mob-step-1:not(.mob-other-tab) #autocomplete-results {
-                max-height: 55vh !important;
+                max-height: var(--mob-ac-max-h, 46vh) !important;
                 overflow-y: auto !important;
+                border: 2px solid #3498db !important;
+                border-radius: 8px !important;
+                box-shadow: 0 6px 18px rgba(0,0,0,0.22) !important;
+                background: #ffffff !important;
+                margin-top: 6px !important;
             }
             body.mob-step-1:not(.mob-other-tab) #active-customer-banner:not(.hidden) #mobile-step1-nextbar {
                 display: block !important;
@@ -401,12 +413,49 @@ window.initMobilePosWizard = function() {
         rightPanel.insertBefore(step3Header, rightPanel.firstChild);
     }
 
+    // Sesuaikan tinggi daftar member agar selalu tampil di atas keyboard HP
+    const updateMobileAcViewport = () => {
+        if (window.innerWidth > 768) return;
+        const resBox = document.getElementById("autocomplete-results");
+        if (!resBox || resBox.classList.contains("hidden")) return;
+        const vvH = (window.visualViewport && window.visualViewport.height) ? window.visualViewport.height : window.innerHeight;
+        const rect = resBox.getBoundingClientRect();
+        const avail = Math.max(150, Math.floor(vvH - rect.top - 10));
+        resBox.style.setProperty("--mob-ac-max-h", avail + "px");
+    };
+    window.updateMobileAcViewport = updateMobileAcViewport;
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener("resize", updateMobileAcViewport);
+    }
+
+    ["cust-phone", "cust-name"].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener("focus", () => {
+            if (window.innerWidth <= 768) {
+                document.body.classList.add("mob-kb-open");
+                setTimeout(updateMobileAcViewport, 120);
+            }
+        });
+        el.addEventListener("blur", () => {
+            setTimeout(() => {
+                const activeId = document.activeElement ? document.activeElement.id : "";
+                if (activeId !== "cust-phone" && activeId !== "cust-name") {
+                    document.body.classList.remove("mob-kb-open");
+                }
+            }, 220);
+        });
+    });
+
     window.setMobilePosStep(1);
 };
 
 window.setMobilePosStep = function(step) {
     if (step >= 2 && window.isMenuLocked) {
         step = 1;
+    }
+    if (step >= 2) {
+        document.body.classList.remove("mob-kb-open");
     }
     window.mobilePosStep = step;
     if (window.posSessions && window.posSessions[window.activeSessionIndex]) {
@@ -424,9 +473,15 @@ window.setMobilePosStep = function(step) {
         else if (i < step) pill.classList.add("done");
     }
 
-    const cName = (window.activeCustomerProfile && window.activeCustomerProfile.name) || document.getElementById("cust-name")?.value || "Walk-in";
+    const prof = window.activeCustomerProfile;
+    const cName = (prof && prof.name) || document.getElementById("cust-name")?.value || "Walk-in";
+    let extraTag = "";
+    if (prof) {
+        if ((prof.piutang || 0) > 0) extraTag += ` • ⚠️ Hutang Rp ${Number(prof.piutang).toLocaleString('id-ID')}`;
+        if ((prof.bottlesBorrowed || 0) > 0) extraTag += ` • 📦 ${prof.bottlesBorrowed} Galon`;
+    }
     const s2Cust = document.getElementById("mob-s2-cust");
-    if (s2Cust) s2Cust.innerText = "👤 " + cName;
+    if (s2Cust) s2Cust.innerText = "👤 " + cName + extraTag;
     const s3Cust = document.getElementById("mob-s3-cust");
     if (s3Cust) s3Cust.innerText = "👤 " + cName;
 
@@ -1637,6 +1692,8 @@ window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localP
         frequency: frequency
     };
     window.updatePromoBanner(window.activeCustomerProfile);
+    document.body.classList.remove("mob-kb-open");
+    window.unlockMenu();
 };
 
 let posAutocompleteTimer = null;
@@ -1704,15 +1761,16 @@ window.handleAutocomplete = function(e) {
                     ? `<span style="color:#d35400; font-weight:bold;">🏠 ${m.address}</span>`
                     : `<span style="color:#95a5a6; font-style:italic;">🏠 Alamat belum diisi</span>`;
 
-                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhoneKey}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')" style="padding:10px 14px; border-bottom:1px solid #f0f3f4; cursor:pointer;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
-                        <div class="autocomplete-name" style="font-size:14.5px; font-weight:bold; color:#2c3e50;">
-                            👤 ${m.name} 
-                            <span style="font-size:12px; background:#e8f8f5; color:#117a65; border:1px solid #16a085; padding:1px 7px; border-radius:10px; margin-left:6px;">📱 ${rawPhoneDisplay}</span>
+                return `<div class="autocomplete-item" onclick="window.selectMember('${safePhoneKey}', '${nameStr}', '${wStr}', ${m.bottlesBorrowed || 0}, ${localPiutang}, '${fOut}', '${rOutStr}', '${safeAddress}', '${m.lastPurchase || ""}', ${m.avgRO || 0}, ${m.avgStd || 0}, '${m.frequency || ""}')" style="padding:10px 12px; border-bottom:1px solid #e5e8e8; cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                    <div style="flex:1; min-width:0;">
+                        <div class="autocomplete-name" style="font-size:14.5px; font-weight:bold; color:#2c3e50; display:flex; flex-wrap:wrap; align-items:center; gap:5px;">
+                            <span>👤 ${m.name}</span>
+                            <span style="font-size:12px; background:#e8f8f5; color:#117a65; border:1px solid #16a085; padding:1px 7px; border-radius:10px;">📱 ${rawPhoneDisplay}</span>
                             ${piutangBadge}
                         </div>
+                        <div style="font-size:12px; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${addressDisplay}</div>
                     </div>
-                    <div style="font-size:12.5px; margin-top:4px;">${addressDisplay}</div>
+                    <span style="background:#27ae60; color:white; padding:6px 10px; border-radius:6px; font-size:12px; font-weight:bold; flex-shrink:0;">Pilih ➔</span>
                 </div>`;
             };
 
@@ -1730,9 +1788,11 @@ window.handleAutocomplete = function(e) {
 
             resBox.innerHTML = html;
             resBox.classList.remove("hidden");
+            if (window.updateMobileAcViewport) window.updateMobileAcViewport();
         } else { 
             resBox.innerHTML = `<div style="padding:15px; color:#7f8c8d; text-align:center; font-style:italic;">Tidak ada pelanggan ditemukan untuk "${rawVal}".</div>`;
-            resBox.classList.remove("hidden"); 
+            resBox.classList.remove("hidden");
+            if (window.updateMobileAcViewport) window.updateMobileAcViewport();
         }
     }, 70);
 };
@@ -4434,8 +4494,8 @@ window.drainSyncQueueWithLock = async function() {
             await new Promise(r => setTimeout(r, 200));
         }
 
-        await window.runBackgroundSync();
-        await new Promise(r => setTimeout(r, 350 + Math.floor(Math.random() * 750)));
+        await window.runBackgroundSync(true);
+        await new Promise(r => setTimeout(r, Math.min(5000, 900 * attempt) + Math.floor(Math.random() * 1400)));
     }
 
     let finalCount = await window.getUnsyncedCount();
@@ -4455,7 +4515,7 @@ window.fetchWithSyncTimeout = async function(url, options = {}, timeoutMs = 4500
 };
 
 window.syncPendingAgain = false;
-window.runBackgroundSync = async function() {
+window.runBackgroundSync = async function(skipPullAfter = false) {
     if (!navigator.onLine) return;
     if (window.isSyncing) {
         window.syncPendingAgain = true;
@@ -4613,10 +4673,14 @@ window.runBackgroundSync = async function() {
         let anySuccess = false;
         let hitLockTimeout = false;
 
-        // Kirim maksimal 6 item per siklus dengan jeda acak antar-batch agar 8 cabang tidak pernah menabrak ScriptLock bersamaan
+        // Kirim maksimal 12 item per siklus agar antrean cepat terkuras
+        let hasMoreInQueue = false;
         if (batchItems.length > 0) {
-            let chunk = batchItems.slice(0, 6);
-            if (batchItems.length > 6) window.syncPendingAgain = true;
+            let chunk = batchItems.slice(0, 12);
+            if (batchItems.length > 12) {
+                hasMoreInQueue = true;
+                window.syncPendingAgain = true;
+            }
             try {
                 let r = await window.fetchWithSyncTimeout(API_URL, {
                     method: "POST",
@@ -4665,10 +4729,10 @@ window.runBackgroundSync = async function() {
         }
 
         if (hitLockTimeout) {
-            await new Promise(r => setTimeout(r, 2500 + Math.floor(Math.random() * 4500)));
+            await new Promise(r => setTimeout(r, 1500 + Math.floor(Math.random() * 3500)));
         }
 
-        if (anySuccess) {
+        if (anySuccess && !skipPullAfter && !hasMoreInQueue) {
             await window.syncCriticalData();
             await window.syncBackgroundData();
         }
@@ -4736,6 +4800,7 @@ window.updateTabStyles = function(activeId) {
         // Auto-align the parent container into a tight, gapless row
         let parent = btn.parentElement;
         if (parent && parent.tagName === "DIV") {
+            parent.classList.add("mob-main-tabs-bar");
             parent.style.display = "flex";
             parent.style.flexWrap = "nowrap"; // Force a single line
             parent.style.gap = "0"; // 🔥 ZERO GAPS
