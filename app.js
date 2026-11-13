@@ -3995,6 +3995,10 @@ window.runBackgroundSync = async function() {
         }
         for (const bp of piutangs) {
             if (bp.syncStatus === "Pending") {
+                if ((Number(bp.amountPaid) || 0) <= 0 && (Number(bp.tipAmount) || 0) <= 0) {
+                    await dbDel("bayar_piutang", bp.payId);
+                    continue;
+                }
                 let k = "BP:" + bp.payId;
                 batchItems.push({ key: k, action: "syncBayarPiutang", data: bp });
                 batchHandlers[k] = async (ok) => {
