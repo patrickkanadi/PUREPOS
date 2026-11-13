@@ -127,23 +127,84 @@ window.initMobilePosWizard = function() {
             body.mob-step-1:not(.mob-other-tab) #command-bar {
                 display: block !important;
                 padding: 8px 10px !important;
+                overflow: visible !important;
+                width: 100% !important;
+                box-sizing: border-box !important;
+            }
+            body.mob-step-1:not(.mob-other-tab) #customer-input-section {
+                display: flex !important;
+                flex-direction: column !important;
+                align-items: stretch !important;
+                gap: 8px !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                overflow: visible !important;
+                box-sizing: border-box !important;
+            }
+            body.mob-step-1:not(.mob-other-tab) #customer-input-section .autocomplete-wrapper {
+                width: 100% !important;
+                max-width: 100% !important;
+                position: static !important;
+                overflow: visible !important;
             }
             body.mob-step-1:not(.mob-other-tab) #cust-address {
                 display: none !important;
             }
             body.mob-step-1:not(.mob-other-tab) #customer-input-section input,
             body.mob-step-1:not(.mob-other-tab) #customer-input-section button {
-                min-height: 42px !important;
-                font-size: 15px !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                min-height: 44px !important;
+                font-size: 16px !important;
+                box-sizing: border-box !important;
+                margin: 0 !important;
             }
             body.mob-step-1:not(.mob-other-tab) #autocomplete-results {
-                max-height: var(--mob-ac-max-h, 46vh) !important;
+                position: static !important;
+                left: auto !important;
+                right: auto !important;
+                top: auto !important;
+                transform: none !important;
+                width: 100% !important;
+                min-width: 0 !important;
+                max-width: 100% !important;
+                max-height: var(--mob-ac-max-h, 52vh) !important;
+                overflow-x: hidden !important;
                 overflow-y: auto !important;
+                -webkit-overflow-scrolling: touch !important;
                 border: 2px solid #3498db !important;
                 border-radius: 8px !important;
                 box-shadow: 0 6px 18px rgba(0,0,0,0.22) !important;
                 background: #ffffff !important;
-                margin-top: 6px !important;
+                margin-top: 4px !important;
+                box-sizing: border-box !important;
+            }
+            body.mob-step-1:not(.mob-other-tab) #autocomplete-results .autocomplete-item {
+                display: flex !important;
+                flex-direction: row !important;
+                justify-content: space-between !important;
+                align-items: center !important;
+                text-align: left !important;
+                width: 100% !important;
+                padding: 12px 10px !important;
+                gap: 10px !important;
+                box-sizing: border-box !important;
+            }
+            body.mob-step-1:not(.mob-other-tab) #autocomplete-results .autocomplete-name {
+                font-size: 16px !important;
+                font-weight: 800 !important;
+                color: #1e272e !important;
+                line-height: 1.3 !important;
+                white-space: normal !important;
+                word-break: break-word !important;
+            }
+            body.mob-step-1:not(.mob-other-tab) #autocomplete-results .autocomplete-addr {
+                white-space: normal !important;
+                word-break: break-word !important;
+                overflow: visible !important;
+                text-overflow: clip !important;
+                font-size: 12.5px !important;
+                line-height: 1.35 !important;
             }
             body.mob-step-1:not(.mob-other-tab) #active-customer-banner:not(.hidden) #mobile-step1-nextbar {
                 display: block !important;
@@ -1786,9 +1847,9 @@ window.handleAutocomplete = function(e) {
                             <span style="font-size:12px; background:#e8f8f5; color:#117a65; border:1px solid #16a085; padding:1px 7px; border-radius:10px;">📱 ${rawPhoneDisplay}</span>
                             ${piutangBadge}
                         </div>
-                        <div style="font-size:12px; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${addressDisplay}</div>
+                        <div class="autocomplete-addr" style="font-size:12px; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${addressDisplay}</div>
                     </div>
-                    <span style="background:#27ae60; color:white; padding:6px 10px; border-radius:6px; font-size:12px; font-weight:bold; flex-shrink:0;">Pilih ➔</span>
+                    <span style="background:#27ae60; color:white; padding:7px 11px; border-radius:6px; font-size:12.5px; font-weight:bold; flex-shrink:0;">Pilih ➔</span>
                 </div>`;
             };
 
