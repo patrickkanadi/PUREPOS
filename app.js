@@ -126,7 +126,7 @@ window.initMobilePosWizard = function() {
                 flex-direction: column !important;
                 align-items: stretch !important;
                 gap: 6px !important;
-                padding: 8px 10px !important;
+                padding: 7px 10px !important;
             }
             #top-bar > div:first-child {
                 display: flex !important;
@@ -140,28 +140,36 @@ window.initMobilePosWizard = function() {
                 display: flex !important;
                 flex-wrap: wrap !important;
                 align-items: center !important;
-                gap: 3px 5px !important;
-                flex: 1 !important;
+                gap: 2px 4px !important;
+                flex: 1 1 auto !important;
                 min-width: 0 !important;
-                font-size: 12px !important;
-                line-height: 1.25 !important;
+                font-size: 11.5px !important;
+                line-height: 1.2 !important;
+            }
+            #top-bar > div:first-child > div > span {
+                margin-left: 3px !important;
+            }
+            #app-version-badge {
+                margin-left: 0 !important;
             }
             #app-version-badge span {
                 font-size: 9.5px !important;
                 padding: 2px 5px !important;
-                margin-right: 3px !important;
+                margin-right: 2px !important;
             }
-            /* Tombol ☰ Menu tepat di antara Lokasi Cabang dan Tombol Absensi */
+            /* Tombol ☰ Menu ringkas & proporsional di antara Lokasi Cabang dan Tombol Absensi */
             #mob-menu-toggle-btn {
                 display: inline-flex !important;
                 align-items: center !important;
                 justify-content: center !important;
+                flex: 0 0 auto !important;
+                width: auto !important;
                 margin-left: auto !important;
-                flex-shrink: 0 !important;
-                padding: 6px 9px !important;
-                font-size: 11.5px !important;
+                padding: 4px 7px !important;
+                font-size: 11px !important;
+                line-height: 1.15 !important;
                 font-weight: bold !important;
-                border-radius: 6px !important;
+                border-radius: 5px !important;
                 background: #e67e22 !important;
                 color: #ffffff !important;
                 border: 1px solid #f39c12 !important;
@@ -172,16 +180,18 @@ window.initMobilePosWizard = function() {
                 background: #34495e !important;
                 border-color: #95a5a6 !important;
             }
-            /* Tombol Absensi tetap (fixed) di kanan atas & tidak pernah disembunyikan */
+            /* Tombol Absensi sejajar & sama tinggi dengan tombol Menu di kanan atas */
             #top-bar > div:first-child button:not(#mob-menu-toggle-btn) {
                 display: inline-flex !important;
                 align-items: center !important;
                 justify-content: center !important;
+                flex: 0 0 auto !important;
+                width: auto !important;
                 margin-left: 0 !important;
-                flex-shrink: 0 !important;
-                padding: 6px 9px !important;
-                font-size: 11.5px !important;
-                border-radius: 6px !important;
+                padding: 4px 8px !important;
+                font-size: 11px !important;
+                line-height: 1.15 !important;
+                border-radius: 5px !important;
                 white-space: nowrap !important;
             }
 
