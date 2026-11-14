@@ -165,7 +165,7 @@ window.initMobilePosWizard = function() {
                 flex: 0 0 auto !important;
                 width: auto !important;
                 margin-left: auto !important;
-                padding: 4px 7px !important;
+                padding: 4px 8px !important;
                 font-size: 11px !important;
                 line-height: 1.15 !important;
                 font-weight: bold !important;
@@ -222,10 +222,10 @@ window.initMobilePosWizard = function() {
             #top-bar .status-indicator button {
                 flex: 1 1 auto !important;
                 min-width: 0 !important;
-                padding: 7px 8px !important;
-                font-size: 11.5px !important;
+                padding: 6px 7px !important;
+                font-size: 11px !important;
                 margin: 0 !important;
-                border-radius: 6px !important;
+                border-radius: 5px !important;
                 text-align: center !important;
                 white-space: nowrap !important;
             }
@@ -253,7 +253,7 @@ window.initMobilePosWizard = function() {
             .cart-tab {
                 min-width: 0 !important;
                 flex: 1 !important;
-                font-size: 12px !important;
+                font-size: 11.5px !important;
                 padding: 8px 4px !important;
             }
 
@@ -263,7 +263,7 @@ window.initMobilePosWizard = function() {
                 align-items: center;
                 justify-content: space-between;
                 background: #1e272e;
-                padding: 7px 8px;
+                padding: 6px 8px;
                 gap: 4px;
                 position: sticky;
                 top: 0;
@@ -277,7 +277,7 @@ window.initMobilePosWizard = function() {
                 flex: 1;
                 min-width: 0;
                 text-align: center;
-                padding: 8px 2px;
+                padding: 7px 2px;
                 border-radius: 6px;
                 font-size: 10.5px;
                 font-weight: bold;
@@ -352,8 +352,8 @@ window.initMobilePosWizard = function() {
             body.mob-step-1:not(.mob-other-tab) #customer-input-section button {
                 width: 100% !important;
                 max-width: 100% !important;
-                min-height: 44px !important;
-                font-size: 16px !important;
+                min-height: 42px !important;
+                font-size: 14.5px !important;
                 box-sizing: border-box !important;
                 margin: 0 !important;
             }
@@ -379,11 +379,11 @@ window.initMobilePosWizard = function() {
                 display: block !important;
                 text-align: left !important;
                 width: 100% !important;
-                padding: 11px 12px !important;
+                padding: 10px 12px !important;
                 box-sizing: border-box !important;
             }
             body.mob-step-1:not(.mob-other-tab) #autocomplete-results .autocomplete-name {
-                font-size: 15.5px !important;
+                font-size: 14.5px !important;
                 font-weight: 800 !important;
                 color: #1e272e !important;
                 line-height: 1.3 !important;
@@ -395,12 +395,12 @@ window.initMobilePosWizard = function() {
                 word-break: break-word !important;
                 overflow: visible !important;
                 text-overflow: clip !important;
-                font-size: 12.5px !important;
+                font-size: 12px !important;
                 line-height: 1.35 !important;
             }
             body.mob-step-1:not(.mob-other-tab) #active-customer-banner:not(.hidden) #mobile-step1-nextbar {
                 display: block !important;
-                margin-top: 12px;
+                margin-top: 10px;
             }
 
             /* LAYER 2: PILIH MENU */
@@ -418,10 +418,10 @@ window.initMobilePosWizard = function() {
                 align-items: center;
                 background: #eafaf1;
                 border: 1px solid #a9dfbf;
-                padding: 7px 10px;
+                padding: 6px 10px;
                 border-radius: 6px;
-                margin-top: 6px;
-                font-size: 12.5px;
+                margin-top: 4px;
+                font-size: 12px;
                 color: #1e8449;
             }
             body.mob-step-2:not(.mob-other-tab) #category-container {
@@ -432,29 +432,36 @@ window.initMobilePosWizard = function() {
                 gap: 6px !important;
             }
             body.mob-step-2:not(.mob-other-tab) .cat-btn {
-                padding: 9px 14px !important;
-                font-size: 13px !important;
+                padding: 8px 13px !important;
+                font-size: 12.5px !important;
                 flex-shrink: 0 !important;
             }
             body.mob-step-2:not(.mob-other-tab) #product-grid {
                 display: grid !important;
                 grid-template-columns: repeat(2, 1fr) !important;
-                gap: 10px !important;
+                gap: 8px !important;
                 padding: 10px !important;
             }
             body.mob-step-2:not(.mob-other-tab) .product-card {
-                min-height: 98px !important;
-                padding: 12px !important;
+                min-height: 92px !important;
+                padding: 10px !important;
                 position: relative !important;
+            }
+            body.mob-step-2:not(.mob-other-tab) .product-card h4 {
+                font-size: 13.5px !important;
+            }
+            body.mob-step-2:not(.mob-other-tab) .price-badge {
+                font-size: 12px !important;
+                padding: 4px 10px !important;
             }
             body.mob-step-2:not(.mob-other-tab) .mob-card-qty-badge {
                 display: inline-block !important;
-                margin-top: 6px;
+                margin-top: 5px;
                 background: #27ae60;
                 color: white;
                 padding: 2px 8px;
                 border-radius: 10px;
-                font-size: 11px;
+                font-size: 10.5px;
                 font-weight: bold;
             }
             body.mob-step-2:not(.mob-other-tab) #mobile-step2-footer {
@@ -465,7 +472,7 @@ window.initMobilePosWizard = function() {
                 right: 0;
                 background: #2c3e50;
                 color: #fff;
-                padding: 10px 14px;
+                padding: 9px 12px;
                 justify-content: space-between;
                 align-items: center;
                 z-index: 95;
@@ -484,18 +491,18 @@ window.initMobilePosWizard = function() {
                 justify-content: space-between;
                 align-items: center;
                 background: #ecf0f1;
-                padding: 10px 12px;
+                padding: 8px 10px;
                 border-radius: 8px;
-                margin-bottom: 10px;
+                margin-bottom: 8px;
                 border: 1px solid #bdc3c7;
             }
             body.mob-step-3:not(.mob-other-tab) #cart-items {
                 max-height: none !important;
             }
             body.mob-step-3:not(.mob-other-tab) #cart-items button {
-                width: 38px !important;
-                height: 38px !important;
-                font-size: 18px !important;
+                width: 34px !important;
+                height: 34px !important;
+                font-size: 16px !important;
             }
             body.mob-step-3:not(.mob-other-tab) .mob-right-panel > div:last-child {
                 display: none !important;
@@ -508,7 +515,7 @@ window.initMobilePosWizard = function() {
                 right: 0;
                 background: #2c3e50;
                 color: #fff;
-                padding: 10px 14px;
+                padding: 9px 12px;
                 justify-content: space-between;
                 align-items: center;
                 gap: 8px;
@@ -519,29 +526,162 @@ window.initMobilePosWizard = function() {
             /* TAB LAIN (PENGIRIMAN / PIUTANG / PINJAM GALON) */
             body.mob-other-tab .mob-right-panel { display: none !important; }
 
-            /* LAYER 4 & MODAL FULL-SCREEN DI HP */
-            #review-modal, #piutang-modal, #edit-customer-modal, #add-member-modal,
-            #kurir-modal, #history-modal, #member-history-modal, #shift-report-modal, #cash-drop-modal {
-                z-index: 200 !important;
-            }
-            #review-modal > div,
-            #piutang-modal > div,
-            #edit-customer-modal > div,
-            #add-member-modal > div {
-                width: 100vw !important;
-                max-width: 100vw !important;
-                min-height: 100dvh !important;
-                max-height: 100dvh !important;
-                margin: 0 !important;
-                border-radius: 0 !important;
+            /* =========================================================
+               SEMUA POPUP / MODAL RESPONSIF DI HP (PROPORTIONAL & FIT)
+               ========================================================= */
+            .modal-overlay {
+                z-index: 250 !important;
+                align-items: flex-start !important;
+                justify-content: center !important;
+                padding: 8px 8px calc(74px + env(safe-area-inset-bottom, 0px)) 8px !important;
                 overflow-y: auto !important;
+                -webkit-overflow-scrolling: touch !important;
             }
-            #review-modal input, #review-modal select, #review-modal button,
-            #piutang-modal input, #piutang-modal select, #piutang-modal button,
-            #edit-customer-modal input, #edit-customer-modal button,
-            #add-member-modal input, #add-member-modal button {
-                min-height: 44px !important;
-                font-size: 16px !important;
+            .modal-overlay > .modal-content,
+            .modal-overlay > div {
+                width: 100% !important;
+                max-width: 100% !important;
+                min-height: auto !important;
+                max-height: none !important;
+                margin: 0 auto !important;
+                padding: 14px 12px 16px 12px !important;
+                border-radius: 12px !important;
+                overflow: visible !important;
+                box-sizing: border-box !important;
+                font-size: 13px !important;
+            }
+            .modal-overlay h2 {
+                font-size: 16.5px !important;
+                line-height: 1.25 !important;
+                margin-top: 0 !important;
+                margin-bottom: 8px !important;
+            }
+            .modal-overlay h3 {
+                font-size: 14px !important;
+                line-height: 1.25 !important;
+                margin-top: 0 !important;
+                margin-bottom: 6px !important;
+            }
+            .modal-overlay p {
+                font-size: 12px !important;
+                line-height: 1.35 !important;
+                margin-bottom: 8px !important;
+            }
+            .modal-overlay .form-box {
+                margin-bottom: 10px !important;
+            }
+            .modal-overlay .form-box label,
+            .modal-overlay label {
+                font-size: 12px !important;
+                margin-bottom: 4px !important;
+            }
+            .modal-overlay input,
+            .modal-overlay select,
+            .modal-overlay textarea {
+                font-size: 14px !important;
+                padding: 9px 10px !important;
+                min-height: 40px !important;
+                border-radius: 7px !important;
+                box-sizing: border-box !important;
+            }
+            .modal-overlay input[type="date"] {
+                font-size: 12.5px !important;
+                padding: 8px 6px !important;
+            }
+            .modal-overlay button {
+                font-size: 12.5px !important;
+                padding: 10px 10px !important;
+                min-height: 40px !important;
+                border-radius: 7px !important;
+                line-height: 1.2 !important;
+            }
+
+            /* Modal Laporan Shift (#shift-report-modal) agar lapang & bebas terpotong */
+            #shift-report-modal .stats-grid {
+                display: grid !important;
+                grid-template-columns: 1fr 1fr !important;
+                gap: 7px !important;
+                margin-bottom: 8px !important;
+            }
+            #shift-report-modal .stat-box {
+                padding: 8px 6px !important;
+                border-radius: 8px !important;
+            }
+            #shift-report-modal .stat-label {
+                font-size: 10.5px !important;
+                margin-bottom: 2px !important;
+            }
+            #shift-report-modal .stat-value {
+                font-size: 18px !important;
+            }
+            #shift-report-modal #sr-omset,
+            #shift-report-modal #sr-net,
+            #cash-drop-modal #live-drawer-display {
+                font-size: 20px !important;
+            }
+            /* Ubah grid 2-kolom (Pembayaran Masuk vs Pengeluaran/Hutang) menjadi 1 kolom penuh di HP */
+            #shift-report-modal div[style*="grid-template-columns"]:not(.stats-grid) {
+                display: grid !important;
+                grid-template-columns: 1fr !important;
+                gap: 8px !important;
+            }
+            #shift-report-modal .revenue-breakdown {
+                padding: 10px 12px !important;
+                margin-bottom: 8px !important;
+            }
+            #shift-report-modal .revenue-row {
+                font-size: 13px !important;
+                padding: 5px 0 !important;
+                gap: 8px !important;
+            }
+            #shift-report-modal .revenue-row span:last-child,
+            #shift-report-modal .revenue-row strong:last-child {
+                white-space: nowrap !important;
+                flex-shrink: 0 !important;
+            }
+            /* Baris tombol bawah Laporan Shift: Kembali + Cetak Laporan sebaris, Akhiri Shift penuh di bawah */
+            #shift-report-modal .modal-content > div:last-child {
+                display: flex !important;
+                flex-wrap: wrap !important;
+                gap: 8px !important;
+                margin-top: 10px !important;
+            }
+            #shift-report-modal .modal-content > div:last-child button {
+                flex: 1 1 46% !important;
+                white-space: nowrap !important;
+                padding: 11px 8px !important;
+                font-size: 12.5px !important;
+            }
+            #shift-report-modal #btn-end-shift {
+                flex: 1 1 100% !important;
+                font-size: 13px !important;
+            }
+
+            /* Modal Cari Arsip & Riwayat (#member-history-modal & #history-modal) */
+            #member-history-modal .split-pay-grid {
+                padding: 10px !important;
+                gap: 8px !important;
+                margin-bottom: 10px !important;
+            }
+            #hist-search-results {
+                max-height: 38dvh !important;
+                padding: 8px !important;
+            }
+            #history-container {
+                max-height: 48dvh !important;
+            }
+            .history-row {
+                padding: 9px 10px !important;
+                font-size: 12.5px !important;
+            }
+            .history-row button {
+                padding: 6px 8px !important;
+                font-size: 11.5px !important;
+                min-height: 32px !important;
+            }
+            #review-modal .split-pay-grid {
+                padding: 10px !important;
+                gap: 8px !important;
             }
         }
     `;
