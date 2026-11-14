@@ -58,7 +58,28 @@ window.initMobilePosWizard = function() {
         }
 
         @media (max-width: 768px) {
-            html, body {
+            /* Kunci halaman Login agar tidak bisa di-scroll ke bawah sebelum login */
+            body.mob-login-open {
+                height: 100dvh !important;
+                max-height: 100dvh !important;
+                overflow: hidden !important;
+            }
+            #login-screen:not(.hidden) {
+                height: 100dvh !important;
+                max-height: 100dvh !important;
+                overflow: hidden !important;
+                padding: 16px !important;
+            }
+            #login-screen:not(.hidden) .login-box {
+                padding: 24px 20px !important;
+                max-height: 92dvh !important;
+                overflow-y: auto !important;
+            }
+            #pos-screen.hidden {
+                display: none !important;
+            }
+
+            body:not(.mob-login-open) {
                 height: auto !important;
                 min-height: 100% !important;
                 overflow-x: hidden !important;
@@ -68,14 +89,14 @@ window.initMobilePosWizard = function() {
                 max-width: 100vw !important;
                 position: static !important;
             }
-            #pos-screen {
+            #pos-screen:not(.hidden) {
                 display: block !important;
                 height: auto !important;
                 min-height: 100vh !important;
                 overflow: visible !important;
                 padding-bottom: 115px !important;
             }
-            body.mob-step-1:not(.mob-other-tab) #pos-screen {
+            body.mob-step-1:not(.mob-other-tab) #pos-screen:not(.hidden) {
                 padding-bottom: 45vh !important;
             }
             #main-workspace, #menu-section, #cart-section,
@@ -85,49 +106,104 @@ window.initMobilePosWizard = function() {
                 max-height: none !important;
                 overflow: visible !important;
             }
+            #piutang-section, #pengiriman-section, #peminjam-section {
+                padding: 12px !important;
+            }
+            #piutang-section h2, #pengiriman-section h2, #peminjam-section h2 {
+                font-size: 18px !important;
+                margin-bottom: 10px !important;
+            }
 
-            /* Baris Status Kasir + Tombol Toggle Menu di sebelah Nama Kasir */
-            #pos-screen > div:first-child {
+            /* TOP BAR HP: Baris 1 = Kasir + Absensi (Kanan Atas Fixed), Baris 2 = Status + Tombol Pinned (Settings) + ☰ Menu */
+            #top-bar {
+                display: flex !important;
+                flex-direction: column !important;
+                align-items: stretch !important;
+                gap: 6px !important;
+                padding: 8px 10px !important;
+            }
+            #top-bar > div:first-child {
+                display: flex !important;
+                flex-direction: row !important;
+                align-items: center !important;
+                justify-content: space-between !important;
+                width: 100% !important;
+                gap: 6px !important;
+            }
+            #top-bar > div:first-child > div {
                 display: flex !important;
                 flex-wrap: wrap !important;
                 align-items: center !important;
-                justify-content: space-between !important;
-                gap: 6px !important;
-                padding: 7px 10px !important;
+                gap: 4px !important;
+                flex: 1 !important;
+                min-width: 0 !important;
+                font-size: 12.5px !important;
             }
             #app-version-badge span {
                 font-size: 10px !important;
                 padding: 2px 5px !important;
-                margin-right: 5px !important;
+                margin-right: 4px !important;
             }
-            /* Sembunyikan SEMUA tombol top-bar secara default di HP (kecuali tombol ☰ Menu di sebelah nama kasir) */
-            body.mob-header-collapsed #pos-screen > div:first-child button:not(#mob-menu-toggle-btn) {
+            /* Tombol Absensi selalu tetap (fixed) di kanan atas & tidak pernah disembunyikan */
+            #top-bar > div:first-child button {
+                display: inline-flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                margin-left: auto !important;
+                flex-shrink: 0 !important;
+                padding: 6px 10px !important;
+                font-size: 12px !important;
+                border-radius: 6px !important;
+                white-space: nowrap !important;
+            }
+
+            /* Baris 2: Status Jaringan + Tombol Pinned (dari Settings) + Tombol ☰ Menu sebaris rapi */
+            #top-bar .status-indicator {
+                display: flex !important;
+                flex-wrap: wrap !important;
+                align-items: center !important;
+                justify-content: flex-start !important;
+                width: 100% !important;
+                gap: 5px !important;
+                padding-top: 6px !important;
+                border-top: 1px solid rgba(255,255,255,0.16) !important;
+            }
+            #top-bar .status-indicator > div:first-child {
+                width: 100% !important;
+                display: flex !important;
+                align-items: center !important;
+                flex-wrap: wrap !important;
+                gap: 5px !important;
+                margin-bottom: 2px !important;
+            }
+            /* Sembunyikan hanya tombol non-pinned saat menu tertutup */
+            body.mob-header-collapsed #top-bar .status-indicator button.mob-collapsible-btn {
                 display: none !important;
             }
-            #pos-screen > div:first-child button:not(#mob-menu-toggle-btn) {
-                padding: 7px 10px !important;
-                font-size: 12px !important;
+            #top-bar .status-indicator button {
+                flex: 1 1 auto !important;
+                min-width: 0 !important;
+                padding: 7px 8px !important;
+                font-size: 11.5px !important;
                 margin: 0 !important;
                 border-radius: 6px !important;
+                text-align: center !important;
+                white-space: nowrap !important;
             }
             #mob-menu-toggle-btn {
                 display: inline-flex !important;
-                align-items: center;
-                gap: 4px;
-                padding: 5px 10px !important;
-                margin-left: 6px !important;
-                border-radius: 6px !important;
-                font-size: 11.5px !important;
+                align-items: center !important;
+                justify-content: center !important;
+                flex: 1 1 auto !important;
                 font-weight: bold !important;
                 background: #e67e22 !important;
                 color: #ffffff !important;
                 border: 1px solid #f39c12 !important;
                 cursor: pointer !important;
-                white-space: nowrap !important;
             }
             body:not(.mob-header-collapsed) #mob-menu-toggle-btn {
                 background: #34495e !important;
-                border-color: #7f8c8d !important;
+                border-color: #95a5a6 !important;
             }
 
             /* Baris Tab Utama (Pesanan Baru, Pengiriman, Piutang, Pinjam Galon) */
@@ -474,20 +550,51 @@ window.initMobilePosWizard = function() {
     `;
     mainWorkspace.parentNode.insertBefore(stepper, mainWorkspace);
 
-    // 1a. Pasang tombol ☰ Menu / ▲ Tutup tepat di sebelah Nama Kasir pada baris paling atas
-    const cashierEl = document.getElementById("display-cashier");
-    if (cashierEl && cashierEl.parentNode && !document.getElementById("mob-menu-toggle-btn")) {
+    // 1a. Pasang tombol ☰ Menu / ▲ Tutup sebaris dengan tombol Pinned di .status-indicator
+    const statusIndicator = document.querySelector("#top-bar .status-indicator");
+    if (statusIndicator && !document.getElementById("mob-menu-toggle-btn")) {
         const toggleBtn = document.createElement("button");
         toggleBtn.type = "button";
         toggleBtn.id = "mob-menu-toggle-btn";
+        toggleBtn.className = "btn-top";
         toggleBtn.style.display = "none"; // Hanya tampil di layar HP via @media (max-width: 768px)
         toggleBtn.innerText = "☰ Menu";
         toggleBtn.onclick = (ev) => {
             ev.stopPropagation();
             window.toggleMobileTopMenu();
         };
-        cashierEl.parentNode.appendChild(toggleBtn);
+        statusIndicator.appendChild(toggleBtn);
     }
+
+    // Pisahkan tombol Fixed/Pinned (dari Settings -> Mobile_Pinned_Buttons) vs tombol yang masuk ke dalam ☰ Menu
+    window.refreshMobileTopBarLayout = function() {
+        const pinnedKeywords = Array.isArray(window.mobilePinnedButtons)
+            ? window.mobilePinnedButtons
+            : ["printer", "sync", "riwayat"];
+
+        const isPinnedBtn = (btn) => {
+            if (!btn || btn.id === "mob-menu-toggle-btn" || btn.id === "btn-install") return true;
+            let clean = String(btn.innerText || "").toLowerCase().trim();
+            return pinnedKeywords.some(kw => kw && (clean.includes(kw) || (btn.id && btn.id.toLowerCase().includes(kw))));
+        };
+
+        const indicator = document.querySelector("#top-bar .status-indicator");
+        const toggleBtn = document.getElementById("mob-menu-toggle-btn");
+        if (indicator) {
+            const btns = Array.from(indicator.querySelectorAll("button")).filter(b => b.id !== "mob-menu-toggle-btn");
+            btns.forEach(btn => {
+                if (isPinnedBtn(btn)) {
+                    btn.classList.remove("mob-collapsible-btn");
+                    // Letakkan tombol pinned tepat sebelum tombol ☰ Menu agar sebaris rapi
+                    if (toggleBtn && toggleBtn.parentNode === indicator) {
+                        indicator.insertBefore(btn, toggleBtn);
+                    }
+                } else {
+                    btn.classList.add("mob-collapsible-btn");
+                }
+            });
+        }
+    };
 
     window.syncMobileMenuToggleBtn = function() {
         const btn = document.getElementById("mob-menu-toggle-btn");
@@ -504,15 +611,27 @@ window.initMobilePosWizard = function() {
             document.body.classList.add("mob-header-collapsed");
         }
         window.syncMobileMenuToggleBtn();
-        if (window.updateMobileAcViewport) setTimeout(window.updateMobileAcViewport, 200);
     };
+
+    // Sinkronkan status Login Screen agar halaman Login terkunci (tidak bisa di-scroll ke bawah)
+    const syncLoginLockClass = () => {
+        const loginEl = document.getElementById("login-screen");
+        const isLoginVisible = loginEl && !loginEl.classList.contains("hidden");
+        document.body.classList.toggle("mob-login-open", !!isLoginVisible);
+    };
+    syncLoginLockClass();
+    const loginElObs = document.getElementById("login-screen");
+    if (loginElObs) {
+        new MutationObserver(syncLoginLockClass).observe(loginElObs, { attributes: true, attributeFilter: ["class"] });
+    }
 
     new MutationObserver(() => {
         if (window.syncMobileMenuToggleBtn) window.syncMobileMenuToggleBtn();
     }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
 
-    // Mulai dengan semua tombol atas tersembunyi (collapsed) di HP
+    // Mulai dengan tombol non-pinned terlipat rapi di HP
     document.body.classList.add("mob-header-collapsed");
+    window.refreshMobileTopBarLayout();
     window.syncMobileMenuToggleBtn();
 
     // 1a. Pindahkan Tab Antrean 1-3 ke bagian atas layar HP agar bisa dipilih sejak awal
@@ -2683,13 +2802,14 @@ window.renderPiutangList = async function() {
         let dispPhone = String(m.phone || "").startsWith("TANPA-WA") ? "Tanpa WA" : String(m.phone || "").replace(/-DUP\d+$/, "");
         let safePhoneKey = String(m.phone || "").replace(/'/g, "\\'");
         return `
-        <div style="border:1px solid #bdc3c7; border-left:5px solid #d35400; padding:15px; border-radius:6px; background:#fdf2e9; display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
-            <div>
-                <strong style="color:#2c3e50; font-size:16px;">${m.name}</strong> <span style="font-size:14px; color:#7f8c8d;">(${dispPhone})</span><br>
-                💰 <strong style="color:#c0392b; font-size:18px;">Rp ${m._tempBranchPiutang.toLocaleString('id-ID')}</strong>
+        <div style="border:1px solid #e6d5c3; border-left:5px solid #d35400; padding:12px 14px; border-radius:8px; background:#fdf6ef; display:flex; flex-wrap:nowrap; justify-content:space-between; align-items:center; gap:10px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+            <div style="flex:1; min-width:0; text-align:left;">
+                <div style="font-weight:700; color:#2c3e50; font-size:15px; line-height:1.3; word-break:break-word;">${m.name}</div>
+                <div style="font-size:12.5px; color:#5d6d7e; margin-top:2px;">📱 ${dispPhone}</div>
+                <div style="font-size:15.5px; font-weight:800; color:#c0392b; margin-top:4px;">💰 Rp ${m._tempBranchPiutang.toLocaleString('id-ID')}</div>
             </div>
-            <div>
-                <button onclick="window.triggerBayarPiutang('${safePhoneKey}')" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Lunasi Piutang</button>
+            <div style="flex-shrink:0;">
+                <button onclick="window.triggerBayarPiutang('${safePhoneKey}')" style="background:#27ae60; color:white; border:none; padding:10px 13px; border-radius:7px; font-weight:bold; font-size:12.5px; white-space:nowrap; cursor:pointer;">Lunasi Piutang</button>
             </div>
         </div>`;
     }).join("");
