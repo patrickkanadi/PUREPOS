@@ -63,6 +63,7 @@ window.initMobilePosWizard = function() {
                 min-height: 100dvh !important;
                 overflow-x: hidden !important;
                 overflow-y: auto !important;
+                overscroll-behavior-y: contain !important;
                 -webkit-overflow-scrolling: touch !important;
                 max-width: 100vw !important;
             }
@@ -81,44 +82,42 @@ window.initMobilePosWizard = function() {
                 overflow: visible !important;
             }
 
-            /* Header atas & tab: muat di layar HP 360px, otomatis lipat saat cari pelanggan, & muncul saat tarik scroll ke atas */
+            /* Baris Status Kasir & Tombol Tersemat (Pinned) di HP */
             #pos-screen > div:first-child {
+                display: flex !important;
                 flex-wrap: wrap !important;
-                gap: 6px !important;
-                padding: 8px 10px !important;
-                max-height: 260px;
-                opacity: 1;
-                overflow: hidden;
-                transition: max-height 0.22s ease, opacity 0.18s ease, padding 0.22s ease;
+                align-items: center !important;
+                justify-content: space-between !important;
+                gap: 5px !important;
+                padding: 6px 8px !important;
+            }
+            #pos-screen > div:first-child .mob-hide-on-collapse {
+                transition: opacity 0.15s ease;
+            }
+            body.mob-header-collapsed #pos-screen > div:first-child .mob-collapsible-btn {
+                display: none !important;
             }
             #pos-screen > div:first-child button {
-                padding: 6px 9px !important;
-                font-size: 12px !important;
+                padding: 6px 8px !important;
+                font-size: 11.5px !important;
+                margin: 0 !important;
+                border-radius: 6px !important;
             }
+            /* Baris Tab Utama (Pesanan Baru + Tab Pinned di luar menu, sisanya masuk ke dalam Menu) */
             .mob-main-tabs-bar {
-                max-height: 80px;
-                opacity: 1;
-                overflow: hidden;
-                transition: max-height 0.22s ease, opacity 0.18s ease, border-width 0.22s ease;
+                display: flex !important;
+                flex-wrap: wrap !important;
+                gap: 0 !important;
             }
-            body.mob-header-collapsed #pos-screen > div:first-child {
-                max-height: 0 !important;
-                opacity: 0 !important;
-                padding-top: 0 !important;
-                padding-bottom: 0 !important;
-                pointer-events: none !important;
-            }
-            body.mob-header-collapsed .mob-main-tabs-bar {
-                max-height: 0 !important;
-                opacity: 0 !important;
-                border-bottom-width: 0 !important;
-                pointer-events: none !important;
+            body.mob-header-collapsed .mob-main-tabs-bar .mob-collapsible-tab {
+                display: none !important;
             }
             #tab-new-order, #tab-left-pengiriman, #tab-left-piutang, #tab-left-peminjam {
                 min-width: 0 !important;
-                font-size: 11px !important;
-                padding: 8px 3px !important;
-                white-space: normal !important;
+                flex: 1 1 auto !important;
+                font-size: 11.5px !important;
+                padding: 8px 4px !important;
+                white-space: nowrap !important;
                 line-height: 1.2 !important;
             }
             .mob-cart-tab-bar {
@@ -134,13 +133,13 @@ window.initMobilePosWizard = function() {
                 padding: 8px 4px !important;
             }
 
-            /* Stepper 4-Lapisan Khusus HP */
+            /* Stepper 4-Lapisan + Tombol Toggle Menu Lainnya Khusus HP */
             #mobile-wizard-stepper {
                 display: flex !important;
                 align-items: center;
                 justify-content: space-between;
                 background: #1e272e;
-                padding: 8px 10px;
+                padding: 7px 8px;
                 gap: 4px;
                 position: sticky;
                 top: 0;
@@ -150,18 +149,39 @@ window.initMobilePosWizard = function() {
             body.mob-other-tab #mobile-wizard-stepper,
             body.mob-other-tab .mob-cart-tab-bar { display: none !important; }
 
-            .mob-step-pill {
-                flex: 1;
-                text-align: center;
-                padding: 8px 3px;
+            #mob-menu-toggle-btn {
+                flex: 0 0 auto;
+                padding: 8px 8px;
                 border-radius: 6px;
                 font-size: 11px;
+                font-weight: bold;
+                background: #34495e;
+                color: #ecf0f1;
+                border: 1px solid #5d6d7e;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            body.mob-header-collapsed #mob-menu-toggle-btn {
+                background: #e67e22;
+                color: #ffffff;
+                border-color: #f39c12;
+            }
+
+            .mob-step-pill {
+                flex: 1;
+                min-width: 0;
+                text-align: center;
+                padding: 8px 2px;
+                border-radius: 6px;
+                font-size: 10.5px;
                 font-weight: bold;
                 color: #95a5a6;
                 background: #2f3640;
                 border: 1px solid transparent;
                 cursor: pointer;
                 white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
             }
             .mob-step-pill.active {
                 background: #3498db;
@@ -439,16 +459,85 @@ window.initMobilePosWizard = function() {
         productGrid.parentElement.classList.add("mob-menu-wrapper");
     }
 
-    // 1. Stepper 4-Layer di atas layar HP
+    // 1. Stepper 4-Layer + Tombol Toggle Menu Atas di HP
     const stepper = document.createElement("div");
     stepper.id = "mobile-wizard-stepper";
     stepper.innerHTML = `
+        <button type="button" id="mob-menu-toggle-btn" onclick="window.toggleMobileTopMenu()">▲ Tutup</button>
         <div class="mob-step-pill active" id="mob-pill-1" onclick="window.setMobilePosStep(1)">1. Pelanggan</div>
         <div class="mob-step-pill" id="mob-pill-2" onclick="window.setMobilePosStep(2)">2. Menu</div>
         <div class="mob-step-pill" id="mob-pill-3" onclick="window.setMobilePosStep(3)">3. Keranjang</div>
         <div class="mob-step-pill" id="mob-pill-4" onclick="window.reviewOrder()">4. Bayar</div>
     `;
     mainWorkspace.parentNode.insertBefore(stepper, mainWorkspace);
+
+    window.refreshMobileTopBarLayout = function() {
+        const pinnedKeywords = Array.isArray(window.mobilePinnedButtons)
+            ? window.mobilePinnedButtons
+            : ["printer", "sync", "riwayat", "pengiriman", "piutang"];
+
+        const isPinnedLabel = (rawText, elId) => {
+            if (elId === "tab-new-order") return true; // Tab utama Pesanan Baru selalu tampil
+            let clean = String(rawText || "").toLowerCase().replace(/\(\d+\)/g, "").trim();
+            return pinnedKeywords.some(kw => kw && (clean.includes(kw) || (elId && elId.toLowerCase().includes(kw))));
+        };
+
+        // 1. Tandai tombol di top-bar (#pos-screen > div:first-child)
+        const topBar = document.querySelector("#pos-screen > div:first-child");
+        if (topBar) {
+            topBar.querySelectorAll("button").forEach(btn => {
+                if (btn.id === "mob-menu-toggle-btn") return;
+                if (isPinnedLabel(btn.innerText, btn.id)) {
+                    btn.classList.remove("mob-collapsible-btn");
+                } else {
+                    btn.classList.add("mob-collapsible-btn");
+                }
+            });
+        }
+
+        // 2. Tandai tab sekunder di .mob-main-tabs-bar
+        const mainTabsBar = document.querySelector(".mob-main-tabs-bar");
+        if (mainTabsBar) {
+            mainTabsBar.querySelectorAll("button").forEach(btn => {
+                if (isPinnedLabel(btn.innerText, btn.id)) {
+                    btn.classList.remove("mob-collapsible-tab");
+                } else {
+                    btn.classList.add("mob-collapsible-tab");
+                }
+            });
+        }
+    };
+
+    window.syncMobileMenuToggleBtn = function() {
+        const btn = document.getElementById("mob-menu-toggle-btn");
+        if (!btn) return;
+        const isCollapsed = document.body.classList.contains("mob-header-collapsed");
+        btn.innerText = isCollapsed ? "☰ Menu" : "▲ Tutup";
+    };
+
+    window.toggleMobileTopMenu = function() {
+        const isCollapsed = document.body.classList.contains("mob-header-collapsed");
+        if (isCollapsed) {
+            document.body.classList.remove("mob-header-collapsed", "mob-kb-open");
+            if (document.activeElement && (document.activeElement.id === "cust-phone" || document.activeElement.id === "cust-name")) {
+                document.activeElement.blur();
+            }
+            window.scrollTo({ top: 0, behavior: "smooth" });
+        } else {
+            document.body.classList.add("mob-header-collapsed");
+        }
+        window.syncMobileMenuToggleBtn();
+        if (window.updateMobileAcViewport) setTimeout(window.updateMobileAcViewport, 240);
+    };
+
+    new MutationObserver(() => {
+        if (window.syncMobileMenuToggleBtn) window.syncMobileMenuToggleBtn();
+    }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+
+    // Mulai dengan menu sekunder terlipat rapi di HP (hanya tombol Pinned yang terlihat di luar)
+    document.body.classList.add("mob-header-collapsed");
+    window.refreshMobileTopBarLayout();
+    window.syncMobileMenuToggleBtn();
 
     // 1a. Pindahkan Tab Antrean 1-3 ke bagian atas layar HP agar bisa dipilih sejak awal
     const tabBtn0 = document.getElementById("tab-btn-0");
@@ -614,7 +703,8 @@ window.setMobilePosStep = function(step) {
         step = 1;
     }
     if (step >= 2) {
-        document.body.classList.remove("mob-kb-open", "mob-header-collapsed");
+        document.body.classList.remove("mob-kb-open");
+        document.body.classList.add("mob-header-collapsed");
     }
     window.mobilePosStep = step;
     if (window.posSessions && window.posSessions[window.activeSessionIndex]) {
@@ -693,6 +783,12 @@ window.applySettingsToMemory = function(settingsObj) {
     }
     window.loyaltyEnabled = String(settingsObj["Enable_Loyalty"]).toUpperCase() === "TRUE";
     window.historyHours = Number(settingsObj["History_Hours"] || settingsObj["Riwayat_Hours"]) || 24;
+
+    let rawPinned = settingsObj["Mobile_Pinned_Buttons"] !== undefined
+        ? String(settingsObj["Mobile_Pinned_Buttons"])
+        : "Printer, Sync, Riwayat, Pengiriman, Piutang";
+    window.mobilePinnedButtons = rawPinned.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+    if (window.refreshMobileTopBarLayout) window.refreshMobileTopBarLayout();
 };
 
 window.parseVolumeDiscountSetting = function(valStr) {
@@ -5056,7 +5152,8 @@ window.updateTabStyles = function(activeId) {
 }
 
 window.showNewOrder = function() {
-    document.body.classList.remove("mob-other-tab");
+    document.body.classList.remove("mob-other-tab", "mob-kb-open");
+    document.body.classList.add("mob-header-collapsed");
     document.getElementById("pengiriman-section").classList.add("hidden");
     document.getElementById("piutang-section").classList.add("hidden");
     let pSec = document.getElementById("peminjam-section"); if (pSec) pSec.classList.add("hidden");
@@ -5070,6 +5167,7 @@ window.showNewOrder = function() {
 }
 
 window.showPengirimanTab = function() {
+    document.body.classList.remove("mob-header-collapsed", "mob-kb-open");
     document.body.classList.add("mob-other-tab");
     document.getElementById("command-bar").classList.add("hidden");
     document.getElementById("category-container").classList.add("hidden");
@@ -5085,6 +5183,7 @@ window.showPengirimanTab = function() {
 }
 
 window.showPiutangTab = function() {
+    document.body.classList.remove("mob-header-collapsed", "mob-kb-open");
     document.body.classList.add("mob-other-tab");
     document.getElementById("command-bar").classList.add("hidden");
     document.getElementById("category-container").classList.add("hidden");
@@ -5101,6 +5200,7 @@ window.showPiutangTab = function() {
 }
 
 window.showPeminjamTab = function() {
+    document.body.classList.remove("mob-header-collapsed", "mob-kb-open");
     document.body.classList.add("mob-other-tab");
     document.getElementById("command-bar").classList.add("hidden");
     document.getElementById("category-container").classList.add("hidden");
