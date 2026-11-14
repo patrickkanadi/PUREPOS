@@ -657,7 +657,7 @@ window.initMobilePosWizard = function() {
                 font-size: 13px !important;
             }
 
-            /* Modal Cari Arsip & Riwayat (#member-history-modal & #history-modal) */
+            /* Modal Cari Arsip, Riwayat, & Absensi (#member-history-modal, #history-modal, #absensi-modal) */
             #member-history-modal .split-pay-grid {
                 padding: 10px !important;
                 gap: 8px !important;
@@ -667,6 +667,9 @@ window.initMobilePosWizard = function() {
                 max-height: 38dvh !important;
                 padding: 8px !important;
             }
+            #hist-search-results > div > div {
+                min-width: 0 !important;
+            }
             #history-container {
                 max-height: 48dvh !important;
             }
@@ -674,10 +677,29 @@ window.initMobilePosWizard = function() {
                 padding: 9px 10px !important;
                 font-size: 12.5px !important;
             }
+            .history-row > div:last-child {
+                width: 100% !important;
+                flex-wrap: wrap !important;
+                justify-content: flex-start !important;
+                gap: 6px !important;
+            }
             .history-row button {
-                padding: 6px 8px !important;
+                padding: 6px 9px !important;
                 font-size: 11.5px !important;
                 min-height: 32px !important;
+            }
+            #absensi-list {
+                max-height: 55dvh !important;
+            }
+            #absensi-list > div {
+                padding: 10px !important;
+                font-size: 12.5px !important;
+                gap: 8px !important;
+            }
+            #absensi-list button {
+                padding: 7px 11px !important;
+                font-size: 12px !important;
+                min-height: 34px !important;
             }
             #review-modal .split-pay-grid {
                 padding: 10px !important;
