@@ -59,7 +59,10 @@ window.initMobilePosWizard = function() {
 
         @media (max-width: 768px) {
             /* Kunci halaman Login agar tidak bisa di-scroll ke bawah sebelum login */
-            body.mob-login-open {
+            html.mob-login-html, body.mob-login-open {
+                position: fixed !important;
+                inset: 0 !important;
+                width: 100% !important;
                 height: 100dvh !important;
                 max-height: 100dvh !important;
                 overflow: hidden !important;
@@ -79,9 +82,11 @@ window.initMobilePosWizard = function() {
                 display: none !important;
             }
 
-            body:not(.mob-login-open) {
+            /* Buka kunci scroll penuh pada html & body setelah login */
+            html:not(.mob-login-html), body:not(.mob-login-open) {
                 height: auto !important;
                 min-height: 100% !important;
+                max-height: none !important;
                 overflow-x: hidden !important;
                 overflow-y: auto !important;
                 -webkit-overflow-scrolling: touch !important;
@@ -93,15 +98,16 @@ window.initMobilePosWizard = function() {
                 display: block !important;
                 height: auto !important;
                 min-height: 100vh !important;
+                max-height: none !important;
                 overflow: visible !important;
-                padding-bottom: 115px !important;
+                padding-bottom: 120px !important;
             }
             body.mob-step-1:not(.mob-other-tab) #pos-screen:not(.hidden) {
-                padding-bottom: 45vh !important;
+                padding-bottom: 48vh !important;
             }
-            #main-workspace, #menu-section, #cart-section,
+            #main-workspace, #menu-section, #cart-section, #product-grid, #cart-items,
             #pengiriman-section, #piutang-section, #peminjam-section,
-            .mob-main-workspace, .mob-left-panel, .mob-right-panel {
+            .mob-main-workspace, .mob-left-panel, .mob-right-panel, .mob-menu-wrapper {
                 height: auto !important;
                 max-height: none !important;
                 overflow: visible !important;
@@ -114,7 +120,7 @@ window.initMobilePosWizard = function() {
                 margin-bottom: 10px !important;
             }
 
-            /* TOP BAR HP: Baris 1 = Kasir + Absensi (Kanan Atas Fixed), Baris 2 = Status + Tombol Pinned (Settings) + ☰ Menu */
+            /* TOP BAR HP: Baris 1 = Kasir + Lokasi + [☰ Menu] + [⏱️ Absensi], Baris 2 = Status + Tombol Pinned (Settings) */
             #top-bar {
                 display: flex !important;
                 flex-direction: column !important;
@@ -128,36 +134,58 @@ window.initMobilePosWizard = function() {
                 align-items: center !important;
                 justify-content: space-between !important;
                 width: 100% !important;
-                gap: 6px !important;
+                gap: 5px !important;
             }
             #top-bar > div:first-child > div {
                 display: flex !important;
                 flex-wrap: wrap !important;
                 align-items: center !important;
-                gap: 4px !important;
+                gap: 3px 5px !important;
                 flex: 1 !important;
                 min-width: 0 !important;
-                font-size: 12.5px !important;
+                font-size: 12px !important;
+                line-height: 1.25 !important;
             }
             #app-version-badge span {
-                font-size: 10px !important;
+                font-size: 9.5px !important;
                 padding: 2px 5px !important;
-                margin-right: 4px !important;
+                margin-right: 3px !important;
             }
-            /* Tombol Absensi selalu tetap (fixed) di kanan atas & tidak pernah disembunyikan */
-            #top-bar > div:first-child button {
+            /* Tombol ☰ Menu tepat di antara Lokasi Cabang dan Tombol Absensi */
+            #mob-menu-toggle-btn {
                 display: inline-flex !important;
                 align-items: center !important;
                 justify-content: center !important;
                 margin-left: auto !important;
                 flex-shrink: 0 !important;
-                padding: 6px 10px !important;
-                font-size: 12px !important;
+                padding: 6px 9px !important;
+                font-size: 11.5px !important;
+                font-weight: bold !important;
+                border-radius: 6px !important;
+                background: #e67e22 !important;
+                color: #ffffff !important;
+                border: 1px solid #f39c12 !important;
+                cursor: pointer !important;
+                white-space: nowrap !important;
+            }
+            body:not(.mob-header-collapsed) #mob-menu-toggle-btn {
+                background: #34495e !important;
+                border-color: #95a5a6 !important;
+            }
+            /* Tombol Absensi tetap (fixed) di kanan atas & tidak pernah disembunyikan */
+            #top-bar > div:first-child button:not(#mob-menu-toggle-btn) {
+                display: inline-flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                margin-left: 0 !important;
+                flex-shrink: 0 !important;
+                padding: 6px 9px !important;
+                font-size: 11.5px !important;
                 border-radius: 6px !important;
                 white-space: nowrap !important;
             }
 
-            /* Baris 2: Status Jaringan + Tombol Pinned (dari Settings) + Tombol ☰ Menu sebaris rapi */
+            /* Baris 2: Status Jaringan + Tombol Pinned (dari Settings) */
             #top-bar .status-indicator {
                 display: flex !important;
                 flex-wrap: wrap !important;
@@ -176,8 +204,9 @@ window.initMobilePosWizard = function() {
                 gap: 5px !important;
                 margin-bottom: 2px !important;
             }
-            /* Sembunyikan hanya tombol non-pinned saat menu tertutup */
-            body.mob-header-collapsed #top-bar .status-indicator button.mob-collapsible-btn {
+            /* Sembunyikan hanya tombol non-pinned saat menu tertutup, serta tombol .hidden */
+            body.mob-header-collapsed #top-bar .status-indicator button.mob-collapsible-btn,
+            #top-bar .status-indicator button.hidden {
                 display: none !important;
             }
             #top-bar .status-indicator button {
@@ -189,21 +218,6 @@ window.initMobilePosWizard = function() {
                 border-radius: 6px !important;
                 text-align: center !important;
                 white-space: nowrap !important;
-            }
-            #mob-menu-toggle-btn {
-                display: inline-flex !important;
-                align-items: center !important;
-                justify-content: center !important;
-                flex: 1 1 auto !important;
-                font-weight: bold !important;
-                background: #e67e22 !important;
-                color: #ffffff !important;
-                border: 1px solid #f39c12 !important;
-                cursor: pointer !important;
-            }
-            body:not(.mob-header-collapsed) #mob-menu-toggle-btn {
-                background: #34495e !important;
-                border-color: #95a5a6 !important;
             }
 
             /* Baris Tab Utama (Pesanan Baru, Pengiriman, Piutang, Pinjam Galon) */
@@ -550,9 +564,9 @@ window.initMobilePosWizard = function() {
     `;
     mainWorkspace.parentNode.insertBefore(stepper, mainWorkspace);
 
-    // 1a. Pasang tombol ☰ Menu / ▲ Tutup sebaris dengan tombol Pinned di .status-indicator
-    const statusIndicator = document.querySelector("#top-bar .status-indicator");
-    if (statusIndicator && !document.getElementById("mob-menu-toggle-btn")) {
+    // 1a. Pasang tombol ☰ Menu / ▲ Tutup tepat di antara Lokasi Cabang dan tombol ⏱️ Absensi pada baris paling atas
+    const topRow1 = document.querySelector("#top-bar > div:first-child");
+    if (topRow1 && !document.getElementById("mob-menu-toggle-btn")) {
         const toggleBtn = document.createElement("button");
         toggleBtn.type = "button";
         toggleBtn.id = "mob-menu-toggle-btn";
@@ -563,7 +577,12 @@ window.initMobilePosWizard = function() {
             ev.stopPropagation();
             window.toggleMobileTopMenu();
         };
-        statusIndicator.appendChild(toggleBtn);
+        const absensiBtn = topRow1.querySelector("button");
+        if (absensiBtn) {
+            topRow1.insertBefore(toggleBtn, absensiBtn);
+        } else {
+            topRow1.appendChild(toggleBtn);
+        }
     }
 
     // Pisahkan tombol Fixed/Pinned (dari Settings -> Mobile_Pinned_Buttons) vs tombol yang masuk ke dalam ☰ Menu
@@ -573,26 +592,27 @@ window.initMobilePosWizard = function() {
             : ["printer", "sync", "riwayat"];
 
         const isPinnedBtn = (btn) => {
-            if (!btn || btn.id === "mob-menu-toggle-btn" || btn.id === "btn-install") return true;
+            if (!btn || btn.id === "mob-menu-toggle-btn") return true;
             let clean = String(btn.innerText || "").toLowerCase().trim();
             return pinnedKeywords.some(kw => kw && (clean.includes(kw) || (btn.id && btn.id.toLowerCase().includes(kw))));
         };
 
         const indicator = document.querySelector("#top-bar .status-indicator");
-        const toggleBtn = document.getElementById("mob-menu-toggle-btn");
         if (indicator) {
             const btns = Array.from(indicator.querySelectorAll("button")).filter(b => b.id !== "mob-menu-toggle-btn");
+            const pinnedBtns = [];
+            const extraBtns = [];
             btns.forEach(btn => {
                 if (isPinnedBtn(btn)) {
                     btn.classList.remove("mob-collapsible-btn");
-                    // Letakkan tombol pinned tepat sebelum tombol ☰ Menu agar sebaris rapi
-                    if (toggleBtn && toggleBtn.parentNode === indicator) {
-                        indicator.insertBefore(btn, toggleBtn);
-                    }
+                    pinnedBtns.push(btn);
                 } else {
                     btn.classList.add("mob-collapsible-btn");
+                    extraBtns.push(btn);
                 }
             });
+            pinnedBtns.forEach(btn => indicator.appendChild(btn));
+            extraBtns.forEach(btn => indicator.appendChild(btn));
         }
     };
 
@@ -613,10 +633,11 @@ window.initMobilePosWizard = function() {
         window.syncMobileMenuToggleBtn();
     };
 
-    // Sinkronkan status Login Screen agar halaman Login terkunci (tidak bisa di-scroll ke bawah)
+    // Sinkronkan status Login Screen agar halaman Login terkunci, dan halaman POS bisa di-scroll penuh setelah login
     const syncLoginLockClass = () => {
         const loginEl = document.getElementById("login-screen");
         const isLoginVisible = loginEl && !loginEl.classList.contains("hidden");
+        document.documentElement.classList.toggle("mob-login-html", !!isLoginVisible);
         document.body.classList.toggle("mob-login-open", !!isLoginVisible);
     };
     syncLoginLockClass();
