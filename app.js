@@ -1932,7 +1932,8 @@ window.syncBackgroundData = async function() {
                                 ordStore.put(o);
                             } else {
                                 let isLocalUnsynced = (existing.syncStatus === "Pending" || existing.syncStatus === "Syncing" || pendingVoidIds.has(o.orderId));
-                                let isAlreadyDeliveredLocally = String(existing.deliveryStatus || "").startsWith("Terkirim") && o.deliveryStatus === "Pending";
+                                let recentlyDelivered = existing.deliveredAtMs && (Date.now() - existing.deliveredAtMs < 300000);
+                                let isAlreadyDeliveredLocally = String(existing.deliveryStatus || "").startsWith("Terkirim") && (o.deliveryStatus === "Pending" || recentlyDelivered);
                                 let isDebtReducedLocally = (existing.debtAmount !== undefined && o.debtAmount !== undefined && existing.debtAmount < o.debtAmount);
                                 let isLocalVoided = (existing.orderStatus === "Voided" && o.orderStatus !== "Voided");
                                 
@@ -3136,13 +3137,13 @@ window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
 }
 
 window.autoBalancePiutangPay = function() {
-    const c = Number(document.getElementById("piutang-pay-cash").value) || 0; 
-    const q = Number(document.getElementById("piutang-pay-qris").value) || 0; 
-    const t = Number(document.getElementById("piutang-pay-transfer").value) || 0;
+    const c = window.parsePayNum("piutang-pay-cash"); 
+    const q = window.parsePayNum("piutang-pay-qris"); 
+    const t = window.parsePayNum("piutang-pay-transfer");
     const totalReceived = c + q + t;
     
-    const parkir = Number(document.getElementById("piutang-parkir").value) || 0;
-    const tip = Number(document.getElementById("piutang-tip").value) || 0;
+    const parkir = window.parsePayNum("piutang-parkir");
+    const tip = window.parsePayNum("piutang-tip");
     const totalExtra = parkir + tip;
 
     const debtPaid = totalReceived - totalExtra;
@@ -3162,11 +3163,11 @@ window.autoBalancePiutangPay = function() {
 }
 
 window.submitPiutang = function() {
-    const c = Number(document.getElementById("piutang-pay-cash").value) || 0; 
-    const q = Number(document.getElementById("piutang-pay-qris").value) || 0; 
-    const t = Number(document.getElementById("piutang-pay-transfer").value) || 0;
-    const parkir = Number(document.getElementById("piutang-parkir").value) || 0;
-    const tip = Number(document.getElementById("piutang-tip").value) || 0;
+    const c = window.parsePayNum("piutang-pay-cash"); 
+    const q = window.parsePayNum("piutang-pay-qris"); 
+    const t = window.parsePayNum("piutang-pay-transfer");
+    const parkir = window.parsePayNum("piutang-parkir");
+    const tip = window.parsePayNum("piutang-tip");
     
     let totalReceived = c + q + t;
     let totalExtra = parkir + tip;
@@ -3193,7 +3194,7 @@ window.submitPiutang = function() {
         let netC = c; let netQ = q; let netT = t;
         let remExtra = parkir + tip;
         
-        // Deduct both Parkir and Tip from net Piutang payment because Tip is logged separately in [6] TIP KURIR & Saldo_Laci
+        // Potong Parkir/Tip dari Tunai terlebih dahulu; hanya potong QRIS/Transfer jika pelanggan melebihkan transfer/QRIS
         if (remExtra > 0 && netC > 0) { let d = Math.min(remExtra, netC); netC -= d; remExtra -= d; }
         if (remExtra > 0 && netQ > 0) { let d = Math.min(remExtra, netQ); netQ -= d; remExtra -= d; }
         if (remExtra > 0 && netT > 0) { let d = Math.min(remExtra, netT); netT -= d; remExtra -= d; }
@@ -3339,6 +3340,13 @@ window.finalizeOrder = async function(shouldPrint) {
     const orderNotes = document.getElementById("order-notes") ? document.getElementById("order-notes").value.trim() : "";
 
     let isDeliveryFinal = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
+
+    // Jika kasir mengisi QRIS/Transfer namun #pay-cash belum ter-update (misal autofill/paste tanpa event oninput), sesuaikan otomatis
+    if ((qris > 0 || transfer > 0) && cash === window.cartGrandTotal && remaining !== 0) {
+        window.autoBalanceCash();
+        return window.finalizeOrder(shouldPrint);
+    }
+
     if (isDeliveryFinal && cash > 0) return alert("⚠️ PEMBAYARAN DITOLAK:\nPesanan Pengiriman tidak dapat dibayar menggunakan Tunai/Cash di awal.\n\nSilakan gunakan QRIS, Transfer, atau masukkan ke Piutang (agar ditagih oleh kurir).");
 
     if (remaining !== 0) return alert("⚠️ PEMBAYARAN DITOLAK:\nTotal pembayaran (termasuk hutang) harus persis sama dengan Total Akhir.");
@@ -5851,9 +5859,10 @@ window.submitDeliveryDone = function() {
         }
         
         order.deliveryStatus = "Terkirim (" + window.getWibDate() + ")";
+        order.deliveredAtMs = Date.now();
         order.orderStatus = "Completed"; 
         order.courier = courier; 
-        order.swapGalon = isSwap; 
+        order.swapGalon = isSwap;
 
         if (pinjamQty > 0) {
             order.rentBottleQty = (order.rentBottleQty || 0) + pinjamQty;
