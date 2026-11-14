@@ -2644,6 +2644,15 @@ window.reviewOrder = function() {
     }
 }
 
+window.parsePayNum = function(id) {
+    const el = document.getElementById(id);
+    if (!el) return 0;
+    let raw = String(el.value || "").trim();
+    if (!raw) return 0;
+    let clean = raw.replace(/[^\d-]/g, "");
+    return Number(clean) || 0;
+};
+
 window.recalcRedemptions = function() {
     let totalDiscount = 0;
     document.querySelectorAll(".redeem-input").forEach(input => {
@@ -2655,7 +2664,7 @@ window.recalcRedemptions = function() {
 }
 
 window.autoBalancePiutang = function() {
-    const c = Number(document.getElementById("pay-cash").value) || 0; const q = Number(document.getElementById("pay-qris").value) || 0; const t = Number(document.getElementById("pay-transfer").value) || 0; const f = Number(document.getElementById("pay-free").value) || 0;
+    const c = window.parsePayNum("pay-cash"); const q = window.parsePayNum("pay-qris"); const t = window.parsePayNum("pay-transfer"); const f = window.parsePayNum("pay-free");
     const totalAccounted = c + q + t + f; const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     document.getElementById("pay-piutang").value = remaining; window.calculateRemaining();
 }
@@ -2668,13 +2677,13 @@ window.autoBalanceCash = function() {
         return;
     }
     
-    const q = Number(document.getElementById("pay-qris").value) || 0; const t = Number(document.getElementById("pay-transfer").value) || 0; const f = Number(document.getElementById("pay-free").value) || 0; const p = Number(document.getElementById("pay-piutang").value) || 0;
+    const q = window.parsePayNum("pay-qris"); const t = window.parsePayNum("pay-transfer"); const f = window.parsePayNum("pay-free"); const p = window.parsePayNum("pay-piutang");
     const totalAccounted = q + t + f + p; const remaining = Math.max(0, window.cartGrandTotal - totalAccounted);
     document.getElementById("pay-cash").value = remaining; window.calculateRemaining();
 }
 
 window.calculateRemaining = function() {
-    const c = Number(document.getElementById("pay-cash").value) || 0; const q = Number(document.getElementById("pay-qris").value) || 0; const t = Number(document.getElementById("pay-transfer").value) || 0; const f = Number(document.getElementById("pay-free").value) || 0; const p = Number(document.getElementById("pay-piutang").value) || 0;
+    const c = window.parsePayNum("pay-cash"); const q = window.parsePayNum("pay-qris"); const t = window.parsePayNum("pay-transfer"); const f = window.parsePayNum("pay-free"); const p = window.parsePayNum("pay-piutang");
     const totalAccounted = c + q + t + f + p; const remaining = window.cartGrandTotal - totalAccounted;
     document.getElementById("review-remaining").innerText = `Rp ${remaining.toLocaleString('id-ID')}`;
 }
@@ -3315,10 +3324,10 @@ window.isFinalizingOrder = false;
 window.finalizeOrder = async function(shouldPrint) {
     if (window.isFinalizingOrder) return; // 🔒 Prevent double-tap / 17x duplicate spam!
     if (!window.currentCart || window.currentCart.length === 0) return;
-    const cash = Number(document.getElementById("pay-cash").value) || 0; const qris = Number(document.getElementById("pay-qris").value) || 0;
-    const transfer = Number(document.getElementById("pay-transfer").value) || 0; const free = Number(document.getElementById("pay-free").value) || 0;
-    const debtAmount = Number(document.getElementById("pay-piutang").value) || 0;
-    const rentBottleQty = Number(document.getElementById("rent-bottle-qty").value) || 0;
+    const cash = window.parsePayNum("pay-cash"); const qris = window.parsePayNum("pay-qris");
+    const transfer = window.parsePayNum("pay-transfer"); const free = window.parsePayNum("pay-free");
+    const debtAmount = window.parsePayNum("pay-piutang");
+    const rentBottleQty = window.parsePayNum("rent-bottle-qty");
     
     const totalAccounted = cash + qris + transfer + free + debtAmount; const remaining = window.cartGrandTotal - totalAccounted; 
 
@@ -3850,12 +3859,15 @@ window.renderHistoryList = function(type) {
             container.innerHTML = shiftOrders.map(o => {
                 let badge = o.orderStatus === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` : o.orderStatus === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` : `<span class="status-badge status-paid">${o.orderStatus}</span>`; 
                 let syncBadge = o.syncStatus !== "Synced" ? `<span style="font-size:11px; background:#fef9e7; color:#d68910; border:1px solid #f39c12; padding:1px 5px; border-radius:4px; margin-left:4px;">⏳ Lokal</span>` : '';
+                let pmStr = String(o.paymentMethod || "-");
+                let pmColor = pmStr.includes("QRIS") ? "#8e44ad" : (pmStr.includes("Trf") ? "#2980b9" : (pmStr.includes("Piutang") ? "#c0392b" : "#16a085"));
+                let payBadge = `<span style="font-size:11px; background:#f4f6f7; color:${pmColor}; border:1px solid ${pmColor}; padding:1px 6px; border-radius:4px; font-weight:bold; margin-left:4px;">💳 ${pmStr}</span>`;
                 let piutangBadge = (o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && (o.debtAmount || 0) > 0) ? `<br><span style="font-size:12px; color:#c0392b; font-weight:bold;">⚠️ Piutang: Rp ${(o.debtAmount).toLocaleString('id-ID')}</span>` : '';
                 let btnVoid = o.orderStatus === "Voided" ? '' : `<button onclick="window.requestVoid('orders', '${o.orderId}')" style="background:${o.orderStatus === 'Void Pending' ? '#8e44ad' : '#e74c3c'}; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">${o.orderStatus === 'Void Pending' ? '🔑 PIN Admin' : 'Batal'}</button>`;
                 let btnPrint = `<button onclick="window.reprintOrder('${o.orderId}')" style="background:#2980b9; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">🖨️ Cetak</button>`;
                 let btnDetail = `<button onclick="window.showOrderDetail('${o.orderId}')" style="background:#f39c12; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">👁️ Detail</button>`;
                 
-                return `<div class="history-row"><div><strong>${o.customerName}</strong> <small style="color:#95a5a6;">(${o.orderId})</small>${syncBadge}<br><small style="color:#7f8c8d;">${window.formatDateReadable(o.timestamp)} | Rp ${(o.grandTotal || 0).toLocaleString('id-ID')}</small>${piutangBadge}</div><div style="display:flex; align-items:center; gap:8px;">${badge} ${btnDetail} ${btnPrint} ${btnVoid}</div></div>`;
+                return `<div class="history-row"><div><strong>${o.customerName}</strong> <small style="color:#95a5a6;">(${o.orderId})</small>${syncBadge}<br><small style="color:#7f8c8d;">${window.formatDateReadable(o.timestamp)} | Rp ${(o.grandTotal || 0).toLocaleString('id-ID')}</small>${payBadge}${piutangBadge}</div><div style="display:flex; align-items:center; gap:8px;">${badge} ${btnDetail} ${btnPrint} ${btnVoid}</div></div>`;
             }).join("");
         };
     } else if (type === 'expenses') {
@@ -4454,11 +4466,16 @@ window.openCurrentShiftReport = async function() {
         pendingOuts.forEach(p => msg += `- ${p.staffName}\n`);
         if (currentHour >= 20) {
             alert(msg + "\nKarena sudah lewat jam 20:00, sistem otomatis melakukan Clock-Out untuk mereka sekarang.");
-            pendingOuts.forEach(p => window.clockOutStaff(p.logId, window.getWibDate()));
+            let nowOutStr = window.getWibDate();
+            for (const p of pendingOuts) {
+                await window.clockOutStaff(p.logId, nowOutStr, true);
+            }
         } else {
             let forceOut = prompt(msg + "\nMasukkan waktu Clock-Out manual (HH:MM) atau biarkan kosong jika masih bekerja:", "");
             if (forceOut && forceOut.includes(":")) {
-                pendingOuts.forEach(p => window.clockOutStaff(p.logId, `${today} ${forceOut}:00`));
+                for (const p of pendingOuts) {
+                    await window.clockOutStaff(p.logId, `${today} ${forceOut}:00`, true);
+                }
             }
         }
     }
@@ -5693,26 +5710,37 @@ window.renderPengiriman = function() {
 
         if (deliveries.length === 0) return container.innerHTML = `<div style="padding:20px; color:#7f8c8d; text-align:center;">Tidak ada pengiriman tertunda.</div>`;
         
-        deliveries.forEach(o => {
+        container.innerHTML = deliveries.map(o => {
             let itemsStr = o.items.filter(i => !i.name.toLowerCase().includes("ongkos kirim")).map(i => `${i.qty}x ${i.name}`).join(", ");
-            let debtInfo = (o.debtAmount > 0) 
-                ? `<br>⚠️ <strong style="color:#c0392b;">Belum Lunas (Rp ${o.debtAmount.toLocaleString('id-ID')})</strong>` 
-                : `<br>✅ <strong style="color:#27ae60;">Sudah Lunas</strong>`;
+            let dispPhone = String(o.customerPhone || "").startsWith("TANPA-WA") ? "Tanpa WA" : String(o.customerPhone || "-").replace(/-DUP\d+$/, "");
+            let debtBadge = (o.debtAmount > 0)
+                ? `<span style="background:#fadbd8; color:#922b21; padding:4px 9px; border-radius:6px; font-size:12px; font-weight:bold;">⚠️ Belum Lunas: Rp ${o.debtAmount.toLocaleString('id-ID')}</span>`
+                : `<span style="background:#d4efdf; color:#1e8449; padding:4px 9px; border-radius:6px; font-size:12px; font-weight:bold;">✅ Lunas (${o.paymentMethod || "Bayar"})</span>`;
 
-            container.innerHTML += `
-            <div style="border:1px solid #bdc3c7; border-left:5px solid #e67e22; padding:15px; border-radius:6px; background:#fef9e7; display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
-                <div>
-                    <strong>🕒 ${window.formatDateReadable(o.timestamp)}</strong> | 👤 <strong>${o.customerName}</strong> (${o.customerPhone})<br>
-                    📍 <span style="color:#c0392b;">${o.customerAddress || "ALAMAT KOSONG!"}</span><br>
-                    📦 <span style="color:#2980b9; font-weight:bold;">${itemsStr}</span><br>
-                    🏷️ Status: <strong style="color:#e67e22;">Menunggu Dikirim</strong> ${debtInfo}
+            return `
+            <div style="border:1px solid #e6d5c3; border-left:5px solid #e67e22; padding:12px 14px; border-radius:10px; background:#fffdf9; box-shadow:0 2px 5px rgba(0,0,0,0.05); display:flex; flex-direction:column; gap:8px;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+                    <div style="flex:1; min-width:0;">
+                        <div style="font-size:15px; font-weight:800; color:#2c3e50; line-height:1.25; word-break:break-word;">👤 ${o.customerName}</div>
+                        <div style="font-size:12px; color:#5d6d7e; margin-top:2px;">📱 ${dispPhone} • <span style="color:#95a5a6;">${o.orderId}</span></div>
+                    </div>
+                    <div style="flex-shrink:0; font-size:11.5px; font-weight:bold; color:#7f8c8d; background:#f2f4f4; padding:3px 8px; border-radius:6px; white-space:nowrap;">
+                        🕒 ${window.formatDateReadable(o.timestamp)}
+                    </div>
                 </div>
-                <div style="display:flex; gap:10px;">
-                    <button onclick="window.showOrderDetail('${o.orderId}')" style="background:#f39c12; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">🔍 Cek</button>
-                    <button onclick="window.markDeliveryDone('${o.orderId}')" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">✅ Selesai</button>
+                <div style="background:#ffffff; border:1px solid #ecf0f1; border-radius:7px; padding:8px 10px; display:flex; flex-direction:column; gap:4px;">
+                    <div style="font-size:12.5px; color:#c0392b; font-weight:600; line-height:1.35; word-break:break-word;">📍 ${o.customerAddress || "ALAMAT KOSONG!"}</div>
+                    <div style="font-size:13px; color:#2980b9; font-weight:700; line-height:1.35;">📦 ${itemsStr}</div>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; padding-top:2px;">
+                    <div>${debtBadge}</div>
+                    <div style="display:flex; gap:8px; margin-left:auto;">
+                        <button onclick="window.showOrderDetail('${o.orderId}')" style="background:#f39c12; color:white; border:none; padding:8px 12px; border-radius:7px; font-weight:bold; font-size:12.5px; cursor:pointer; white-space:nowrap;">🔍 Cek</button>
+                        <button onclick="window.markDeliveryDone('${o.orderId}')" style="background:#27ae60; color:white; border:none; padding:8px 14px; border-radius:7px; font-weight:bold; font-size:12.5px; cursor:pointer; white-space:nowrap;">✅ Selesai</button>
+                    </div>
                 </div>
             </div>`;
-        });
+        }).join("");
     };
 }
 
@@ -5725,16 +5753,12 @@ window.markDeliveryDone = async function(orderId) {
     
     if (order && (order.debtAmount || 0) > 0) {
         window.piutangFromDeliveryOrderId = orderId;
-        // Even if local member sync failed, force the Piutang modal to open using the Order data
         let fallbackMember = { phone: order.customerPhone, name: order.customerName, piutang: order.debtAmount };
         
         let baseCustPhone = String(order.customerPhone || "").replace(/-DUP\d+$/i, "");
         window.db.transaction(["members"], "readonly").objectStore("members").get(baseCustPhone).onsuccess = (e) => {
             let m = e.target.result;
             if (m) {
-                // 🔥 THE FIX: Prevent silent crash! Force piutang amount to be AT LEAST the order's debt, 
-                // in case the background sync temporarily overwrote it with '0'.
-                // Jangan paksa naikkan piutang jika order sebenarnya sudah lunas
                 let branchDebt = (m.piutangBreakdown && window.currentOutlet)
                     ? (m.piutangBreakdown[window.currentOutlet] ?? m.piutangBreakdown[window.currentOutlet.toUpperCase()] ?? m.piutang)
                     : m.piutang;
@@ -5879,12 +5903,8 @@ window.submitDeliveryDone = function() {
         window.renderPeminjamList(); 
         if (window.updateLeftBadges) window.updateLeftBadges(); 
 
-        // Langsung jalankan runBackgroundSync() yang mengirim syncOrder lengkap (status Terkirim + Kurir + Pinjam Galon)
-        // tanpa mengirim POST ganda yang berebut ScriptLock di server!
         if (window.updateUnsyncedBadge) window.updateUnsyncedBadge();
-        setTimeout(() => {
-            window.runBackgroundSync(); 
-        }, 50);
+        window.runBackgroundSync();
     };
 }
 window.renderAbsensi = async function() {
@@ -5968,20 +5988,24 @@ window.clockInStaff = function(staffName) {
     window.renderAbsensi(); window.runBackgroundSync();
 }
 
-window.clockOutStaff = function(logId, manualTime = null) {
-    if (!manualTime && !confirm(`Apakah Anda yakin ingin melakukan Clock-OUT sekarang?`)) return;
-    let tx = window.db.transaction(["attendance"], "readwrite");
-    tx.objectStore("attendance").get(logId).onsuccess = (e) => {
-        let log = e.target.result;
-        if (!log) return;
-        log.clockOut = manualTime || window.getWibDate();
-        log.syncStatus = "OutPending";
-        tx.objectStore("attendance").put(log);
-    };
-    tx.oncomplete = () => {
-        window.renderAbsensi();
-        window.runBackgroundSync();
-    };
+window.clockOutStaff = function(logId, manualTime = null, skipSync = false) {
+    if (!manualTime && !confirm(`Apakah Anda yakin ingin melakukan Clock-OUT sekarang?`)) return Promise.resolve();
+    return new Promise((resolve) => {
+        let tx = window.db.transaction(["attendance"], "readwrite");
+        tx.objectStore("attendance").get(logId).onsuccess = (e) => {
+            let log = e.target.result;
+            if (!log) return;
+            log.clockOut = manualTime || window.getWibDate();
+            log.syncStatus = "OutPending";
+            tx.objectStore("attendance").put(log);
+        };
+        tx.oncomplete = () => {
+            window.renderAbsensi();
+            if (!skipSync) window.runBackgroundSync();
+            resolve();
+        };
+        tx.onerror = () => resolve();
+    });
 }
 
 window.openEditCustomer = function(isCheckoutIntercept = false) {
