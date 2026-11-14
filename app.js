@@ -64,6 +64,7 @@ window.initMobilePosWizard = function() {
                 overflow-x: hidden !important;
                 overflow-y: auto !important;
                 -webkit-overflow-scrolling: touch !important;
+                touch-action: pan-y !important;
                 max-width: 100vw !important;
                 position: static !important;
             }
@@ -72,9 +73,13 @@ window.initMobilePosWizard = function() {
                 height: auto !important;
                 min-height: 100vh !important;
                 overflow: visible !important;
-                padding-bottom: 96px !important;
+                padding-bottom: 115px !important;
+            }
+            body.mob-step-1:not(.mob-other-tab) #pos-screen {
+                padding-bottom: 45vh !important;
             }
             #main-workspace, #menu-section, #cart-section,
+            #pengiriman-section, #piutang-section, #peminjam-section,
             .mob-main-workspace, .mob-left-panel, .mob-right-panel {
                 height: auto !important;
                 max-height: none !important;
@@ -88,7 +93,12 @@ window.initMobilePosWizard = function() {
                 align-items: center !important;
                 justify-content: space-between !important;
                 gap: 6px !important;
-                padding: 8px 10px !important;
+                padding: 7px 10px !important;
+            }
+            #app-version-badge span {
+                font-size: 10px !important;
+                padding: 2px 5px !important;
+                margin-right: 5px !important;
             }
             /* Sembunyikan SEMUA tombol top-bar secara default di HP (kecuali tombol ☰ Menu di sebelah nama kasir) */
             body.mob-header-collapsed #pos-screen > div:first-child button:not(#mob-menu-toggle-btn) {
@@ -105,9 +115,9 @@ window.initMobilePosWizard = function() {
                 align-items: center;
                 gap: 4px;
                 padding: 5px 10px !important;
-                margin-left: 8px !important;
+                margin-left: 6px !important;
                 border-radius: 6px !important;
-                font-size: 12px !important;
+                font-size: 11.5px !important;
                 font-weight: bold !important;
                 background: #e67e22 !important;
                 color: #ffffff !important;
@@ -256,13 +266,11 @@ window.initMobilePosWizard = function() {
                 width: 100% !important;
                 min-width: 0 !important;
                 max-width: 100% !important;
-                max-height: var(--mob-ac-max-h, 52vh) !important;
-                overflow-x: hidden !important;
-                overflow-y: auto !important;
-                -webkit-overflow-scrolling: touch !important;
+                max-height: none !important;
+                overflow: visible !important;
                 border: 2px solid #3498db !important;
                 border-radius: 8px !important;
-                box-shadow: 0 6px 18px rgba(0,0,0,0.22) !important;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.14) !important;
                 background: #ffffff !important;
                 margin-top: 4px !important;
                 box-sizing: border-box !important;
@@ -620,48 +628,17 @@ window.initMobilePosWizard = function() {
         el.addEventListener("focus", () => {
             if (window.innerWidth <= 768) {
                 document.body.classList.add("mob-kb-open", "mob-header-collapsed");
-                setTimeout(updateMobileAcViewport, 250);
             }
         });
         el.addEventListener("blur", () => {
             setTimeout(() => {
                 const activeId = document.activeElement ? document.activeElement.id : "";
-                const resBox = document.getElementById("autocomplete-results");
-                const isAcOpen = resBox && !resBox.classList.contains("hidden");
-                if (activeId !== "cust-phone" && activeId !== "cust-name" && !isAcOpen) {
-                    document.body.classList.remove("mob-kb-open", "mob-header-collapsed");
+                if (activeId !== "cust-phone" && activeId !== "cust-name") {
+                    document.body.classList.remove("mob-kb-open");
                 }
             }, 220);
         });
     });
-
-    // Tarik ke atas (swipe down di bagian atas) untuk memunculkan kembali tombol & tab atas
-    let touchStartY = 0;
-    let touchStartedInAc = false;
-    document.addEventListener("touchstart", (e) => {
-        if (window.innerWidth > 768 || !e.touches || !e.touches.length) return;
-        touchStartY = e.touches[0].clientY;
-        touchStartedInAc = !!e.target.closest("#autocomplete-results");
-    }, { passive: true });
-
-    document.addEventListener("touchmove", (e) => {
-        if (window.innerWidth > 768 || !e.touches || !e.touches.length) return;
-        const deltaY = e.touches[0].clientY - touchStartY;
-        const resBox = document.getElementById("autocomplete-results");
-        const acAtTop = !touchStartedInAc || !resBox || resBox.scrollTop <= 0;
-
-        if (deltaY > 28 && window.scrollY <= 20 && acAtTop) {
-            if (document.body.classList.contains("mob-header-collapsed")) {
-                document.body.classList.remove("mob-header-collapsed");
-                setTimeout(updateMobileAcViewport, 250);
-            }
-        } else if (deltaY < -28 && document.body.classList.contains("mob-step-1")) {
-            if (!document.body.classList.contains("mob-header-collapsed")) {
-                document.body.classList.add("mob-header-collapsed");
-                setTimeout(updateMobileAcViewport, 250);
-            }
-        }
-    }, { passive: true });
 
     window.setMobilePosStep(1);
 };
@@ -4968,11 +4945,11 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
         let anySuccess = false;
         let hitLockTimeout = false;
 
-        // Kirim maksimal 12 item per siklus agar antrean cepat terkuras
+        // Kirim maksimal 8 item per siklus agar ScriptLock < 3 detik untuk 8 cabang
         let hasMoreInQueue = false;
         if (batchItems.length > 0) {
-            let chunk = batchItems.slice(0, 12);
-            if (batchItems.length > 12) {
+            let chunk = batchItems.slice(0, 8);
+            if (batchItems.length > 8) {
                 hasMoreInQueue = true;
                 window.syncPendingAgain = true;
             }
@@ -6040,7 +6017,7 @@ window.onload = async () => {
         if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { 
             const resBox = document.getElementById('autocomplete-results');
             if(resBox) resBox.classList.add('hidden');
-            document.body.classList.remove("mob-kb-open", "mob-header-collapsed");
+            document.body.classList.remove("mob-kb-open");
         }
         if(e.target.id !== 'exp-category') {
             const catBox = document.getElementById('cat-autocomplete-results');
