@@ -58,18 +58,61 @@ window.initMobilePosWizard = function() {
         }
 
         @media (max-width: 768px) {
-            html, body { overflow-x: hidden !important; max-width: 100vw !important; }
-            #pos-screen { padding-bottom: 84px !important; }
+            html, body {
+                height: auto !important;
+                min-height: 100dvh !important;
+                overflow-x: hidden !important;
+                overflow-y: auto !important;
+                -webkit-overflow-scrolling: touch !important;
+                max-width: 100vw !important;
+            }
+            #pos-screen {
+                height: auto !important;
+                min-height: 100dvh !important;
+                overflow: visible !important;
+                padding-bottom: 96px !important;
+            }
+            body.mob-step-1:not(.mob-other-tab) #pos-screen {
+                padding-bottom: 36vh !important;
+            }
+            #main-workspace, #menu-section, #cart-section {
+                height: auto !important;
+                max-height: none !important;
+                overflow: visible !important;
+            }
 
-            /* Rapikan header atas & tab agar muat di layar HP 360px tanpa geser samping */
+            /* Header atas & tab: muat di layar HP 360px, otomatis lipat saat cari pelanggan, & muncul saat tarik scroll ke atas */
             #pos-screen > div:first-child {
                 flex-wrap: wrap !important;
                 gap: 6px !important;
                 padding: 8px 10px !important;
+                max-height: 260px;
+                opacity: 1;
+                overflow: hidden;
+                transition: max-height 0.22s ease, opacity 0.18s ease, padding 0.22s ease;
             }
             #pos-screen > div:first-child button {
                 padding: 6px 9px !important;
                 font-size: 12px !important;
+            }
+            .mob-main-tabs-bar {
+                max-height: 80px;
+                opacity: 1;
+                overflow: hidden;
+                transition: max-height 0.22s ease, opacity 0.18s ease, border-width 0.22s ease;
+            }
+            body.mob-header-collapsed #pos-screen > div:first-child {
+                max-height: 0 !important;
+                opacity: 0 !important;
+                padding-top: 0 !important;
+                padding-bottom: 0 !important;
+                pointer-events: none !important;
+            }
+            body.mob-header-collapsed .mob-main-tabs-bar {
+                max-height: 0 !important;
+                opacity: 0 !important;
+                border-bottom-width: 0 !important;
+                pointer-events: none !important;
             }
             #tab-new-order, #tab-left-pengiriman, #tab-left-piutang, #tab-left-peminjam {
                 min-width: 0 !important;
@@ -106,10 +149,6 @@ window.initMobilePosWizard = function() {
             }
             body.mob-other-tab #mobile-wizard-stepper,
             body.mob-other-tab .mob-cart-tab-bar { display: none !important; }
-
-            /* Sembunyikan toolbar atas saat keyboard mencari pelanggan terbuka agar daftar member terlihat jelas */
-            body.mob-step-1.mob-kb-open #pos-screen > div:first-child { display: none !important; }
-            body.mob-step-1.mob-kb-open .mob-main-tabs-bar { display: none !important; }
 
             .mob-step-pill {
                 flex: 1;
@@ -523,8 +562,8 @@ window.initMobilePosWizard = function() {
         if (!el) return;
         el.addEventListener("focus", () => {
             if (window.innerWidth <= 768) {
-                document.body.classList.add("mob-kb-open");
-                setTimeout(updateMobileAcViewport, 120);
+                document.body.classList.add("mob-kb-open", "mob-header-collapsed");
+                setTimeout(updateMobileAcViewport, 250);
             }
         });
         el.addEventListener("blur", () => {
@@ -533,11 +572,39 @@ window.initMobilePosWizard = function() {
                 const resBox = document.getElementById("autocomplete-results");
                 const isAcOpen = resBox && !resBox.classList.contains("hidden");
                 if (activeId !== "cust-phone" && activeId !== "cust-name" && !isAcOpen) {
-                    document.body.classList.remove("mob-kb-open");
+                    document.body.classList.remove("mob-kb-open", "mob-header-collapsed");
                 }
             }, 220);
         });
     });
+
+    // Tarik ke atas (swipe down di bagian atas) untuk memunculkan kembali tombol & tab atas
+    let touchStartY = 0;
+    let touchStartedInAc = false;
+    document.addEventListener("touchstart", (e) => {
+        if (window.innerWidth > 768 || !e.touches || !e.touches.length) return;
+        touchStartY = e.touches[0].clientY;
+        touchStartedInAc = !!e.target.closest("#autocomplete-results");
+    }, { passive: true });
+
+    document.addEventListener("touchmove", (e) => {
+        if (window.innerWidth > 768 || !e.touches || !e.touches.length) return;
+        const deltaY = e.touches[0].clientY - touchStartY;
+        const resBox = document.getElementById("autocomplete-results");
+        const acAtTop = !touchStartedInAc || !resBox || resBox.scrollTop <= 0;
+
+        if (deltaY > 28 && window.scrollY <= 20 && acAtTop) {
+            if (document.body.classList.contains("mob-header-collapsed")) {
+                document.body.classList.remove("mob-header-collapsed");
+                setTimeout(updateMobileAcViewport, 250);
+            }
+        } else if (deltaY < -28 && document.body.classList.contains("mob-step-1")) {
+            if (!document.body.classList.contains("mob-header-collapsed")) {
+                document.body.classList.add("mob-header-collapsed");
+                setTimeout(updateMobileAcViewport, 250);
+            }
+        }
+    }, { passive: true });
 
     window.setMobilePosStep(1);
 };
@@ -547,7 +614,7 @@ window.setMobilePosStep = function(step) {
         step = 1;
     }
     if (step >= 2) {
-        document.body.classList.remove("mob-kb-open");
+        document.body.classList.remove("mob-kb-open", "mob-header-collapsed");
     }
     window.mobilePosStep = step;
     if (window.posSessions && window.posSessions[window.activeSessionIndex]) {
@@ -1799,7 +1866,7 @@ window.selectMember = function(phone, name, walletStr, dbBottlesBorrowed, localP
         frequency: frequency
     };
     window.updatePromoBanner(window.activeCustomerProfile);
-    document.body.classList.remove("mob-kb-open");
+    document.body.classList.remove("mob-kb-open", "mob-header-collapsed");
     window.unlockMenu();
 };
 
@@ -5904,7 +5971,7 @@ window.onload = async () => {
         if(!e.target.closest('.autocomplete-wrapper') && e.target.id !== 'cust-phone' && e.target.id !== 'cust-name') { 
             const resBox = document.getElementById('autocomplete-results');
             if(resBox) resBox.classList.add('hidden');
-            document.body.classList.remove("mob-kb-open");
+            document.body.classList.remove("mob-kb-open", "mob-header-collapsed");
         }
         if(e.target.id !== 'exp-category') {
             const catBox = document.getElementById('cat-autocomplete-results');
