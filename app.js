@@ -1931,8 +1931,23 @@ window.syncBackgroundData = async function() {
                             if (!existing) {
                                 ordStore.put(o);
                             } else {
+                                let guardMap = {};
+                                try { guardMap = JSON.parse(localStorage.getItem("pw_delivered_guard") || "{}"); } catch (_) {}
+                                let guarded = guardMap[o.orderId];
+                                if (guarded && String(o.deliveryStatus || "").startsWith("Terkirim")) {
+                                    delete guardMap[o.orderId];
+                                    try { localStorage.setItem("pw_delivered_guard", JSON.stringify(guardMap)); } catch (_) {}
+                                    guarded = null;
+                                }
+                                if (guarded && o.deliveryStatus === "Pending") {
+                                    o.deliveryStatus = guarded.deliveryStatus;
+                                    o.courier = guarded.courier || o.courier;
+                                    o.orderStatus = "Completed";
+                                    o.syncStatus = "Pending";
+                                }
+
                                 let isLocalUnsynced = (existing.syncStatus === "Pending" || existing.syncStatus === "Syncing" || pendingVoidIds.has(o.orderId));
-                                let recentlyDelivered = existing.deliveredAtMs && (Date.now() - existing.deliveredAtMs < 300000);
+                                let recentlyDelivered = existing.deliveredAtMs && (Date.now() - existing.deliveredAtMs < 900000);
                                 let isAlreadyDeliveredLocally = String(existing.deliveryStatus || "").startsWith("Terkirim") && (o.deliveryStatus === "Pending" || recentlyDelivered);
                                 let isDebtReducedLocally = (existing.debtAmount !== undefined && o.debtAmount !== undefined && existing.debtAmount < o.debtAmount);
                                 let isLocalVoided = (existing.orderStatus === "Voided" && o.orderStatus !== "Voided");
@@ -5065,9 +5080,9 @@ window.drainSyncQueueWithLock = async function() {
         waitLoops++;
     }
 
-    let maxAttempts = 10;
+    let maxAttempts = 25;
     let attempt = 0;
-
+    
     while (attempt < maxAttempts && !window.abortSyncLock) {
         attempt++;
         let count = await window.getUnsyncedCount();
@@ -5103,7 +5118,7 @@ window.drainSyncQueueWithLock = async function() {
             if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
             return true;
         }
-        await new Promise(r => setTimeout(r, Math.min(5000, 900 * attempt) + Math.floor(Math.random() * 1400)));
+        await new Promise(r => setTimeout(r, Math.min(2500, 350 * attempt) + Math.floor(Math.random() * 500)));
     }
 
     let finalCount = await window.getUnsyncedCount();
@@ -5170,7 +5185,12 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
         let batchItems = [];
         let batchHandlers = {};
 
-        for (const order of orders) {
+        const sortedOrders = [...orders].sort((a, b) => {
+            let aDeliv = String(a.deliveryStatus || "").startsWith("Terkirim") ? 0 : 1;
+            let bDeliv = String(b.deliveryStatus || "").startsWith("Terkirim") ? 0 : 1;
+            return aDeliv - bDeliv;
+        });
+        for (const order of sortedOrders) {
             if (order.syncStatus === "Pending" || order.syncStatus === "Syncing") {
                 let k = "ORD:" + order.orderId;
                 batchItems.push({ key: k, action: "syncOrder", data: order });
@@ -5283,11 +5303,11 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
         let anySuccess = false;
         let hitLockTimeout = false;
 
-        // Kirim maksimal 8 item per siklus agar ScriptLock < 3 detik untuk 8 cabang
+        // Kirim maksimal 15 item per siklus (sudah di-cache di server sehingga < 2 detik)
         let hasMoreInQueue = false;
         if (batchItems.length > 0) {
-            let chunk = batchItems.slice(0, 8);
-            if (batchItems.length > 8) {
+            let chunk = batchItems.slice(0, 15);
+            if (batchItems.length > 15) {
                 hasMoreInQueue = true;
                 window.syncPendingAgain = true;
             }
@@ -5863,6 +5883,11 @@ window.submitDeliveryDone = function() {
         order.orderStatus = "Completed"; 
         order.courier = courier; 
         order.swapGalon = isSwap;
+        try {
+            let guard = JSON.parse(localStorage.getItem("pw_delivered_guard") || "{}");
+            guard[orderId] = { deliveryStatus: order.deliveryStatus, courier: courier, ts: Date.now() };
+            localStorage.setItem("pw_delivered_guard", JSON.stringify(guard));
+        } catch (_) {}
 
         if (pinjamQty > 0) {
             order.rentBottleQty = (order.rentBottleQty || 0) + pinjamQty;
