@@ -5040,8 +5040,11 @@ window.getUnsyncedDetailsList = async function() {
 };
 
 // Menguras antrean sampai 0 dengan tampilan overlay loading + diagnostik error
+window.isDrainingForLogout = false;
 window.drainSyncQueueWithLock = async function() {
     window.abortSyncLock = false;
+    window.isDrainingForLogout = true;
+    try {
     let overlay = document.getElementById("sync-lock-overlay");
     if (!overlay) {
         overlay = document.createElement("div");
@@ -5125,6 +5128,9 @@ window.drainSyncQueueWithLock = async function() {
     overlay.style.display = "none";
     if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
     return finalCount === 0;
+    } finally {
+        window.isDrainingForLogout = false;
+    }
 };
 
 window.fetchWithSyncTimeout = async function(url, options = {}, timeoutMs = 45000) {
@@ -5141,9 +5147,9 @@ window.syncPendingAgain = false;
 window.syncAdaptiveChunkSize = 12;
 window.runBackgroundSync = async function(skipPullAfter = false) {
     if (!navigator.onLine) return;
-    if (window.isLoggingOut && !skipPullAfter) return;
+    if ((window.isLoggingOut || window.isDrainingForLogout) && !skipPullAfter) return;
     if (window.isSyncing) {
-        window.syncPendingAgain = true;
+        if (!window.isLoggingOut && !window.isDrainingForLogout) window.syncPendingAgain = true;
         return;
     }
     window.isSyncing = true;
@@ -5406,9 +5412,9 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
     } finally { 
         window.isSyncing = false; 
         if (window.updateUnsyncedBadge) window.updateUnsyncedBadge();
-        if (window.syncPendingAgain && navigator.onLine) {
+        if (window.syncPendingAgain && navigator.onLine && !window.isLoggingOut && !window.isDrainingForLogout) {
             window.syncPendingAgain = false;
-            setTimeout(() => window.runBackgroundSync(), 300 + Math.floor(Math.random() * 700));
+            setTimeout(() => window.runBackgroundSync(), 350 + Math.floor(Math.random() * 650));
         }
     }
 };
