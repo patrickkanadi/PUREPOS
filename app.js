@@ -5138,6 +5138,7 @@ window.fetchWithSyncTimeout = async function(url, options = {}, timeoutMs = 4500
 };
 
 window.syncPendingAgain = false;
+window.syncAdaptiveChunkSize = 12;
 window.runBackgroundSync = async function(skipPullAfter = false) {
     if (!navigator.onLine) return;
     if (window.isLoggingOut && !skipPullAfter) return;
@@ -5303,11 +5304,12 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
         let anySuccess = false;
         let hitLockTimeout = false;
 
-        // Kirim maksimal 15 item per siklus (sudah di-cache di server sehingga < 2 detik)
+        // Adaptive batch size: otomatis mengecil jika server sibuk/timeout agar antrean tidak pernah macet
         let hasMoreInQueue = false;
         if (batchItems.length > 0) {
-            let chunk = batchItems.slice(0, 15);
-            if (batchItems.length > 15) {
+            let chunkLimit = Math.max(1, Math.min(12, window.syncAdaptiveChunkSize || 12));
+            let chunk = batchItems.slice(0, chunkLimit);
+            if (batchItems.length > chunkLimit) {
                 hasMoreInQueue = true;
                 window.syncPendingAgain = true;
             }
@@ -5358,9 +5360,15 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
             }
         }
 
+        if (anySuccess && !hitLockTimeout) {
+            window.syncAdaptiveChunkSize = Math.min(12, (window.syncAdaptiveChunkSize || 6) + 2);
+        } else if (batchItems.length > 0 && !anySuccess) {
+            window.syncAdaptiveChunkSize = Math.max(1, Math.floor((window.syncAdaptiveChunkSize || 12) / 3));
+        }
+
         if (hitLockTimeout) {
             window.syncPendingAgain = true;
-            await new Promise(r => setTimeout(r, 2500 + Math.floor(Math.random() * 5500)));
+            await new Promise(r => setTimeout(r, 1500 + Math.floor(Math.random() * 2500)));
         }
 
         if (anySuccess && !skipPullAfter && !hasMoreInQueue) {
