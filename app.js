@@ -2038,6 +2038,7 @@ window.syncBackgroundData = async function() {
 };
 
 window.syncMasterData = async function() {
+    if (window.isLoggingOut || window.isDrainingForLogout) return;
     if (!navigator.onLine) {
         if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Mode Offline";
         if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c"; 
