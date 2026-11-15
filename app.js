@@ -4825,8 +4825,9 @@ window.executeFinalLogout = async function(netCash, logoutCashDrop = null) {
     }
 
     // 🔥 KIRIM SEKALIGUS DALAM 1 REQUEST ATOMIK (1x ScriptLock untuk Setor Laci + Absensi Keluar + Laporan Shift)
+    window.isLoggingOut = true;
     let syncSuccess = false;
-    const maxTries = 4;
+    const maxTries = 7;
     for (let tryCount = 1; tryCount <= maxTries; tryCount++) {
         try {
             const descEl = document.getElementById("sync-lock-desc");
