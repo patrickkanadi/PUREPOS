@@ -3179,6 +3179,7 @@ window.autoBalancePiutangPay = function() {
 }
 
 window.submitPiutang = function() {
+    if (window._activeSubmitLocks["piutang"]) return; window._activeSubmitLocks["piutang"] = true; setTimeout(() => { delete window._activeSubmitLocks["piutang"]; }, 1500);
     const c = window.parsePayNum("piutang-pay-cash"); 
     const q = window.parsePayNum("piutang-pay-qris"); 
     const t = window.parsePayNum("piutang-pay-transfer");
@@ -3765,6 +3766,7 @@ window.openInboundModal = function() {
 }
 
 window.submitInbound = function() {
+    if (window._activeSubmitLocks["inbound"]) return; window._activeSubmitLocks["inbound"] = true; setTimeout(() => { delete window._activeSubmitLocks["inbound"]; }, 1200);
     const qtyGalon = Number(document.getElementById("inbound-qty").value); 
     const targetTank = document.getElementById("inbound-tank-target").value; 
     const notes = document.getElementById("inbound-notes").value.trim();
@@ -3792,6 +3794,7 @@ window.openCuciModal = function() {
 }
 
 window.submitCuciTandon = function() {
+    if (window._activeSubmitLocks["cuci"]) return; window._activeSubmitLocks["cuci"] = true; setTimeout(() => { delete window._activeSubmitLocks["cuci"]; }, 1200);
     let tank = document.getElementById("cuci-tank").value; let qty = Number(document.getElementById("cuci-qty").value); let notes = document.getElementById("cuci-notes").value.trim() || "-";
     if (qty <= 0) return alert("Masukkan estimasi air terbuang dengan benar.");
     let payload = { logId: "CUC-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId, outlet: window.currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
@@ -3806,6 +3809,7 @@ window.openLaporModal = function() {
 }
 
 window.submitLaporMasalah = function() {
+    if (window._activeSubmitLocks["lapor"]) return; window._activeSubmitLocks["lapor"] = true; setTimeout(() => { delete window._activeSubmitLocks["lapor"]; }, 1200);
     let tank = document.getElementById("lapor-tank").value; let qty = Number(document.getElementById("lapor-qty").value); let notes = document.getElementById("lapor-notes").value.trim();
     if (qty <= 0 || notes === "") return alert("Harap masukkan estimasi air hilang dan kronologi kejadian dengan lengkap.");
     let payload = { logId: "LPR-" + Date.now(), timestamp: window.getWibDate(), cashier: window.currentCashier, shiftId: window.currentShiftId, outlet: window.currentOutlet, itemName: tank, qty: qty, notes: notes, syncStatus: "Pending" };
@@ -3815,6 +3819,7 @@ window.submitLaporMasalah = function() {
 window.openExpenseModal = function() { document.getElementById("expense-modal").classList.remove("hidden"); }
 
 window.saveExpense = function() {
+    if (window._activeSubmitLocks["expense"]) return; window._activeSubmitLocks["expense"] = true; setTimeout(() => { delete window._activeSubmitLocks["expense"]; }, 1200);
     const amount = Number(document.getElementById("exp-amount").value); const category = document.getElementById("exp-category").value.trim();
     if (amount <= 0 || !category) return alert("Harap masukkan jumlah dan kategori yang benar.");
     window.db.transaction(["expense_categories"], "readwrite").objectStore("expense_categories").put({ name: category });
@@ -5641,6 +5646,7 @@ window.renderPeminjamList = function() {
 }
 
 window.submitReturnGalon = function(phone, name, targetLogId, targetOrderId, maxSisa) {
+    if (window._activeSubmitLocks["kembali"]) return; window._activeSubmitLocks["kembali"] = true; setTimeout(() => { delete window._activeSubmitLocks["kembali"]; }, 1500);
     let inputEl = document.getElementById(`ret-qty-${targetLogId}`);
     let qty = Number(inputEl.value);
 
@@ -5870,7 +5876,21 @@ window.proceedToCourierSelection = async function(orderId) {
     document.getElementById("kurir-modal").classList.remove("hidden");
 }
 
+window._activeSubmitLocks = window._activeSubmitLocks || {};
+window.withSubmitLock = function(key, fn) {
+    if (window._activeSubmitLocks[key]) return;
+    window._activeSubmitLocks[key] = true;
+    try {
+        return fn();
+    } finally {
+        setTimeout(() => { delete window._activeSubmitLocks[key]; }, 1200);
+    }
+};
+
 window.submitDeliveryDone = function() {
+    if (window._activeSubmitLocks["delivery"]) return;
+    window._activeSubmitLocks["delivery"] = true;
+    setTimeout(() => { delete window._activeSubmitLocks["delivery"]; }, 1500);
     let courier = document.getElementById("kurir-select").value;
     let orderId = window.pendingDeliveryOrderId;
     let isSwap = document.getElementById("kurir-swap-cb") ? document.getElementById("kurir-swap-cb").checked : false;
