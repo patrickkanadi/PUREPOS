@@ -5084,95 +5084,99 @@ window.getUnsyncedDetailsList = async function() {
     } catch (e) { return []; }
 };
 
-// Menguras antrean sampai 0 dengan tampilan overlay loading + diagnostik error
+
+
 window.isDrainingForLogout = false;
 window.drainSyncQueueWithLock = async function() {
     window.abortSyncLock = false;
     window.isDrainingForLogout = true;
     try {
-    let overlay = document.getElementById("sync-lock-overlay");
-    if (!overlay) {
-        overlay = document.createElement("div");
-        overlay.id = "sync-lock-overlay";
-        overlay.style.position = "fixed";
-        overlay.style.top = "0";
-        overlay.style.left = "0";
-        overlay.style.width = "100vw";
-        overlay.style.height = "100vh";
-        overlay.style.background = "rgba(44, 62, 80, 0.95)";
-        overlay.style.zIndex = "99999";
+        let overlay = document.getElementById("sync-lock-overlay");
+        if (!overlay) {
+            overlay = document.createElement("div");
+            overlay.id = "sync-lock-overlay";
+            overlay.style.position = "fixed";
+            overlay.style.top = "0";
+            overlay.style.left = "0";
+            overlay.style.width = "100vw";
+            overlay.style.height = "100vh";
+            overlay.style.background = "rgba(44, 62, 80, 0.95)";
+            overlay.style.zIndex = "99999";
+            overlay.style.display = "flex";
+            overlay.style.flexDirection = "column";
+            overlay.style.justifyContent = "center";
+            overlay.style.alignItems = "center";
+            overlay.style.color = "white";
+            overlay.style.padding = "20px";
+            overlay.innerHTML = `
+                <div style="font-size:48px; margin-bottom:15px; animation: spin 2s linear infinite;">⏳</div>
+                <h2 id="sync-lock-title" style="margin:0 0 10px 0;">Menyinkronkan Data ke Spreadsheet...</h2>
+                <p id="sync-lock-desc" style="font-size:16px; color:#ecf0f1; max-width:480px; text-align:center;">Harap tunggu. Jangan matikan tablet atau me-refresh aplikasi.</p>
+                <div id="sync-lock-detail" style="font-size:13px; color:#f1c40f; max-width:520px; text-align:center; margin-top:8px; background:rgba(0,0,0,0.35); padding:10px 14px; border-radius:8px; display:none;"></div>
+                <button id="sync-lock-cancel-btn" onclick="window.abortSyncLock=true;" style="display:none; margin-top:18px; padding:10px 18px; background:#e74c3c; color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">⚠️ Tutup Layar Sync (Cek Error)</button>
+            `;
+            document.body.appendChild(overlay);
+        }
         overlay.style.display = "flex";
-        overlay.style.flexDirection = "column";
-        overlay.style.justifyContent = "center";
-        overlay.style.alignItems = "center";
-        overlay.style.color = "white";
-        overlay.style.padding = "20px";
-        overlay.innerHTML = `
-            <div style="font-size:48px; margin-bottom:15px; animation: spin 2s linear infinite;">⏳</div>
-            <h2 id="sync-lock-title" style="margin:0 0 10px 0;">Menyinkronkan Data ke Spreadsheet...</h2>
-            <p id="sync-lock-desc" style="font-size:16px; color:#ecf0f1; max-width:480px; text-align:center;">Harap tunggu. Jangan matikan tablet atau me-refresh aplikasi.</p>
-            <div id="sync-lock-detail" style="font-size:13px; color:#f1c40f; max-width:520px; text-align:center; margin-top:8px; background:rgba(0,0,0,0.35); padding:10px 14px; border-radius:8px; display:none;"></div>
-            <button id="sync-lock-cancel-btn" onclick="window.abortSyncLock=true;" style="display:none; margin-top:18px; padding:10px 18px; background:#e74c3c; color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">⚠️ Tutup Layar Sync (Cek Error)</button>
-        `;
-        document.body.appendChild(overlay);
-    }
-    overlay.style.display = "flex";
-    const cancelBtn = document.getElementById("sync-lock-cancel-btn");
-    const detailEl = document.getElementById("sync-lock-detail");
-    if (cancelBtn) cancelBtn.style.display = "none";
-    if (detailEl) detailEl.style.display = "none";
+        const cancelBtn = document.getElementById("sync-lock-cancel-btn");
+        const detailEl = document.getElementById("sync-lock-detail");
+        if (cancelBtn) cancelBtn.style.display = "none";
+        if (detailEl) detailEl.style.display = "none";
 
-    let waitLoops = 0;
-    while (window.isSyncing && waitLoops < 25) {
-        await new Promise(r => setTimeout(r, 200));
-        waitLoops++;
-    }
-
-    let maxAttempts = 25;
-    let attempt = 0;
-    
-    while (attempt < maxAttempts && !window.abortSyncLock) {
-        attempt++;
-        let count = await window.getUnsyncedCount();
-        const descEl = document.getElementById("sync-lock-desc");
-        if (descEl) descEl.innerText = `Mengirim sisa ${count} data ke server... (Percobaan ${attempt}/${maxAttempts})`;
-
-        if (count === 0) {
-            overlay.style.display = "none";
-            if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
-            return true;
-        }
-
-        if (attempt >= 2 && detailEl) {
-            let items = await window.getUnsyncedDetailsList();
-            let errTxt = window.lastSyncServerError ? `<br><span style="color:#ff7675;">Error Server: ${window.lastSyncServerError}</span>` : "";
-            detailEl.innerHTML = `<strong>Antrean Tertahan:</strong><br>${items.join("<br>")}${errTxt}`;
-            detailEl.style.display = "block";
-        }
-        if (attempt >= 3 && cancelBtn) cancelBtn.style.display = "inline-block";
-
-        if (!navigator.onLine) {
-            overlay.style.display = "none";
-            return false;
-        }
-
-        while (window.isSyncing) {
+        let waitLoops = 0;
+        while (window.isSyncing && waitLoops < 30) {
             await new Promise(r => setTimeout(r, 200));
+            waitLoops++;
         }
 
-        await window.runBackgroundSync(true);
-        if ((await window.getUnsyncedCount()) === 0) {
-            overlay.style.display = "none";
-            if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
-            return true;
-        }
-        await new Promise(r => setTimeout(r, Math.min(2500, 350 * attempt) + Math.floor(Math.random() * 500)));
-    }
+        let maxAttempts = 20;
+        let attempt = 0;
 
-    let finalCount = await window.getUnsyncedCount();
-    overlay.style.display = "none";
-    if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
-    return finalCount === 0;
+        while (attempt < maxAttempts && !window.abortSyncLock) {
+            attempt++;
+            let countBefore = await window.getUnsyncedCount();
+            const descEl = document.getElementById("sync-lock-desc");
+            if (descEl) descEl.innerText = `Mengirim sisa ${countBefore} data ke server... (Batch ${attempt}/${maxAttempts})`;
+
+            if (countBefore === 0) {
+                overlay.style.display = "none";
+                if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
+                return true;
+            }
+
+            if (attempt >= 3 && detailEl) {
+                let items = await window.getUnsyncedDetailsList();
+                let errTxt = window.lastSyncServerError ? `<br><span style="color:#ff7675;">Error Server: ${window.lastSyncServerError}</span>` : "";
+                detailEl.innerHTML = `<strong>Antrean Tertahan (${items.length}):</strong><br>${items.slice(0, 15).join("<br>")}${items.length > 15 ? "<br>..." : ""}${errTxt}`;
+                detailEl.style.display = "block";
+            }
+            if (attempt >= 4 && cancelBtn) cancelBtn.style.display = "inline-block";
+
+            if (!navigator.onLine) {
+                overlay.style.display = "none";
+                return false;
+            }
+
+            while (window.isSyncing) {
+                await new Promise(r => setTimeout(r, 200));
+            }
+
+            await window.runBackgroundSync(true);
+            let countAfter = await window.getUnsyncedCount();
+            if (countAfter === 0) {
+                overlay.style.display = "none";
+                if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
+                return true;
+            }
+            // Jika progres berhasil mengurangi antrean, lanjut batch berikutnya segera (250ms); jika gagal/sibuk, tunggu 2.5-5s
+            let madeProgress = countAfter < countBefore;
+            await new Promise(r => setTimeout(r, madeProgress ? 250 : (2500 + Math.floor(Math.random() * 2500))));
+        }
+
+        let finalCount = await window.getUnsyncedCount();
+        overlay.style.display = "none";
+        if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
+        return finalCount === 0;
     } finally {
         window.isDrainingForLogout = false;
     }
@@ -5189,7 +5193,7 @@ window.fetchWithSyncTimeout = async function(url, options = {}, timeoutMs = 4500
 };
 
 window.syncPendingAgain = false;
-window.syncAdaptiveChunkSize = 12;
+window.syncAdaptiveChunkSize = 20;
 window.runBackgroundSync = async function(skipPullAfter = false) {
     if (!navigator.onLine) return;
     if ((window.isLoggingOut || window.isDrainingForLogout) && !skipPullAfter) return;
@@ -5198,10 +5202,10 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
         return;
     }
     window.isSyncing = true;
-    
+
     let syncBtn = document.getElementById("btn-sync");
     let originalText = syncBtn ? syncBtn.innerHTML : "Sync";
-    
+
     if (syncBtn) {
         syncBtn.innerHTML = "⏳ Syncing...";
         syncBtn.style.backgroundColor = "#f39c12";
@@ -5211,7 +5215,7 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
 
     try {
         if (!window.db) { await window.initDB(); }
-        
+
         let tx = window.db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah", "bayar_piutang", "attendance", "kembali_galon"], "readonly");
         const fetchAll = (storeName) => new Promise(res => tx.objectStore(storeName).getAll().onsuccess = e => res(e.target.result || []));
 
@@ -5354,11 +5358,10 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
 
         let anySuccess = false;
         let hitLockTimeout = false;
-
-        // Adaptive batch size: otomatis mengecil jika server sibuk/timeout agar antrean tidak pernah macet
         let hasMoreInQueue = false;
+
         if (batchItems.length > 0) {
-            let chunkLimit = Math.max(1, Math.min(12, window.syncAdaptiveChunkSize || 12));
+            let chunkLimit = Math.max(5, Math.min(20, window.syncAdaptiveChunkSize || 20));
             let chunk = batchItems.slice(0, chunkLimit);
             if (batchItems.length > chunkLimit) {
                 hasMoreInQueue = true;
@@ -5370,41 +5373,30 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
                     redirect: "follow",
                     headers: { "Content-Type": "text/plain;charset=utf-8" },
                     body: JSON.stringify({ action: "syncBatch", items: chunk })
-                }, 45000);
+                }, 55000);
                 let resJson = await r.json();
 
                 if (resJson.status === "Success" && Array.isArray(resJson.results)) {
+                    window.lastSyncServerError = "";
                     for (const itemRes of resJson.results) {
                         let isOk = itemRes.status === "Success";
                         if (isOk) anySuccess = true;
                         else if (itemRes.message) window.lastSyncServerError = `${itemRes.key}: ${itemRes.message}`;
                         if (batchHandlers[itemRes.key]) await batchHandlers[itemRes.key](isOk);
                     }
-                } else if (String(resJson.message || "").includes("Unknown action")) {
-                    for (const singleItem of chunk) {
-                        let { key, ...singlePayload } = singleItem;
-                        let rSingle = await window.fetchWithSyncTimeout(API_URL, {
-                            method: "POST",
-                            redirect: "follow",
-                            headers: { "Content-Type": "text/plain;charset=utf-8" },
-                            body: JSON.stringify(singlePayload)
-                        }, 45000);
-                        let resSingle = await rSingle.json();
-                        let isOk = resSingle.status === "Success";
-                        if (isOk) anySuccess = true;
-                        else if (resSingle.message) window.lastSyncServerError = `${key}: ${resSingle.message}`;
-                        if (batchHandlers[key]) await batchHandlers[key](isOk);
-                    }
                 } else {
                     let msg = String(resJson.message || "Batch sync error");
                     window.lastSyncServerError = msg;
-                    if (msg.toLowerCase().includes("penguncian") || msg.toLowerCase().includes("lock")) hitLockTimeout = true;
+                    if (resJson.status === "Busy" || msg.toLowerCase().includes("penguncian") || msg.toLowerCase().includes("lock")) {
+                        hitLockTimeout = true;
+                    }
                     for (const singleItem of chunk) {
                         if (batchHandlers[singleItem.key]) await batchHandlers[singleItem.key](false);
                     }
                 }
             } catch (err) {
-                window.lastSyncServerError = err.name === "AbortError" ? "Timeout 45s" : err.message;
+                window.lastSyncServerError = err.name === "AbortError" ? "Timeout 55s" : err.message;
+                hitLockTimeout = true;
                 for (const singleItem of chunk) {
                     if (batchHandlers[singleItem.key]) await batchHandlers[singleItem.key](false);
                 }
@@ -5412,18 +5404,18 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
         }
 
         if (anySuccess && !hitLockTimeout) {
-            window.syncAdaptiveChunkSize = Math.min(12, (window.syncAdaptiveChunkSize || 6) + 2);
-        } else if (batchItems.length > 0 && !anySuccess && !hitLockTimeout) {
-            window.syncAdaptiveChunkSize = Math.max(2, Math.floor((window.syncAdaptiveChunkSize || 12) / 2));
+            window.syncAdaptiveChunkSize = Math.min(20, (window.syncAdaptiveChunkSize || 10) + 5);
+        } else if (batchItems.length > 0 && !anySuccess) {
+            window.syncAdaptiveChunkSize = Math.max(5, Math.floor((window.syncAdaptiveChunkSize || 20) / 2));
         }
 
         if (hitLockTimeout) {
             window.syncPendingAgain = true;
-            await new Promise(r => setTimeout(r, 2500 + Math.floor(Math.random() * 4500)));
+            await new Promise(r => setTimeout(r, 3000 + Math.floor(Math.random() * 5000)));
         }
 
         let nowPullMs = Date.now();
-        let shouldPullNow = !skipPullAfter && !hasMoreInQueue && (nowPullMs - (window.lastBackgroundPullMs || 0) > 25000);
+        let shouldPullNow = !skipPullAfter && !hasMoreInQueue && (nowPullMs - (window.lastBackgroundPullMs || 0) > 30000);
         if (anySuccess && shouldPullNow) {
             window.lastBackgroundPullMs = nowPullMs;
             await window.syncCriticalData();
@@ -5437,12 +5429,11 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
             setTimeout(() => {
                 if (syncBtn) {
                     syncBtn.innerHTML = originalText;
-                    syncBtn.style.backgroundColor = ""; 
+                    syncBtn.style.backgroundColor = "";
                     syncBtn.disabled = false;
                 }
             }, 3000);
         }
-
     } catch (e) {
         console.error("Background Sync Error:", e);
         if (e.name === 'InvalidStateError') { await window.initDB(); }
@@ -5452,20 +5443,21 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
             setTimeout(() => {
                 if (syncBtn) {
                     syncBtn.innerHTML = originalText;
-                    syncBtn.style.backgroundColor = ""; 
+                    syncBtn.style.backgroundColor = "";
                     syncBtn.disabled = false;
                 }
             }, 3000);
         }
-    } finally { 
-        window.isSyncing = false; 
+    } finally {
+        window.isSyncing = false;
         if (window.updateUnsyncedBadge) window.updateUnsyncedBadge();
         if (window.syncPendingAgain && navigator.onLine && !window.isLoggingOut && !window.isDrainingForLogout) {
             window.syncPendingAgain = false;
-            setTimeout(() => window.runBackgroundSync(), 350 + Math.floor(Math.random() * 650));
+            setTimeout(() => window.runBackgroundSync(), 1200 + Math.floor(Math.random() * 2000));
         }
     }
 };
+
 
 window.updateTabStyles = function(activeId) {
     const tabs = [
