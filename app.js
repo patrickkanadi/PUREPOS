@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 30; 
-const APP_VERSION = "30"; 
+const APP_VERSION = "31"; 
 window.db = null;
 
 // Core State
@@ -1552,8 +1552,9 @@ window.printViaBluetooth = async function(payloadBytes) {
 
 window.manualPushSync = async function() {
     if (!navigator.onLine) return alert("Anda sedang offline!");
+    window.lastBackgroundPullMs = 0;
     document.getElementById("network-text").innerText = "Mengirim Data..."; document.getElementById("network-dot").style.backgroundColor = "#f39c12";
-    await window.runBackgroundSync(); 
+    await window.runBackgroundSync();
     document.getElementById("network-text").innerText = "Menarik Data..."; 
     await window.syncMasterData(); 
     alert("Sinkronisasi Database Berhasil!");
@@ -4854,7 +4855,7 @@ window.executeFinalLogout = async function(netCash, logoutCashDrop = null) {
                         shiftReport: shiftPayload
                     }
                 }) 
-            }, 45000);
+            }, 65000);
             let res = await r.json();
             if (res.status === "Success") { 
                 syncSuccess = true;
@@ -5375,16 +5376,19 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
 
         if (anySuccess && !hitLockTimeout) {
             window.syncAdaptiveChunkSize = Math.min(12, (window.syncAdaptiveChunkSize || 6) + 2);
-        } else if (batchItems.length > 0 && !anySuccess) {
-            window.syncAdaptiveChunkSize = Math.max(1, Math.floor((window.syncAdaptiveChunkSize || 12) / 3));
+        } else if (batchItems.length > 0 && !anySuccess && !hitLockTimeout) {
+            window.syncAdaptiveChunkSize = Math.max(2, Math.floor((window.syncAdaptiveChunkSize || 12) / 2));
         }
 
         if (hitLockTimeout) {
             window.syncPendingAgain = true;
-            await new Promise(r => setTimeout(r, 1500 + Math.floor(Math.random() * 2500)));
+            await new Promise(r => setTimeout(r, 2500 + Math.floor(Math.random() * 4500)));
         }
 
-        if (anySuccess && !skipPullAfter && !hasMoreInQueue) {
+        let nowPullMs = Date.now();
+        let shouldPullNow = !skipPullAfter && !hasMoreInQueue && (nowPullMs - (window.lastBackgroundPullMs || 0) > 25000);
+        if (anySuccess && shouldPullNow) {
+            window.lastBackgroundPullMs = nowPullMs;
             await window.syncCriticalData();
             await window.syncBackgroundData();
         }
