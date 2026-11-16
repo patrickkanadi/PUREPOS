@@ -1553,12 +1553,125 @@ window.printViaBluetooth = async function(payloadBytes) {
 window.manualPushSync = async function() {
     if (!navigator.onLine) return alert("Anda sedang offline!");
     window.lastBackgroundPullMs = 0;
-    document.getElementById("network-text").innerText = "Mengirim Data..."; document.getElementById("network-dot").style.backgroundColor = "#f39c12";
+    const netText = document.getElementById("network-text");
+    const netDot = document.getElementById("network-dot");
+    if (netText) netText.innerText = "Mengirim Data...";
+    if (netDot) netDot.style.backgroundColor = "#f39c12";
+
     await window.runBackgroundSync();
-    document.getElementById("network-text").innerText = "Menarik Data..."; 
-    await window.syncMasterData(); 
-    alert("Sinkronisasi Database Berhasil!");
-}
+    if (netText) netText.innerText = "Menarik Data...";
+    await window.syncMasterData();
+
+    const remaining = await window.updateUnsyncedBadge();
+    if (remaining === 0) {
+        alert("✅ Sinkronisasi Database Berhasil! Semua data telah terkirim.");
+    } else {
+        window.openUnsyncedQueueModal();
+    }
+};
+
+window.openUnsyncedQueueModal = async function() {
+    const items = await window.getUnsyncedDetailsList();
+    if (items.length === 0) {
+        await window.updateUnsyncedBadge();
+        return alert("✅ Tidak ada data tertunda. Semua sudah tersinkron!");
+    }
+
+    let modal = document.getElementById("unsynced-inspector-modal");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "unsynced-inspector-modal";
+        modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:99998;display:flex;align-items:center;justify-content:center;padding:16px;";
+        document.body.appendChild(modal);
+    }
+
+    const errHtml = window.lastSyncServerError
+        ? `<div style="background:#fdedec;border:1px solid #f5b7b1;color:#c0392b;padding:8px 10px;border-radius:6px;font-size:12.5px;margin-bottom:10px;word-break:break-word;"><strong>Pesan Server:</strong> ${window.lastSyncServerError}</div>`
+        : "";
+
+    modal.innerHTML = `
+        <div style="background:#fff;border-radius:10px;max-width:480px;width:100%;padding:18px;box-shadow:0 8px 25px rgba(0,0,0,0.3);color:#2c3e50;">
+            <h3 style="margin:0 0 8px 0;">⏳ Antrean Data Belum Terkirim (${items.length})</h3>
+            <p style="margin:0 0 10px 0;font-size:13px;color:#7f8c8d;">Daftar data lokal yang belum masuk ke Google Sheets:</p>
+            ${errHtml}
+            <div style="max-height:220px;overflow-y:auto;background:#f8f9fa;border:1px solid #dcdde1;border-radius:6px;padding:10px;font-size:13px;margin-bottom:14px;">
+                ${items.map(it => `<div style="padding:5px 0;border-bottom:1px dashed #e0e0e0;">• ${it}</div>`).join("")}
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;">
+                <button type="button" onclick="document.getElementById('unsynced-inspector-modal').remove()" style="background:#95a5a6;color:#fff;border:none;padding:9px 14px;border-radius:6px;font-weight:bold;cursor:pointer;">Tutup</button>
+                <button type="button" onclick="window.clearStuckUnsyncedWithPin()" style="background:#e74c3c;color:#fff;border:none;padding:9px 14px;border-radius:6px;font-weight:bold;cursor:pointer;">🗑️ Hapus Antrean Nyangkut</button>
+                <button type="button" onclick="document.getElementById('unsynced-inspector-modal').remove(); window.manualPushSync();" style="background:#27ae60;color:#fff;border:none;padding:9px 14px;border-radius:6px;font-weight:bold;cursor:pointer;">🔄 Kirim Ulang</button>
+            </div>
+        </div>
+    `;
+};
+
+window.clearStuckUnsyncedWithPin = async function() {
+    const pin = prompt("Masukkan Master PIN / PIN Admin untuk menghapus antrean lokal yang nyangkut (pastikan data sudah dicek di Spreadsheet):");
+    if (!pin) return;
+    const hashed = await window.hashPIN(pin.trim());
+    const settings = await window.getDynamicSettings();
+    const isMaster = hashed === String(settings["Master_PIN"] || "").trim();
+    const staffList = await window.getStaffFromDB();
+    const isAdmin = staffList.some(s => String(s.pin).trim() === hashed && String(s.role).toLowerCase() === "admin");
+    if (!isMaster && !isAdmin) return alert("❌ PIN Admin / Master salah!");
+
+    const stores = ["orders", "bayar_piutang", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members", "stock_inbound", "cuci_tandon", "lapor_masalah", "kembali_galon", "attendance"];
+    await new Promise(res => {
+        const tx = window.db.transaction(stores, "readwrite");
+        ["void_requests", "unsynced_members"].forEach(st => tx.objectStore(st).clear());
+        ["orders", "bayar_piutang", "cash_drops", "shift_reports", "expenses", "stock_inbound", "cuci_tandon", "lapor_masalah", "kembali_galon", "attendance"].forEach(st => {
+            tx.objectStore(st).getAll().onsuccess = e => {
+                (e.target.result || []).forEach(rec => {
+                    if (rec.syncStatus && rec.syncStatus !== "Synced") {
+                        rec.syncStatus = "Synced";
+                        tx.objectStore(st).put(rec);
+                    }
+                });
+            };
+        });
+        tx.oncomplete = res;
+        tx.onerror = res;
+    });
+
+    const modal = document.getElementById("unsynced-inspector-modal");
+    if (modal) modal.remove();
+    await window.updateUnsyncedBadge();
+    alert("✅ Antrean nyangkut telah dibersihkan.");
+};
+
+window.updateUnsyncedBadge = async function() {
+    const count = await window.getUnsyncedCount();
+    let badge = document.getElementById("unsynced-queue-badge");
+    if (!badge) {
+        badge = document.createElement("span");
+        badge.id = "unsynced-queue-badge";
+        badge.style.cssText = "padding:3px 9px;border-radius:12px;font-size:12px;font-weight:bold;margin-left:8px;cursor:pointer;";
+        badge.title = "Klik untuk melihat detail antrean yang belum terkirim.";
+        badge.onclick = window.openUnsyncedQueueModal;
+        const netContainer = document.getElementById("network-text");
+        if (netContainer && netContainer.parentNode) {
+            netContainer.parentNode.appendChild(badge);
+        }
+    }
+
+    const netText = document.getElementById("network-text");
+    if (count > 0) {
+        badge.style.display = "inline-block";
+        badge.style.background = "#e74c3c";
+        badge.style.color = "white";
+        badge.innerText = `⏳ ${count} Data Belum Terkirim`;
+        if (navigator.onLine && netText && netText.innerText === "Online & Sinkron") {
+            netText.innerText = `Online (${count} Antre)`;
+        }
+    } else {
+        badge.style.display = "none";
+        if (navigator.onLine && netText && netText.innerText.startsWith("Online (")) {
+            netText.innerText = "Online & Sinkron";
+        }
+    }
+    return count;
+};
 
 window.syncCriticalData = async function() {
     if (!navigator.onLine) return;
@@ -5012,37 +5125,6 @@ window.getUnsyncedCount = async function() {
     } catch (e) {
         return 0;
     }
-};
-
-window.updateUnsyncedBadge = async function() {
-    const count = await window.getUnsyncedCount();
-    let badge = document.getElementById("unsynced-queue-badge");
-    if (!badge) {
-        badge = document.createElement("span");
-        badge.id = "unsynced-queue-badge";
-        badge.style.padding = "3px 9px";
-        badge.style.borderRadius = "12px";
-        badge.style.fontSize = "12px";
-        badge.style.fontWeight = "bold";
-        badge.style.marginLeft = "8px";
-        badge.style.cursor = "pointer";
-        badge.title = "Ada data transaksi lokal belum terkirim. Klik untuk sinkronkan sekarang.";
-        badge.onclick = window.manualPushSync;
-        const netContainer = document.getElementById("network-text");
-        if (netContainer && netContainer.parentNode) {
-            netContainer.parentNode.appendChild(badge);
-        }
-    }
-
-    if (count > 0) {
-        badge.style.display = "inline-block";
-        badge.style.background = "#e74c3c";
-        badge.style.color = "white";
-        badge.innerText = `⏳ ${count} Data Belum Terkirim`;
-    } else {
-        badge.style.display = "none";
-    }
-    return count;
 };
 
 window.lastSyncServerError = "";
