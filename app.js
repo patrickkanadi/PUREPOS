@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 30; 
-const APP_VERSION = "36"; 
+const APP_VERSION = "37"; 
 window.db = null;
 
 // Core State
@@ -5255,7 +5255,7 @@ window.drainSyncQueueWithLock = async function() {
                 await new Promise(r => setTimeout(r, 200));
             }
 
-            await window.runBackgroundSync(true);
+            await window.runBackgroundSync(true, true);
             let countAfter = await window.getUnsyncedCount();
             if (countAfter === 0) {
                 overlay.style.display = "none";
@@ -5303,9 +5303,10 @@ window.fetchWithSyncTimeout = async function(url, options = {}, timeoutMs = 4500
 
 window.syncPendingAgain = false;
 window.syncAdaptiveChunkSize = 15;
-window.runBackgroundSync = async function(skipPullAfter = false) {
+window.syncFailCounts = window.syncFailCounts || {};
+window.runBackgroundSync = async function(skipPullAfter = false, fromDrainLoop = false) {
     if (!navigator.onLine) return;
-    if ((window.isLoggingOut || window.isDrainingForLogout) && !skipPullAfter) return;
+    if ((window.isLoggingOut || window.isDrainingForLogout) && !fromDrainLoop) return;
     if (window.isSyncing) {
         if (!window.isLoggingOut && !window.isDrainingForLogout) window.syncPendingAgain = true;
         return;
@@ -5470,6 +5471,7 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
         }
 
         if (batchItems.length > 0) {
+            batchItems.sort((a, b) => (window.syncFailCounts[a.key] || 0) - (window.syncFailCounts[b.key] || 0));
             let chunkLimit = Math.max(5, Math.min(15, window.syncAdaptiveChunkSize || 15));
             let chunk = batchItems.slice(0, chunkLimit);
             if (batchItems.length > chunkLimit) {
@@ -5489,8 +5491,13 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
                     window.lastSyncServerError = "";
                     for (const itemRes of resJson.results) {
                         let isOk = itemRes.status === "Success";
-                        if (isOk) anySuccess = true;
-                        else if (itemRes.message) window.lastSyncServerError = `${itemRes.key}: ${itemRes.message}`;
+                        if (isOk) {
+                            anySuccess = true;
+                            delete window.syncFailCounts[itemRes.key];
+                        } else {
+                            window.syncFailCounts[itemRes.key] = (window.syncFailCounts[itemRes.key] || 0) + 1;
+                            if (itemRes.message) window.lastSyncServerError = `${itemRes.key}: ${itemRes.message}`;
+                        }
                         if (batchHandlers[itemRes.key]) await batchHandlers[itemRes.key](isOk);
                     }
                 } else {
@@ -5555,7 +5562,7 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
         }
         if ((window.syncPendingAgain || hasMoreInQueue) && navigator.onLine && !window.isLoggingOut && !window.isDrainingForLogout) {
             window.syncPendingAgain = false;
-            setTimeout(() => window.runBackgroundSync(true), 300);
+            setTimeout(() => window.runBackgroundSync(skipPullAfter, false), 300);
             return;
         }
 
@@ -6640,7 +6647,13 @@ window.onload = async () => {
     }
     
     if (navigator.onLine) {
-        window.runBackgroundSync().then(() => window.syncMasterData()); 
+        window.getUnsyncedCount().then(cnt => {
+            if (cnt > 0) {
+                window.runBackgroundSync();
+            } else {
+                window.syncMasterData();
+            }
+        });
     } else {
         let netText = document.getElementById("network-text");
         let netDot = document.getElementById("network-dot");
