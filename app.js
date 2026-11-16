@@ -1687,11 +1687,17 @@ window.syncCriticalData = async function() {
                 localStorage.setItem("serverCodeVersion", result.codeVersion);
                 if (prevVer && prevVer !== result.codeVersion) {
                     if ("serviceWorker" in navigator) {
-                        navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.update())).catch(() => {});
+                        navigator.serviceWorker.getRegistrations().then(regs => {
+                            regs.forEach(r => {
+                                r.update().catch(() => {});
+                                if (r.waiting) r.waiting.postMessage({ type: "SKIP_WAITING" });
+                            });
+                        }).catch(() => {});
                     }
                     let allCartsEmpty = (window.posSessions || []).every(s => !s.cart || s.cart.length === 0);
                     let noModalOpen = document.querySelectorAll(".modal:not(.hidden)").length === 0;
-                    if (allCartsEmpty && noModalOpen && !window.isSyncing && !window.isFinalizingOrder) {
+                    let unsyncedNow = await window.getUnsyncedCount();
+                    if (allCartsEmpty && noModalOpen && unsyncedNow === 0 && !window.isSyncing && !window.isFinalizingOrder) {
                         window.location.reload();
                         return;
                     }
