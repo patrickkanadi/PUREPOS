@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 30; 
-const APP_VERSION = "35"; 
+const APP_VERSION = "36"; 
 window.db = null;
 
 // Core State
@@ -1558,7 +1558,13 @@ window.manualPushSync = async function() {
     if (netText) netText.innerText = "Mengirim Data...";
     if (netDot) netDot.style.backgroundColor = "#f39c12";
 
-    await window.runBackgroundSync(true);
+    let pendingStart = await window.getUnsyncedCount();
+    if (pendingStart > 0) {
+        await window.drainSyncQueueWithLock();
+    } else {
+        await window.runBackgroundSync(true);
+    }
+
     let remaining = await window.updateUnsyncedBadge();
     if (remaining === 0) {
         if (netText) netText.innerText = "Menarik Data...";
@@ -5220,28 +5226,25 @@ window.drainSyncQueueWithLock = async function() {
             waitLoops++;
         }
 
-        let maxAttempts = 20;
-        let attempt = 0;
+        let maxStalledAttempts = 8;
+        let stalledAttempts = 0;
+        let batchNum = 0;
 
-        while (attempt < maxAttempts && !window.abortSyncLock) {
-            attempt++;
+        while (stalledAttempts < maxStalledAttempts && !window.abortSyncLock) {
+            batchNum++;
             let countBefore = await window.getUnsyncedCount();
             const descEl = document.getElementById("sync-lock-desc");
-            if (descEl) descEl.innerText = `Mengirim sisa ${countBefore} data ke server... (Batch ${attempt}/${maxAttempts})`;
+            if (descEl) {
+                descEl.innerText = stalledAttempts === 0
+                    ? `Mengirim sisa ${countBefore} data ke server... (Batch #${batchNum})`
+                    : `Server sedang sibuk, mengantre otomatis... (Sisa ${countBefore} data | Percobaan ulang ${stalledAttempts}/${maxStalledAttempts})`;
+            }
 
             if (countBefore === 0) {
                 overlay.style.display = "none";
                 if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
                 return true;
             }
-
-            if (attempt >= 3 && detailEl) {
-                let items = await window.getUnsyncedDetailsList();
-                let errTxt = window.lastSyncServerError ? `<br><span style="color:#ff7675;">Error Server: ${window.lastSyncServerError}</span>` : "";
-                detailEl.innerHTML = `<strong>Antrean Tertahan (${items.length}):</strong><br>${items.slice(0, 15).join("<br>")}${items.length > 15 ? "<br>..." : ""}${errTxt}`;
-                detailEl.style.display = "block";
-            }
-            if (attempt >= 4 && cancelBtn) cancelBtn.style.display = "inline-block";
 
             if (!navigator.onLine) {
                 overlay.style.display = "none";
@@ -5259,9 +5262,24 @@ window.drainSyncQueueWithLock = async function() {
                 if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
                 return true;
             }
-            // Jika progres berhasil mengurangi antrean, lanjut batch berikutnya segera (250ms); jika gagal/sibuk, tunggu 2.5-5s
+
             let madeProgress = countAfter < countBefore;
-            await new Promise(r => setTimeout(r, madeProgress ? 250 : (2500 + Math.floor(Math.random() * 2500))));
+            if (madeProgress) {
+                stalledAttempts = 0;
+                if (detailEl) detailEl.style.display = "none";
+                if (cancelBtn) cancelBtn.style.display = "none";
+                await new Promise(r => setTimeout(r, 200));
+            } else {
+                stalledAttempts++;
+                if (stalledAttempts >= 2 && detailEl) {
+                    let items = await window.getUnsyncedDetailsList();
+                    let errTxt = window.lastSyncServerError ? `<br><span style="color:#ff7675;">Error Server: ${window.lastSyncServerError}</span>` : "";
+                    detailEl.innerHTML = `<strong>Antrean Tertahan (${items.length}):</strong><br>${items.slice(0, 15).join("<br>")}${items.length > 15 ? "<br>..." : ""}${errTxt}`;
+                    detailEl.style.display = "block";
+                }
+                if (stalledAttempts >= 2 && cancelBtn) cancelBtn.style.display = "inline-block";
+                await new Promise(r => setTimeout(r, 2000 + Math.floor(Math.random() * 2500)));
+            }
         }
 
         let finalCount = await window.getUnsyncedCount();
