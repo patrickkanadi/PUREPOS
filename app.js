@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 30; 
-const APP_VERSION = "33"; 
+const APP_VERSION = "35"; 
 window.db = null;
 
 // Core State
@@ -1558,11 +1558,14 @@ window.manualPushSync = async function() {
     if (netText) netText.innerText = "Mengirim Data...";
     if (netDot) netDot.style.backgroundColor = "#f39c12";
 
-    await window.runBackgroundSync();
-    if (netText) netText.innerText = "Menarik Data...";
-    await window.syncMasterData();
+    await window.runBackgroundSync(true);
+    let remaining = await window.updateUnsyncedBadge();
+    if (remaining === 0) {
+        if (netText) netText.innerText = "Menarik Data...";
+        await window.syncMasterData();
+        remaining = await window.updateUnsyncedBadge();
+    }
 
-    const remaining = await window.updateUnsyncedBadge();
     if (remaining === 0) {
         alert("✅ Sinkronisasi Database Berhasil! Semua data telah terkirim.");
     } else {
@@ -5281,7 +5284,7 @@ window.fetchWithSyncTimeout = async function(url, options = {}, timeoutMs = 4500
 };
 
 window.syncPendingAgain = false;
-window.syncAdaptiveChunkSize = 35;
+window.syncAdaptiveChunkSize = 15;
 window.runBackgroundSync = async function(skipPullAfter = false) {
     if (!navigator.onLine) return;
     if ((window.isLoggingOut || window.isDrainingForLogout) && !skipPullAfter) return;
@@ -5449,7 +5452,7 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
         }
 
         if (batchItems.length > 0) {
-         let chunkLimit = Math.max(10, Math.min(35, window.syncAdaptiveChunkSize || 35));
+            let chunkLimit = Math.max(5, Math.min(15, window.syncAdaptiveChunkSize || 15));
             let chunk = batchItems.slice(0, chunkLimit);
             if (batchItems.length > chunkLimit) {
                 hasMoreInQueue = true;
@@ -5492,10 +5495,10 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
         }
 
         if (anySuccess && !hitLockTimeout) {
-         window.syncAdaptiveChunkSize = Math.min(35, (window.syncAdaptiveChunkSize || 20) + 10);
-     } else if (batchItems.length > 0 && !anySuccess) {
-         window.syncAdaptiveChunkSize = Math.max(10, Math.floor((window.syncAdaptiveChunkSize || 35) / 2));
-     }
+            window.syncAdaptiveChunkSize = Math.min(15, (window.syncAdaptiveChunkSize || 10) + 5);
+        } else if (batchItems.length > 0 && !anySuccess) {
+            window.syncAdaptiveChunkSize = Math.max(5, Math.floor((window.syncAdaptiveChunkSize || 15) / 2));
+        }
 
         if (syncBtn) {
             let allFailed = (batchItems.length > 0 && !anySuccess);
