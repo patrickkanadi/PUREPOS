@@ -4683,6 +4683,28 @@ window.fallbackLocalShiftReport = window.openCurrentShiftReport;
 window.openShiftReport = window.openCurrentShiftReport; 
 
 window.initiateLogoutSequence = async function() { 
+    // Bersihkan sisa status "Bundled" dari percobaan logout sebelumnya (jika sempat terputus) agar tidak menyumbat drainSyncQueueWithLock
+    if (window.db && window.currentShiftId) {
+        await new Promise(res => {
+            try {
+                let txClean = window.db.transaction(["shift_reports", "cash_drops", "attendance"], "readwrite");
+                txClean.objectStore("shift_reports").delete(window.currentShiftId);
+                txClean.objectStore("cash_drops").delete("DRP-END-" + window.currentShiftId);
+                txClean.objectStore("attendance").getAll().onsuccess = (ev) => {
+                    (ev.target.result || []).forEach(a => {
+                        if (a.syncStatus === "Bundled") {
+                            a.clockOut = null;
+                            a.syncStatus = "Synced";
+                            txClean.objectStore("attendance").put(a);
+                        }
+                    });
+                };
+                txClean.oncomplete = res;
+                txClean.onerror = res;
+            } catch (_) { res(); }
+        });
+    }
+
     // 🔥 1. CEK ANTREAN SEBELUM TUTUP SHIFT: Kasir tidak boleh lanjut jika data belum tersinkron!
     const pendingCount = await window.getUnsyncedCount();
     if (pendingCount > 0) {
@@ -4789,11 +4811,26 @@ window.executeFinalLogout = async function(netCash, logoutCashDrop = null) {
     }
 
     let overlay = document.getElementById("sync-lock-overlay");
-    if (overlay) {
-        overlay.style.display = "flex";
-        const descEl = document.getElementById("sync-lock-desc");
-        if (descEl) descEl.innerText = "Menyimpan Setor Laci, Absensi, & Laporan Shift Akhir sekaligus...";
+    if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.id = "sync-lock-overlay";
+        overlay.style.cssText = "position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(44,62,80,0.95);z-index:99999;display:flex;flex-direction:column;justify-content:center;align-items:center;color:white;padding:20px;";
+        overlay.innerHTML = `
+            <div style="font-size:48px; margin-bottom:15px; animation: spin 2s linear infinite;">⏳</div>
+            <h2 id="sync-lock-title" style="margin:0 0 10px 0;">Menyinkronkan Data ke Spreadsheet...</h2>
+            <p id="sync-lock-desc" style="font-size:16px; color:#ecf0f1; max-width:480px; text-align:center;">Harap tunggu. Jangan matikan tablet atau me-refresh aplikasi.</p>
+            <div id="sync-lock-detail" style="font-size:13px; color:#f1c40f; max-width:520px; text-align:center; margin-top:8px; background:rgba(0,0,0,0.35); padding:10px 14px; border-radius:8px; display:none;"></div>
+            <button id="sync-lock-cancel-btn" onclick="window.abortSyncLock=true;" style="display:none; margin-top:18px; padding:10px 18px; background:#e74c3c; color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">⚠️ Tutup Layar Sync (Cek Error)</button>
+        `;
+        document.body.appendChild(overlay);
     }
+    overlay.style.display = "flex";
+    const detailEl = document.getElementById("sync-lock-detail");
+    const cancelBtn = document.getElementById("sync-lock-cancel-btn");
+    if (detailEl) detailEl.style.display = "none";
+    if (cancelBtn) cancelBtn.style.display = "none";
+    const descEl = document.getElementById("sync-lock-desc");
+    if (descEl) descEl.innerText = "Menyimpan Setor Laci, Absensi, & Laporan Shift Akhir sekaligus...";
 
     // Tunggu jika ada proses sync latar belakang yang sedang berjalan agar tidak bertabrakan
     let waitSync = 0;
