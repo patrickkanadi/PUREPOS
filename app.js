@@ -5295,6 +5295,11 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
         syncBtn.disabled = true;
     }
 
+    let anySuccess = false;
+    let hitLockTimeout = false;
+    let hasMoreInQueue = false;
+    let batchItems = [];
+
     try {
         if (!window.db) { await window.initDB(); }
 
@@ -5320,7 +5325,6 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
             t.onerror = () => res();
         });
 
-        let batchItems = [];
         let batchHandlers = {};
 
         const sortedOrders = [...orders].sort((a, b) => {
@@ -5438,10 +5442,6 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
             }
         }
 
-        let anySuccess = false;
-        let hitLockTimeout = false;
-        let hasMoreInQueue = false;
-
         if (batchItems.length > 0) {
             let chunkLimit = Math.max(5, Math.min(20, window.syncAdaptiveChunkSize || 20));
             let chunk = batchItems.slice(0, chunkLimit);
@@ -5491,19 +5491,6 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
             window.syncAdaptiveChunkSize = Math.max(5, Math.floor((window.syncAdaptiveChunkSize || 20) / 2));
         }
 
-        if (hitLockTimeout) {
-            window.syncPendingAgain = true;
-            await new Promise(r => setTimeout(r, 3000 + Math.floor(Math.random() * 5000)));
-        }
-
-        let nowPullMs = Date.now();
-        let shouldPullNow = !skipPullAfter && !hasMoreInQueue && (nowPullMs - (window.lastBackgroundPullMs || 0) > 30000);
-        if (anySuccess && shouldPullNow) {
-            window.lastBackgroundPullMs = nowPullMs;
-            await window.syncCriticalData();
-            await window.syncBackgroundData();
-        }
-
         if (syncBtn) {
             let allFailed = (batchItems.length > 0 && !anySuccess);
             syncBtn.innerHTML = allFailed ? "⚠️ Antre Sync" : "✅ Synced";
@@ -5514,7 +5501,7 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
                     syncBtn.style.backgroundColor = "";
                     syncBtn.disabled = false;
                 }
-            }, 3000);
+            }, 2500);
         }
     } catch (e) {
         console.error("Background Sync Error:", e);
@@ -5528,14 +5515,33 @@ window.runBackgroundSync = async function(skipPullAfter = false) {
                     syncBtn.style.backgroundColor = "";
                     syncBtn.disabled = false;
                 }
-            }, 3000);
+            }, 2500);
         }
     } finally {
+        // 🔥 Lepas kunci isSyncing SEBELUM pull latar belakang agar checkout & logout tidak pernah terblokir!
         window.isSyncing = false;
         if (window.updateUnsyncedBadge) window.updateUnsyncedBadge();
-        if (window.syncPendingAgain && navigator.onLine && !window.isLoggingOut && !window.isDrainingForLogout) {
+
+        if (hitLockTimeout && navigator.onLine && !window.isLoggingOut && !window.isDrainingForLogout) {
+            setTimeout(() => window.runBackgroundSync(), 2500 + Math.floor(Math.random() * 4000));
+            return;
+        }
+        if ((window.syncPendingAgain || hasMoreInQueue) && navigator.onLine && !window.isLoggingOut && !window.isDrainingForLogout) {
             window.syncPendingAgain = false;
-            setTimeout(() => window.runBackgroundSync(), 1200 + Math.floor(Math.random() * 2000));
+            setTimeout(() => window.runBackgroundSync(true), 300);
+            return;
+        }
+
+        // Tarik data server (doGet) secara non-blocking maksimal setiap 90 detik sekali
+        let nowPullMs = Date.now();
+        let shouldPullNow = !skipPullAfter && !hasMoreInQueue && !window.isLoggingOut && !window.isDrainingForLogout && (nowPullMs - (window.lastBackgroundPullMs || 0) > 90000);
+        if (anySuccess && shouldPullNow) {
+            window.lastBackgroundPullMs = nowPullMs;
+            setTimeout(() => {
+                if (!window.isLoggingOut && !window.isDrainingForLogout) {
+                    window.syncCriticalData().then(() => window.syncBackgroundData()).catch(() => {});
+                }
+            }, 400);
         }
     }
 };
