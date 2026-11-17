@@ -1002,13 +1002,22 @@ window.isMenuLocked = true; window.isSyncing = false; window.loyaltyEnabled = fa
 window.historyHours = 24; // 🔥 Default 24 jam jika belum diatur di Settings
 
 // Advanced Promos (From Laundry POS)
-// Advanced Promos (From Laundry POS)
 window.promoRules = {};
 window.promoStampRules = {};
 window.volumeDiscountRules = [];
+window.outletSalaryModels = {};
+window.salaryRules = [];
+window.showShiftBonusPos = false;
 
 window.applySettingsToMemory = function(settingsObj) {
     if (!settingsObj) return;
+    window.showShiftBonusPos = String(settingsObj["Show_Shift_Bonus_POS"] || "FALSE").toUpperCase() === "TRUE";
+    if (settingsObj["_OutletSalaryModels"]) {
+        try { window.outletSalaryModels = JSON.parse(settingsObj["_OutletSalaryModels"]); } catch (_) {}
+    }
+    if (settingsObj["_SalaryRules"]) {
+        try { window.salaryRules = JSON.parse(settingsObj["_SalaryRules"]); } catch (_) {}
+    }
     window.volumeDiscountRules = [];
     window.promoRules = {};
     window.promoStampRules = {};
@@ -1797,6 +1806,14 @@ window.syncCriticalData = async function() {
                 const setT = tx.objectStore("settings"); setT.clear();
                 for (const [k, v] of Object.entries(result.data.settings)) { 
                     setT.put({ key: k, value: v }); 
+                }
+                if (result.data.outletSalaryModels) {
+                    window.outletSalaryModels = result.data.outletSalaryModels;
+                    setT.put({ key: "_OutletSalaryModels", value: JSON.stringify(result.data.outletSalaryModels) });
+                }
+                if (result.data.salaryRules) {
+                    window.salaryRules = result.data.salaryRules;
+                    setT.put({ key: "_SalaryRules", value: JSON.stringify(result.data.salaryRules) });
                 }
                 window.applySettingsToMemory(result.data.settings);
                 
@@ -4915,6 +4932,39 @@ window.submitNewMember = async function() {
     }
 };
 
+window.getActiveOutletSalaryModel = function(outletName) {
+    let up = String(outletName || window.currentOutlet || "").trim().toUpperCase();
+    return (window.outletSalaryModels && window.outletSalaryModels[up]) ? window.outletSalaryModels[up] : "MODEL_1";
+};
+
+window.calculateShiftBonusEstimate = function(foodSummary, outletName, shiftDateStr) {
+    let activeModel = window.getActiveOutletSalaryModel(outletName);
+    let d = shiftDateStr ? new Date(String(shiftDateStr).replace(/-/g, '/')) : new Date();
+    let dow = isNaN(d.getTime()) ? new Date().getDay() : d.getDay();
+    let isWeekend = (dow === 0 || dow === 6);
+
+    let menuKomisiMap = {};
+    (window.globalMenuData || []).forEach(m => {
+        if (m.name && m.kategoriKomisi) menuKomisiMap[m.name] = String(m.kategoriKomisi).trim().toUpperCase();
+    });
+
+    let estBonus = 0;
+    for (const [key, val] of Object.entries(foodSummary || {})) {
+        let name = (typeof val === "object" && val.name) ? val.name : key;
+        let qty = (typeof val === "object") ? (Number(val.qty) || 0) : (Number(val) || 0);
+        let nominal = (typeof val === "object") ? (Number(val.nominal) || 0) : 0;
+        let komisiCat = menuKomisiMap[name] || (name.toUpperCase().includes("RO") ? "KOMISI RO" : (name.toUpperCase().includes("19L") ? "KOMISI STD" : ""));
+        if (!komisiCat) continue;
+
+        let rule = (window.salaryRules || []).find(r => r.model === activeModel && (r.komisiCat === komisiCat || r.komisiCat === "ALL_OMSET"));
+        if (rule) {
+            let rate = isWeekend ? (Number(rule.rateHoliday) || 0) : (Number(rule.rateWeekday) || 0);
+            estBonus += (rule.basis === "PERSEN_OMSET") ? (nominal * (rate / 100)) : (qty * rate);
+        }
+    }
+    return { model: activeModel, estimatedBonus: Math.round(estBonus) };
+};
+
 window.openCurrentShiftReport = async function() {
     const today = window.getWibDate().split(" ")[0];
     
@@ -5060,6 +5110,10 @@ window.openCurrentShiftReport = async function() {
             let qty = typeof val === 'object' ? val.qty : val;
             let name = typeof val === 'object' && val.name ? val.name : key;
             itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`;
+        }
+        const shiftBonusInfo = window.calculateShiftBonusEstimate(foodSummary, window.currentOutlet, window.getWibDate());
+        if (window.showShiftBonusPos) {
+            itemsHtml += `<div style="margin-top:8px; padding-top:8px; border-top:1px dashed #bdc3c7; display:flex; justify-content:space-between; font-size:13px; color:#1e8449;"><span>💰 Estimasi Bonus (${shiftBonusInfo.model}):</span><strong>Rp ${shiftBonusInfo.estimatedBonus.toLocaleString('id-ID')}</strong></div>`;
         }
         let itemsContainer = document.getElementById("sr-items-list");
         if (itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual hari ini.</div>";
