@@ -6496,36 +6496,76 @@ window.submitDeliveryDone = function() {
         window.runBackgroundSync();
     };
 }
+window.absensiSearchQuery = "";
 window.renderAbsensi = async function() {
-    const container = document.getElementById("absensi-list"); container.innerHTML = "";
+    const container = document.getElementById("absensi-list");
+    if (!container) return;
     const staffList = await window.getStaffFromDB();
     const today = window.getWibDate().split(" ")[0];
-    
+    const curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
+
     window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (e) => {
-        let logs = e.target.result.filter(l => l.date === today);
-        
-        // 🔥 THE FIX: Strictly hide anyone with the "admin" role from the attendance list
-        let outletStaff = staffList.filter(s => 
-            s.role.toLowerCase() !== 'admin' && 
-            (s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'manager')
-        );
+        let logs = (e.target.result || []).filter(l => l.date === today);
 
-        outletStaff.forEach(staff => {
+        // Exclude Admin (Admin is for spreadsheet & POS trial only)
+        let eligibleStaff = staffList.filter(s => String(s.role || "").trim().toLowerCase() !== "admin");
+
+        // Priority 1: Staff belonging to this outlet OR already clocked in at this outlet today
+        let priorityStaff = [];
+        let otherStaff = [];
+        eligibleStaff.forEach(s => {
+            let homeOutUp = String(s.defaultOutlet || "").trim().toUpperCase();
+            let activeHere = logs.some(l => l.staffName === s.name && !l.clockOut && String(l.outlet || "").trim().toUpperCase() === curOutUp);
+            if (homeOutUp === curOutUp || activeHere) {
+                priorityStaff.push(s);
+            } else {
+                otherStaff.push(s);
+            }
+        });
+
+        priorityStaff.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+        otherStaff.sort((a, b) => String(a.defaultOutlet || "").localeCompare(String(b.defaultOutlet || "")) || String(a.name).localeCompare(String(b.name)));
+
+        const buildStaffCard = (staff, isOtherOutlet) => {
             let activeLog = logs.find(l => l.staffName === staff.name && !l.clockOut);
-            let statusBadge = activeLog ? `<span style="color:#27ae60; font-weight:bold;">🟢 Sedang Tugas (Masuk: ${activeLog.clockIn.split(" ")[1]})</span>` : `<span style="color:#7f8c8d; font-weight:bold;">⚪ Belum Clock-in</span>`;
-            
-            let btnAction = activeLog 
-                ? `<button onclick="window.clockOutStaff('${activeLog.logId}')" style="background:#e74c3c; color:white; border:none; padding:8px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Clock Out</button>`
-                : `<button onclick="window.clockInStaff('${staff.name}')" style="background:#3498db; color:white; border:none; padding:8px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Clock In</button>`;
+            let safeName = String(staff.name || "").replace(/'/g, "\\'").replace(/"/g, "&quot;");
+            let homeTag = isOtherOutlet
+                ? `<span style="background:#ebf5fb; color:#2980b9; border:1px solid #aed6f1; padding:1px 6px; border-radius:4px; font-size:11px; font-weight:bold; margin-left:4px;">${staff.defaultOutlet || "-"}</span>`
+                : "";
+            let statusBadge = activeLog
+                ? `<span style="color:#27ae60; font-weight:bold;">🟢 Sedang Tugas di ${activeLog.outlet || window.currentOutlet} (Masuk: ${(activeLog.clockIn || "").split(" ")[1] || "-"})</span>`
+                : `<span style="color:#7f8c8d; font-weight:bold;">⚪ Belum Clock-in</span>`;
 
-            container.innerHTML += `
-            <div style="border:1px solid #ecf0f1; padding:15px; border-radius:6px; background:#f9fcfc; display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
-                <div>👤 <strong style="font-size:16px;">${staff.name}</strong> (${staff.role})<br>${statusBadge}</div>
+            let btnAction = activeLog
+                ? `<button onclick="window.clockOutStaff('${activeLog.logId}')" style="background:#e74c3c; color:white; border:none; padding:8px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Clock Out</button>`
+                : `<button onclick="window.clockInStaff('${safeName}')" style="background:#3498db; color:white; border:none; padding:8px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Clock In</button>`;
+
+            let searchHay = `${staff.name} ${staff.role} ${staff.defaultOutlet || ""}`.toLowerCase().replace(/"/g, "");
+            return `
+            <div class="absensi-staff-row" data-search="${searchHay}" style="border:1px solid #ecf0f1; padding:12px 14px; border-radius:6px; background:${isOtherOutlet ? "#fdfefe" : "#f9fcfc"}; display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <div>👤 <strong style="font-size:15.5px;">${staff.name}</strong> <small style="color:#5d6d7e;">(${staff.role})</small>${homeTag}<br><small>${statusBadge}</small></div>
                 <div>${btnAction}</div>
             </div>`;
-        });
-        
-        container.innerHTML += `
+        };
+
+        let html = `
+        <div style="position:sticky; top:0; background:#fff; padding-bottom:10px; z-index:5;">
+            <input type="text" id="absensi-search-input" value="${String(window.absensiSearchQuery || "").replace(/"/g, "&quot;")}" placeholder="🔍 Cari nama staff atau kode cabang (misal: KA, ARH, Rian)..." oninput="window.filterAbsensiList(this.value)" style="width:100%; padding:10px 12px; border:2px solid #3498db; border-radius:8px; font-size:14px; box-sizing:border-box;" autocomplete="off">
+        </div>`;
+
+        html += `<div id="absensi-group-priority">
+            <div style="background:#eafaf1; color:#1e8449; padding:6px 10px; border-radius:5px; font-weight:bold; font-size:12.5px; margin-bottom:8px;">⭐ Staff Cabang ${window.currentOutlet} (${priorityStaff.length})</div>
+            ${priorityStaff.map(s => buildStaffCard(s, false)).join("") || '<div style="padding:10px; color:#7f8c8d; font-size:13px;">Belum ada staff terdaftar di cabang ini.</div>'}
+        </div>`;
+
+        if (otherStaff.length > 0) {
+            html += `<div id="absensi-group-other" style="margin-top:14px;">
+                <div style="background:#ebf5fb; color:#2980b9; padding:6px 10px; border-radius:5px; font-weight:bold; font-size:12.5px; margin-bottom:8px;">🌐 Staff Cabang Lain — Bantuan / Freelance (${otherStaff.length})</div>
+                ${otherStaff.map(s => buildStaffCard(s, true)).join("")}
+            </div>`;
+        }
+
+        html += `
         <div style="margin-top: 15px; padding-top: 15px; border-top: 2px dashed #bdc3c7;">
             <p style="margin-top:0; font-weight:bold; color:#2c3e50; font-size:14px;">➕ Tambah Staff Baru Cepat</p>
             <div style="display:flex; gap:10px;">
@@ -6533,8 +6573,22 @@ window.renderAbsensi = async function() {
                 <button onclick="window.submitNewStaff()" style="background:#27ae60; color:white; border:none; padding:10px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Tambah</button>
             </div>
         </div>`;
+
+        container.innerHTML = html;
+        if (window.absensiSearchQuery) window.filterAbsensiList(window.absensiSearchQuery);
     };
-}
+};
+
+window.filterAbsensiList = function(query) {
+    window.absensiSearchQuery = String(query || "");
+    const q = window.absensiSearchQuery.toLowerCase().trim();
+    const tokens = q.split(/\s+/).filter(Boolean);
+    document.querySelectorAll(".absensi-staff-row").forEach(row => {
+        const hay = row.getAttribute("data-search") || "";
+        const match = tokens.length === 0 || tokens.every(t => hay.includes(t));
+        row.style.display = match ? "flex" : "none";
+    });
+};
 
 window.submitNewStaff = async function() {
     const nameInput = document.getElementById("new-staff-name");
