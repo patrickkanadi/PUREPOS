@@ -4064,6 +4064,7 @@ window.renderHistoryList = function(type) {
                 let btnDetail = `<button onclick="window.showOrderDetail('${o.orderId}')" style="background:#f39c12; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">👁️ Detail</button>`;
                 
                 return `<div class="history-row"><div><strong>${o.customerName}</strong> <small style="color:#95a5a6;">(${o.orderId})</small>${syncBadge}<br><small style="color:#7f8c8d;">${window.formatDateReadable(o.timestamp)} | Rp ${(o.grandTotal || 0).toLocaleString('id-ID')}</small>${payBadge}${piutangBadge}</div><div style="display:flex; align-items:center; flex-wrap:wrap; gap:6px;">${badge} ${btnDetail} ${btnEditPay} ${btnPrint} ${btnVoid}</div></div>`;
+            }).join("");
         };
     } else if (type === 'expenses') {
         window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (e) => {
