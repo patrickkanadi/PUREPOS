@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 30; 
-const APP_VERSION = "37"; 
+const APP_VERSION = "38"; 
 window.db = null;
 
 // Core State
@@ -5471,7 +5471,7 @@ window.runBackgroundSync = async function(skipPullAfter = false, fromDrainLoop =
         }
 
         if (batchItems.length > 0) {
-            batchItems.sort((a, b) => (window.syncFailCounts[a.key] || 0) - (window.syncFailCounts[b.key] || 0));
+            batchItems.sort((a, b) => Math.floor((window.syncFailCounts[a.key] || 0) / 2) - Math.floor((window.syncFailCounts[b.key] || 0) / 2));
             let chunkLimit = Math.max(5, Math.min(15, window.syncAdaptiveChunkSize || 15));
             let chunk = batchItems.slice(0, chunkLimit);
             if (batchItems.length > chunkLimit) {
