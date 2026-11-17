@@ -4240,7 +4240,7 @@ window.openChangePaymentModal = function(orderId) {
             modal = document.createElement("div");
             modal.id = "change-payment-modal";
             modal.className = "modal-overlay hidden";
-            modal.style.zIndex = "300";
+            modal.style.setProperty("z-index", "10050", "important");
             modal.innerHTML = `
                 <div class="modal-content" style="max-width:460px; width:95%; background:#fff; border-radius:12px; padding:18px; color:#2c3e50;">
                     <h2 style="margin:0 0 6px 0; color:#16a085;">💳 Ubah Metode Pembayaran</h2>
