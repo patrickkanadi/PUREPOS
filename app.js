@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 30; 
-const APP_VERSION = "38"; 
+const APP_VERSION = "39"; 
 window.db = null;
 
 // Core State
@@ -5355,10 +5355,20 @@ window.runBackgroundSync = async function(skipPullAfter = false, fromDrainLoop =
 
         let batchHandlers = {};
 
+        for (const mem of members) {
+            if (!mem || !mem.phone || mem.phone === "-") {
+                if (mem && mem.phone !== undefined) await dbDel("unsynced_members", mem.phone);
+                continue;
+            }
+            let k = "MEM:" + mem.phone;
+            batchItems.push({ key: k, action: "addMember", data: mem });
+            batchHandlers[k] = async (ok) => { if (ok) await dbDel("unsynced_members", mem.phone); };
+        }
         const sortedOrders = [...orders].sort((a, b) => {
             let aDeliv = String(a.deliveryStatus || "").startsWith("Terkirim") ? 0 : 1;
             let bDeliv = String(b.deliveryStatus || "").startsWith("Terkirim") ? 0 : 1;
-            return aDeliv - bDeliv;
+            if (aDeliv !== bDeliv) return aDeliv - bDeliv;
+            return (window.parseSafeTimeMs(a.timestamp) || 0) - (window.parseSafeTimeMs(b.timestamp) || 0);
         });
         for (const order of sortedOrders) {
             if (order.syncStatus === "Pending" || order.syncStatus === "Syncing") {
@@ -5420,15 +5430,6 @@ window.runBackgroundSync = async function(skipPullAfter = false, fromDrainLoop =
                 : { expenseId: req.id, status: req.status, authName: req.authName, outlet: window.currentOutlet };
             batchItems.push({ key: k, action: actionType, ...payload });
             batchHandlers[k] = async (ok) => { if (ok) await dbDel("void_requests", req.id); };
-        }
-        for (const mem of members) {
-            if (!mem || !mem.phone || mem.phone === "-") {
-                if (mem && mem.phone !== undefined) await dbDel("unsynced_members", mem.phone);
-                continue;
-            }
-            let k = "MEM:" + mem.phone;
-            batchItems.push({ key: k, action: "addMember", data: mem });
-            batchHandlers[k] = async (ok) => { if (ok) await dbDel("unsynced_members", mem.phone); };
         }
         for (const inb of inbounds) {
             if (inb.syncStatus === "Pending") {
@@ -5573,7 +5574,7 @@ window.runBackgroundSync = async function(skipPullAfter = false, fromDrainLoop =
             window.lastBackgroundPullMs = nowPullMs;
             setTimeout(() => {
                 if (!window.isLoggingOut && !window.isDrainingForLogout) {
-                    window.syncCriticalData().then(() => window.syncBackgroundData()).catch(() => {});
+                    window.syncMasterData().catch(() => {});
                 }
             }, 400);
         }
