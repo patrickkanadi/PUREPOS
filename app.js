@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 30; 
-const APP_VERSION = "39"; 
+const APP_VERSION = "40"; 
 window.db = null;
 
 // Core State
@@ -1056,14 +1056,31 @@ window.parseVolumeDiscountSetting = function(valStr) {
         let parts = entry.split(";").map(s => s.trim());
         if (parts.length >= 3) {
             let itemName = parts[0];
-            let minQty = Number(parts[1]);
-            let discount = Number(parts[2]);
-            let outletsRaw = parts[3] ? parts[3].replace(/[()[\]]/g, '').trim() : "ALL";
+            let allowDelivery = true;
+            let minQty = 0;
+            let discount = 0;
+            let outletsRaw = "ALL";
+
+            let secondPartLow = String(parts[1] || "").toLowerCase();
+            if (secondPartLow === "y" || secondPartLow === "yes" || secondPartLow === "n" || secondPartLow === "no") {
+                // Format 5 kriteria: Nama Item; y/n; Min Qty; Diskon; (Cabang)
+                allowDelivery = (secondPartLow === "y" || secondPartLow === "yes");
+                minQty = Number(parts[2]);
+                discount = Number(parts[3]);
+                outletsRaw = parts[4] ? parts[4].replace(/[()[\]]/g, '').trim() : "ALL";
+            } else {
+                // Fallback format lama 4 kriteria: Nama Item; Min Qty; Diskon; (Cabang)
+                minQty = Number(parts[1]);
+                discount = Number(parts[2]);
+                outletsRaw = parts[3] ? parts[3].replace(/[()[\]]/g, '').trim() : "ALL";
+            }
+
             let outlets = outletsRaw.split(",").map(o => o.trim().toUpperCase()).filter(Boolean);
             if (itemName && !isNaN(minQty) && minQty > 0 && !isNaN(discount) && discount > 0) {
                 window.volumeDiscountRules.push({
                     itemName: itemName,
                     itemKey: itemName.toUpperCase().replace(/\s+/g, ''),
+                    allowDelivery: allowDelivery,
                     minQty: minQty,
                     discount: discount,
                     outlets: outlets.length > 0 ? outlets : ["ALL"]
@@ -1073,9 +1090,27 @@ window.parseVolumeDiscountSetting = function(valStr) {
     });
 };
 
+window.isDeliveryCartItem = function(cartItem) {
+    if (!cartItem) return false;
+    let sub = String(cartItem.subCategory || "").trim().toLowerCase();
+    if (!sub && Array.isArray(window.globalMenuData)) {
+        let menuMatch = window.globalMenuData.find(m =>
+            (cartItem.itemId && m.itemId === cartItem.itemId) ||
+            String(m.name || "").trim().toLowerCase() === String(cartItem.name || "").trim().toLowerCase()
+        );
+        if (menuMatch) sub = String(menuMatch.subCategory || "").trim().toLowerCase();
+    }
+    if (sub === "ongkos kirim") return true;
+    let nameLow = String(cartItem.name || "").toLowerCase();
+    let catLow = String(cartItem.category || "").toLowerCase();
+    return sub.includes("kirim") || nameLow.includes("ongkos kirim") || catLow.includes("kirim");
+};
+
 window.applyVolumeDiscountsToCart = function() {
     if (!window.currentCart) return;
     let curOutlet = String(window.currentOutlet || "").trim().toUpperCase();
+    let hasDelivery = window.currentCart.some(c => window.isDeliveryCartItem(c));
+
     window.currentCart.forEach(item => {
         let basePrice = (item.originalPrice !== undefined) ? Number(item.originalPrice) : Number(item.price);
         item.originalPrice = basePrice;
@@ -1084,7 +1119,8 @@ window.applyVolumeDiscountsToCart = function() {
 
         for (let r of (window.volumeDiscountRules || [])) {
             let outletMatch = r.outlets.includes("ALL") || (curOutlet && r.outlets.includes(curOutlet));
-            if (outletMatch && (itemKey === r.itemKey || itemKey.includes(r.itemKey) || r.itemKey.includes(itemKey))) {
+            let deliveryMatch = !hasDelivery || r.allowDelivery;
+            if (outletMatch && deliveryMatch && (itemKey === r.itemKey || itemKey.includes(r.itemKey) || r.itemKey.includes(itemKey))) {
                 if (item.qty >= r.minQty) {
                     matchedRule = r;
                     break;
@@ -2669,7 +2705,7 @@ window.reviewOrder = function() {
     if (window.currentCart.length === 0) return alert("Keranjang masih kosong!");
     
     // --- NEW: SMART INTERCEPT FOR DELIVERY INFO ---
-    let isDelivery = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || (i.category && String(i.category).toLowerCase().includes("kirim")) || (i.subCategory && String(i.subCategory).toLowerCase().includes("kirim")));
+    let isDelivery = window.currentCart.some(i => window.isDeliveryCartItem(i));
     if (isDelivery) {
         let custPhoneRaw = document.getElementById("cust-phone") ? document.getElementById("cust-phone").value.trim() : ""; 
         let custName = document.getElementById("cust-name") ? document.getElementById("cust-name").value.trim() : "";
@@ -2763,7 +2799,7 @@ window.reviewOrder = function() {
     document.getElementById("review-grandtotal").innerText = `Rp ${window.cartGrandTotal.toLocaleString('id-ID')}`;
     
     // === NEW: DISABLE CASH FOR DELIVERY ===
-    let isDeliveryFinal = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
+    let isDeliveryFinal = window.currentCart.some(i => window.isDeliveryCartItem(i));
     let inputCash = document.getElementById("pay-cash");
     
     if (isDeliveryFinal) {
@@ -2816,7 +2852,7 @@ window.autoBalancePiutang = function() {
 }
 
 window.autoBalanceCash = function() {
-    let isDelivery = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
+    let isDelivery = window.currentCart.some(i => window.isDeliveryCartItem(i));
     if (isDelivery) {
         document.getElementById("pay-cash").value = 0;
         window.autoBalancePiutang();
@@ -3485,7 +3521,7 @@ window.finalizeOrder = async function(shouldPrint) {
     const custAddress = document.getElementById("cust-address").value.trim() || "";
     const orderNotes = document.getElementById("order-notes") ? document.getElementById("order-notes").value.trim() : "";
 
-    let isDeliveryFinal = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
+    let isDeliveryFinal = window.currentCart.some(i => window.isDeliveryCartItem(i));
 
     // Jika kasir mengisi QRIS/Transfer namun #pay-cash belum ter-update (misal autofill/paste tanpa event oninput), sesuaikan otomatis
     if ((qris > 0 || transfer > 0) && cash === window.cartGrandTotal && remaining !== 0) {
@@ -3652,7 +3688,7 @@ window.finalizeOrder = async function(shouldPrint) {
     }
 
     // 🔥 Deklarasikan isDelivery sebelum digunakan
-    let isDelivery = window.currentCart.some(i => String(i.name).toLowerCase().includes("kirim") || String(i.category).toLowerCase().includes("kirim") || String(i.subCategory).toLowerCase().includes("kirim"));
+    let isDelivery = window.currentCart.some(i => window.isDeliveryCartItem(i));
     let finalStatus = isDelivery ? "Proses Kirim" : "Completed";
 
     const orderPayload = {
