@@ -2111,7 +2111,7 @@ window.syncBackgroundData = async function() {
                                     o.syncStatus = "Pending";
                                 }
 
-                                let isLocalUnsynced = (existing.syncStatus === "Pending" || existing.syncStatus === "Syncing" || pendingVoidIds.has(o.orderId));
+                                let isLocalUnsynced = (existing.syncStatus === "Pending" || existing.syncStatus === "Syncing" || pendingVoidIds.has(o.orderId) || pendingVoidIds.has("PAYEDIT-" + o.orderId));
                                 let recentlyDelivered = existing.deliveredAtMs && (Date.now() - existing.deliveredAtMs < 900000);
                                 let isAlreadyDeliveredLocally = String(existing.deliveryStatus || "").startsWith("Terkirim") && (o.deliveryStatus === "Pending" || recentlyDelivered);
                                 let isDebtReducedLocally = (existing.debtAmount !== undefined && o.debtAmount !== undefined && existing.debtAmount < o.debtAmount);
@@ -4057,12 +4057,13 @@ window.renderHistoryList = function(type) {
                 let pmColor = pmStr.includes("QRIS") ? "#8e44ad" : (pmStr.includes("Trf") ? "#2980b9" : (pmStr.includes("Piutang") ? "#c0392b" : "#16a085"));
                 let payBadge = `<span style="font-size:11px; background:#f4f6f7; color:${pmColor}; border:1px solid ${pmColor}; padding:1px 6px; border-radius:4px; font-weight:bold; margin-left:4px;">💳 ${pmStr}</span>`;
                 let piutangBadge = (o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && (o.debtAmount || 0) > 0) ? `<br><span style="font-size:12px; color:#c0392b; font-weight:bold;">⚠️ Piutang: Rp ${(o.debtAmount).toLocaleString('id-ID')}</span>` : '';
+                let canEditPay = (o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending");
+                let btnEditPay = canEditPay ? `<button onclick="window.openChangePaymentModal('${o.orderId}')" style="background:#16a085; color:white; border:none; padding:6px 10px; border-radius:4px; cursor:pointer; font-weight:bold;">💳 Ubah Bayar</button>` : '';
                 let btnVoid = o.orderStatus === "Voided" ? '' : `<button onclick="window.requestVoid('orders', '${o.orderId}')" style="background:${o.orderStatus === 'Void Pending' ? '#8e44ad' : '#e74c3c'}; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">${o.orderStatus === 'Void Pending' ? '🔑 PIN Admin' : 'Batal'}</button>`;
                 let btnPrint = `<button onclick="window.reprintOrder('${o.orderId}')" style="background:#2980b9; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">🖨️ Cetak</button>`;
                 let btnDetail = `<button onclick="window.showOrderDetail('${o.orderId}')" style="background:#f39c12; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">👁️ Detail</button>`;
                 
-                return `<div class="history-row"><div><strong>${o.customerName}</strong> <small style="color:#95a5a6;">(${o.orderId})</small>${syncBadge}<br><small style="color:#7f8c8d;">${window.formatDateReadable(o.timestamp)} | Rp ${(o.grandTotal || 0).toLocaleString('id-ID')}</small>${payBadge}${piutangBadge}</div><div style="display:flex; align-items:center; gap:8px;">${badge} ${btnDetail} ${btnPrint} ${btnVoid}</div></div>`;
-            }).join("");
+                return `<div class="history-row"><div><strong>${o.customerName}</strong> <small style="color:#95a5a6;">(${o.orderId})</small>${syncBadge}<br><small style="color:#7f8c8d;">${window.formatDateReadable(o.timestamp)} | Rp ${(o.grandTotal || 0).toLocaleString('id-ID')}</small>${payBadge}${piutangBadge}</div><div style="display:flex; align-items:center; flex-wrap:wrap; gap:6px;">${badge} ${btnDetail} ${btnEditPay} ${btnPrint} ${btnVoid}</div></div>`;
         };
     } else if (type === 'expenses') {
         window.db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (e) => {
@@ -4216,6 +4217,271 @@ window.reprintOrder = async function(orderId) {
     await window.printViaBluetooth(payloadBytes);
 }
 
+window.changePaymentTargetOrder = null;
+
+window.openChangePaymentModal = function(orderId) {
+    if (!window.db) return;
+    window.db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = (e) => {
+        const o = e.target.result;
+        if (!o) return alert("Nota tidak ditemukan di memori lokal.");
+        if (o.orderStatus === "Voided" || o.orderStatus === "Void Pending") {
+            return alert("⚠️ Nota yang sudah dibatalkan / menunggu Void tidak dapat diubah metode bayarnya.");
+        }
+        let pelTotal = (Number(o.pelunasanCash) || 0) + (Number(o.pelunasanQris) || 0) + (Number(o.pelunasanTransfer) || 0);
+        if (pelTotal > 0) {
+            return alert("⚠️ Nota ini sudah memiliki riwayat pelunasan/cicilan piutang terpisah. Silakan gunakan Void jika ingin membatalkan.");
+        }
+
+        window.changePaymentTargetOrder = o;
+
+        let modal = document.getElementById("change-payment-modal");
+        if (!modal) {
+            modal = document.createElement("div");
+            modal.id = "change-payment-modal";
+            modal.className = "modal-overlay hidden";
+            modal.style.zIndex = "300";
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width:460px; width:95%; background:#fff; border-radius:12px; padding:18px; color:#2c3e50;">
+                    <h2 style="margin:0 0 6px 0; color:#16a085;">💳 Ubah Metode Pembayaran</h2>
+                    <div id="cp-order-meta" style="font-size:13px; color:#5d6d7e; background:#f8f9fa; padding:9px 12px; border-radius:8px; border:1px solid #e5e8e8; margin-bottom:12px;"></div>
+
+                    <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px;">
+                        <button type="button" onclick="window.setChangePaymentPreset('Tunai')" style="flex:1; background:#27ae60; color:white; border:none; padding:8px 6px; border-radius:6px; font-weight:bold; font-size:12px; cursor:pointer;">💵 Tunai</button>
+                        <button type="button" onclick="window.setChangePaymentPreset('QRIS')" style="flex:1; background:#8e44ad; color:white; border:none; padding:8px 6px; border-radius:6px; font-weight:bold; font-size:12px; cursor:pointer;">📱 QRIS</button>
+                        <button type="button" onclick="window.setChangePaymentPreset('Trf.Bank')" style="flex:1; background:#2980b9; color:white; border:none; padding:8px 6px; border-radius:6px; font-weight:bold; font-size:12px; cursor:pointer;">🏦 Transfer</button>
+                        <button type="button" onclick="window.setChangePaymentPreset('Piutang')" style="flex:1; background:#d35400; color:white; border:none; padding:8px 6px; border-radius:6px; font-weight:bold; font-size:12px; cursor:pointer;">📒 Piutang</button>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+                        <div>
+                            <label style="display:block; font-weight:bold; font-size:12px; margin-bottom:4px;">💵 Tunai (Cash)</label>
+                            <input type="number" id="cp-cash" min="0" oninput="window.recalcChangePayment()" style="width:100%; padding:9px; border:1px solid #bdc3c7; border-radius:6px; font-size:14px; font-weight:bold;">
+                        </div>
+                        <div>
+                            <label style="display:block; font-weight:bold; font-size:12px; margin-bottom:4px;">📱 QRIS</label>
+                            <input type="number" id="cp-qris" min="0" oninput="window.recalcChangePayment()" style="width:100%; padding:9px; border:1px solid #bdc3c7; border-radius:6px; font-size:14px; font-weight:bold;">
+                        </div>
+                        <div>
+                            <label style="display:block; font-weight:bold; font-size:12px; margin-bottom:4px;">🏦 Transfer Bank</label>
+                            <input type="number" id="cp-transfer" min="0" oninput="window.recalcChangePayment()" style="width:100%; padding:9px; border:1px solid #bdc3c7; border-radius:6px; font-size:14px; font-weight:bold;">
+                        </div>
+                        <div>
+                            <label style="display:block; font-weight:bold; font-size:12px; margin-bottom:4px; color:#c0392b;">📒 Piutang (Hutang)</label>
+                            <input type="number" id="cp-piutang" min="0" oninput="window.recalcChangePayment()" style="width:100%; padding:9px; border:1px solid #bdc3c7; border-radius:6px; font-size:14px; font-weight:bold; color:#c0392b;">
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom:12px;">
+                        <label style="display:block; font-weight:bold; font-size:12px; margin-bottom:4px; color:#27ae60;">🎁 Gratis / Tukar Poin (Rp)</label>
+                        <input type="number" id="cp-free" min="0" oninput="window.recalcChangePayment()" style="width:100%; padding:8px; border:1px solid #bdc3c7; border-radius:6px; font-size:13.5px; background:#f9fcfc;">
+                    </div>
+
+                    <div style="display:flex; justify-content:space-between; align-items:center; background:#ecf0f1; padding:10px 12px; border-radius:8px; margin-bottom:14px; font-size:13.5px;">
+                        <span>Selisih / Sisa:</span>
+                        <strong id="cp-remaining" style="font-size:16px;">Rp 0</strong>
+                    </div>
+
+                    <div style="display:flex; gap:10px; justify-content:flex-end;">
+                        <button type="button" onclick="document.getElementById('change-payment-modal').classList.add('hidden')" style="background:#95a5a6; color:white; border:none; padding:10px 16px; border-radius:7px; font-weight:bold; cursor:pointer;">Batal</button>
+                        <button type="button" id="btn-save-change-pay" onclick="window.submitChangePayment()" style="background:#16a085; color:white; border:none; padding:10px 18px; border-radius:7px; font-weight:bold; cursor:pointer;">✅ Simpan Perubahan</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+
+        const grandTotal = Number(o.grandTotal) || 0;
+        document.getElementById("cp-order-meta").innerHTML = `
+            <strong>Nota:</strong> ${o.orderId} • <strong>Pelanggan:</strong> ${o.customerName}<br>
+            <strong>Metode Lama:</strong> <span style="color:#d35400; font-weight:bold;">${o.paymentMethod || "-"}</span> • <strong>Total Akhir:</strong> <span style="color:#2c3e50; font-weight:bold;">Rp ${grandTotal.toLocaleString('id-ID')}</span>
+        `;
+
+        document.getElementById("cp-cash").value = Number(o.cashAmount) || 0;
+        document.getElementById("cp-qris").value = Number(o.qrisAmount) || 0;
+        document.getElementById("cp-transfer").value = Number(o.transferAmount) || 0;
+        document.getElementById("cp-piutang").value = Number(o.debtAmount) || 0;
+        document.getElementById("cp-free").value = Number(o.freeAmount) || 0;
+
+        window.recalcChangePayment();
+        modal.classList.remove("hidden");
+    };
+};
+
+window.setChangePaymentPreset = function(preset) {
+    const o = window.changePaymentTargetOrder;
+    if (!o) return;
+    const grandTotal = Number(o.grandTotal) || 0;
+    const freeAmt = window.parsePayNum("cp-free");
+    const netToPay = Math.max(0, grandTotal - freeAmt);
+
+    document.getElementById("cp-cash").value = (preset === "Tunai") ? netToPay : 0;
+    document.getElementById("cp-qris").value = (preset === "QRIS") ? netToPay : 0;
+    document.getElementById("cp-transfer").value = (preset === "Trf.Bank") ? netToPay : 0;
+    document.getElementById("cp-piutang").value = (preset === "Piutang") ? netToPay : 0;
+    window.recalcChangePayment();
+};
+
+window.recalcChangePayment = function() {
+    const o = window.changePaymentTargetOrder;
+    if (!o) return;
+    const grandTotal = Number(o.grandTotal) || 0;
+    const c = window.parsePayNum("cp-cash");
+    const q = window.parsePayNum("cp-qris");
+    const t = window.parsePayNum("cp-transfer");
+    const p = window.parsePayNum("cp-piutang");
+    const f = window.parsePayNum("cp-free");
+
+    const rem = grandTotal - (c + q + t + p + f);
+    const remEl = document.getElementById("cp-remaining");
+    const saveBtn = document.getElementById("btn-save-change-pay");
+    if (remEl) {
+        remEl.innerText = `Rp ${rem.toLocaleString('id-ID')}`;
+        remEl.style.color = (rem === 0) ? "#27ae60" : "#c0392b";
+    }
+    if (saveBtn) {
+        saveBtn.disabled = (rem !== 0);
+        saveBtn.style.opacity = (rem === 0) ? "1" : "0.55";
+    }
+};
+
+window.submitChangePayment = async function() {
+    const o = window.changePaymentTargetOrder;
+    if (!o) return;
+    if (window._activeSubmitLocks["changePay"]) return;
+    window._activeSubmitLocks["changePay"] = true;
+    setTimeout(() => { delete window._activeSubmitLocks["changePay"]; }, 1500);
+
+    const grandTotal = Number(o.grandTotal) || 0;
+    const newCash = window.parsePayNum("cp-cash");
+    const newQris = window.parsePayNum("cp-qris");
+    const newTransfer = window.parsePayNum("cp-transfer");
+    const newDebt = window.parsePayNum("cp-piutang");
+    const newFree = window.parsePayNum("cp-free");
+
+    if (newCash < 0 || newQris < 0 || newTransfer < 0 || newDebt < 0 || newFree < 0) {
+        return alert("⚠️ Nominal pembayaran tidak boleh negatif.");
+    }
+    if ((newCash + newQris + newTransfer + newDebt + newFree) !== grandTotal) {
+        return alert("⚠️ Total pembayaran (termasuk Piutang & Gratis) harus persis sama dengan Total Akhir nota!");
+    }
+
+    const basePhone = String(o.customerPhone || "").replace(/-DUP\d+$/i, "").trim();
+    if (newDebt > 0 && (!basePhone || basePhone === "-" || basePhone === "Walk-in")) {
+        return alert("⚠️ Nota Walk-in tanpa Nomor WA / ID Pelanggan tidak dapat diubah menjadi Piutang.");
+    }
+
+    const oldMethod = String(o.paymentMethod || "-");
+    const oldCash = Number(o.cashAmount) || 0;
+    const oldQris = Number(o.qrisAmount) || 0;
+    const oldTransfer = Number(o.transferAmount) || 0;
+    const oldDebt = Number(o.debtAmount) || 0;
+    const oldFree = Number(o.freeAmount) || 0;
+
+    let methods = [];
+    if (newCash > 0) methods.push("Tunai");
+    if (newQris > 0) methods.push("QRIS");
+    if (newTransfer > 0) methods.push("Trf.Bank");
+    if (newFree > 0) methods.push("Gratis");
+    if (newDebt > 0) methods.push("Piutang");
+    const newMethod = methods.join("+") || "Belum Bayar";
+
+    if (newCash === oldCash && newQris === oldQris && newTransfer === oldTransfer && newDebt === oldDebt && newFree === oldFree && newMethod === oldMethod) {
+        document.getElementById("change-payment-modal").classList.add("hidden");
+        return;
+    }
+
+    const deltaCash = newCash - oldCash;
+    const deltaDebt = newDebt - oldDebt;
+    const deltaPaid = (newCash + newQris + newTransfer) - (oldCash + oldQris + oldTransfer);
+    const wasSynced = !!o.hasSyncedOnce && o.syncStatus === "Synced";
+
+    o.paymentMethod = newMethod;
+    o.cashAmount = newCash;
+    o.qrisAmount = newQris;
+    o.transferAmount = newTransfer;
+    o.debtAmount = newDebt;
+    o.freeAmount = newFree;
+    o.discounts = Math.max(0, (Number(o.discounts) || 0) - oldFree + newFree);
+
+    // Jika nota sudah pernah sinkron ke server, sesuaikan saldo laci RAM lokal agar Live Drawer tetap akurat
+    if (wasSynced && deltaCash !== 0 && window.outletStocks && window.outletStocks[window.currentOutlet]) {
+        window.outletStocks[window.currentOutlet]["Saldo_Laci"] = (Number(window.outletStocks[window.currentOutlet]["Saldo_Laci"]) || 0) + deltaCash;
+    }
+
+    await new Promise(res => {
+        const stores = ["orders", "void_requests", "members"];
+        const tx = window.db.transaction(stores, "readwrite");
+        tx.objectStore("orders").put(o);
+
+        if (wasSynced) {
+            tx.objectStore("void_requests").put({
+                id: "PAYEDIT-" + o.orderId,
+                editId: "EDP-" + Date.now(),
+                type: "payment_edit",
+                orderId: o.orderId,
+                outlet: o.outlet || window.currentOutlet,
+                cashier: window.currentCashier,
+                shiftId: o.shiftId || window.currentShiftId,
+                timestamp: window.getWibDate(),
+                oldMethod: oldMethod,
+                oldCash: oldCash,
+                oldQris: oldQris,
+                oldTransfer: oldTransfer,
+                oldDebt: oldDebt,
+                oldFree: oldFree,
+                newMethod: newMethod,
+                newCash: newCash,
+                newQris: newQris,
+                newTransfer: newTransfer,
+                newDebt: newDebt,
+                newFree: newFree
+            });
+        }
+
+        if (basePhone && basePhone !== "-" && basePhone !== "Walk-in" && (deltaDebt !== 0 || deltaPaid !== 0)) {
+            tx.objectStore("members").get(basePhone).onsuccess = (ev) => {
+                const mem = ev.target.result;
+                if (mem) {
+                    mem.spent = Math.max(0, (Number(mem.spent) || 0) + deltaPaid);
+                    mem.piutang = Math.max(0, (Number(mem.piutang) || 0) + deltaDebt);
+                    if (mem.piutangBreakdown) {
+                        let out = String(o.outlet || window.currentOutlet || "").trim();
+                        let outUp = out.toUpperCase();
+                        if (out) mem.piutangBreakdown[out] = Math.max(0, (Number(mem.piutangBreakdown[out]) || 0) + deltaDebt);
+                        if (outUp && outUp !== out) mem.piutangBreakdown[outUp] = Math.max(0, (Number(mem.piutangBreakdown[outUp]) || 0) + deltaDebt);
+                    }
+                    if (!Array.isArray(mem.piutangInvoices)) mem.piutangInvoices = [];
+                    if (newDebt > 0) {
+                        let inv = mem.piutangInvoices.find(x => x.orderId === o.orderId);
+                        if (inv) inv.sisa = newDebt;
+                        else mem.piutangInvoices.push({ idTagihan: "HUT-LOCAL-" + o.orderId, orderId: o.orderId, sisa: newDebt, date: o.timestamp, outlet: o.outlet || window.currentOutlet });
+                    } else {
+                        mem.piutangInvoices = mem.piutangInvoices.filter(x => x.orderId !== o.orderId);
+                    }
+                    if (window.globalMembersCache) {
+                        let idx = window.globalMembersCache.findIndex(x => x.phone === mem.phone);
+                        if (idx > -1) window.globalMembersCache[idx] = mem;
+                    }
+                    tx.objectStore("members").put(mem);
+                }
+            };
+        }
+        tx.oncomplete = res;
+        tx.onerror = res;
+    });
+
+    document.getElementById("change-payment-modal").classList.add("hidden");
+    window.renderHistoryList("orders");
+    if (window.renderPiutangList && !document.getElementById("piutang-section").classList.contains("hidden")) {
+        window.renderPiutangList();
+    }
+    if (window.updateLeftBadges) window.updateLeftBadges();
+    if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
+
+    alert(`✅ Metode Pembayaran Berhasil Diubah!\n${oldMethod} ➔ ${newMethod}`);
+    if (navigator.onLine) window.runBackgroundSync();
+};
+
 window.requestVoid = function(type, id) { window.currentVoidTarget = { type, id }; document.getElementById("admin-void-pin").value = ""; document.getElementById("admin-void-modal").classList.remove("hidden"); }
 
 window.submitRemoteVoid = function() {
@@ -4290,7 +4556,7 @@ window.processServerUpdates = function(authStatuses) {
         const pendingBpPhones = new Set((bpReq.result || []).filter(b => b.syncStatus === "Pending").map(b => b.customerPhone));
 
         (ordReq.result || []).forEach(order => {
-            if (order.syncStatus === "Pending" || order.syncStatus === "Syncing" || pendingVoidIds.has(order.orderId)) return;
+            if (order.syncStatus === "Pending" || order.syncStatus === "Syncing" || pendingVoidIds.has(order.orderId) || pendingVoidIds.has("PAYEDIT-" + order.orderId)) return;
             const remote = authStatuses.orders[order.orderId];
             if (remote) {
                 let changed = false;
@@ -5206,7 +5472,7 @@ window.getUnsyncedDetailsList = async function() {
         drops.filter(d => d.syncStatus === "Pending" || (includeBundled && d.syncStatus === "Bundled")).forEach(d => list.push(`Setor Laci: ${d.dropId}`));
         reports.filter(r => r.syncStatus === "Pending" || (includeBundled && r.syncStatus === "Bundled")).forEach(r => list.push(`Shift Report: ${r.shiftId}`));
         expenses.filter(e => e.syncStatus === "Pending").forEach(e => list.push(`Expense: ${e.expenseId}`));
-        voids.forEach(v => list.push(`Void Request: ${v.id}`));
+        voids.forEach(v => list.push(v.type === "payment_edit" ? `Ubah Metode Bayar: ${v.orderId} (${v.oldMethod} ➔ ${v.newMethod})` : `Void Request: ${v.id}`));
         members.forEach(m => list.push(`Member: ${m.name} (${m.phone})`));
         inb.filter(i => i.syncStatus === "Pending").forEach(i => list.push(`Inbound: ${i.logId}`));
         cuci.filter(c => c.syncStatus === "Pending").forEach(c => list.push(`Cuci Tandon: ${c.logId}`));
@@ -5459,13 +5725,19 @@ window.runBackgroundSync = async function(skipPullAfter = false, fromDrainLoop =
             }
         }
         for (const req of voids) {
-            let k = "VOID:" + req.id;
-            const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid";
-            const payload = req.type === 'orders'
-                ? { orderId: req.id, status: req.status, authName: req.authName, outlet: window.currentOutlet }
-                : { expenseId: req.id, status: req.status, authName: req.authName, outlet: window.currentOutlet };
-            batchItems.push({ key: k, action: actionType, ...payload });
-            batchHandlers[k] = async (ok) => { if (ok) await dbDel("void_requests", req.id); };
+            if (req.type === "payment_edit") {
+                let k = "PAYEDIT:" + req.orderId;
+                batchItems.push({ key: k, action: "changeOrderPayment", data: req });
+                batchHandlers[k] = async (ok) => { if (ok) await dbDel("void_requests", req.id); };
+            } else {
+                let k = "VOID:" + req.id;
+                const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid";
+                const payload = req.type === 'orders'
+                    ? { orderId: req.id, status: req.status, authName: req.authName, outlet: window.currentOutlet }
+                    : { expenseId: req.id, status: req.status, authName: req.authName, outlet: window.currentOutlet };
+                batchItems.push({ key: k, action: actionType, ...payload });
+                batchHandlers[k] = async (ok) => { if (ok) await dbDel("void_requests", req.id); };
+            }
         }
         for (const inb of inbounds) {
             if (inb.syncStatus === "Pending") {
