@@ -2205,13 +2205,22 @@ window.syncBackgroundData = async function() {
         const res = await fetch(url, { method: "GET", redirect: "follow" });
         const result = await res.json();
         if (result.status === "Success") {
-            const pendingVoidIds = await new Promise(r => {
-                try {
-                    let req = window.db.transaction(["void_requests"], "readonly").objectStore("void_requests").getAll();
-                    req.onsuccess = e => r(new Set((e.target.result || []).map(v => v.id)));
-                    req.onerror = () => r(new Set());
-                } catch(err) { r(new Set()); }
-            });
+            const [pendingVoidIds, pendingBpPhones] = await Promise.all([
+                new Promise(r => {
+                    try {
+                        let req = window.db.transaction(["void_requests"], "readonly").objectStore("void_requests").getAll();
+                        req.onsuccess = e => r(new Set((e.target.result || []).map(v => v.id)));
+                        req.onerror = () => r(new Set());
+                    } catch(err) { r(new Set()); }
+                }),
+                new Promise(r => {
+                    try {
+                        let req = window.db.transaction(["bayar_piutang"], "readonly").objectStore("bayar_piutang").getAll();
+                        req.onsuccess = e => r(new Set((e.target.result || []).filter(b => b.syncStatus === "Pending").map(b => String(b.customerPhone || "").replace(/-DUP\d+$/, ""))));
+                        req.onerror = () => r(new Set());
+                    } catch(err) { r(new Set()); }
+                })
+            ]);
 
             await new Promise((resolveTx) => {
                 const tx = window.db.transaction(["orders", "expense_categories", "shift_reports", "expenses", "bayar_piutang"], "readwrite");
@@ -2248,7 +2257,8 @@ window.syncBackgroundData = async function() {
                                 let isLocalUnsynced = (existing.syncStatus === "Pending" || existing.syncStatus === "Syncing" || pendingVoidIds.has(o.orderId) || pendingVoidIds.has("PAYEDIT-" + o.orderId));
                                 let recentlyDelivered = existing.deliveredAtMs && (Date.now() - existing.deliveredAtMs < 900000);
                                 let isAlreadyDeliveredLocally = String(existing.deliveryStatus || "").startsWith("Terkirim") && (o.deliveryStatus === "Pending" || recentlyDelivered);
-                                let isDebtReducedLocally = (existing.debtAmount !== undefined && o.debtAmount !== undefined && existing.debtAmount < o.debtAmount);
+                                let baseOrdPhone = String(o.customerPhone || "").replace(/-DUP\d+$/, "");
+                                let isDebtReducedLocally = pendingBpPhones.has(baseOrdPhone) && (existing.debtAmount !== undefined && o.debtAmount !== undefined && existing.debtAmount < o.debtAmount);
                                 let isLocalVoided = (existing.orderStatus === "Voided" && o.orderStatus !== "Voided");
                                 
                                 if (!isLocalUnsynced && !isAlreadyDeliveredLocally && !isDebtReducedLocally && !isLocalVoided) {
