@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 30; 
-const APP_VERSION = "41"; 
+const APP_VERSION = "42"; 
 window.db = null;
 
 // Core State
@@ -3525,7 +3525,7 @@ window.finalizeOrder = async function(shouldPrint) {
     let isDeliveryFinal = window.currentCart.some(i => window.isDeliveryCartItem(i));
 
     // Jika kasir mengisi QRIS/Transfer namun #pay-cash belum ter-update (misal autofill/paste tanpa event oninput), sesuaikan otomatis
-    if ((qris > 0 || transfer > 0) && cash === window.cartGrandTotal && remaining !== 0) {
+    if ((qris > 0 || transfer > 0) && cash > 0 && cash === window.cartGrandTotal && remaining !== 0) {
         window.autoBalanceCash();
         return window.finalizeOrder(shouldPrint);
     }
