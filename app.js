@@ -530,7 +530,6 @@ window.initMobilePosWizard = function() {
                SEMUA POPUP / MODAL RESPONSIF DI HP (PROPORTIONAL & FIT)
                ========================================================= */
             .modal-overlay {
-                z-index: 250 !important;
                 align-items: flex-start !important;
                 justify-content: center !important;
                 padding: 8px 8px calc(74px + env(safe-area-inset-bottom, 0px)) 8px !important;
@@ -2340,9 +2339,12 @@ window.syncBackgroundData = async function() {
 
 window.syncMasterData = async function() {
     if (window.isLoggingOut || window.isDrainingForLogout) return;
+    const setNetUi = (txt, color) => {
+        ["network-text", "login-network-text"].forEach(id => { let el = document.getElementById(id); if (el) el.innerText = txt; });
+        ["network-dot", "login-network-dot"].forEach(id => { let el = document.getElementById(id); if (el) el.style.backgroundColor = color; });
+    };
     if (!navigator.onLine) {
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Mode Offline";
-        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c"; 
+        setNetUi("Mode Offline", "#e74c3c");
         return;
     }
     
@@ -2362,12 +2364,10 @@ window.syncMasterData = async function() {
             await window.syncBackgroundData();
         }
 
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Online & Sinkron";
-        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#2ecc71";
+        setNetUi("Online & Sinkron", "#2ecc71");
 
     } catch (e) { 
-        if(document.getElementById("network-text")) document.getElementById("network-text").innerText = "Gagal Sinkron"; 
-        if(document.getElementById("network-dot")) document.getElementById("network-dot").style.backgroundColor = "#e74c3c";
+        setNetUi("Gagal Sinkron", "#e74c3c");
         if (e.name === 'InvalidStateError' || e.message.includes("closing")) { await window.initDB(); }
     }
 }
