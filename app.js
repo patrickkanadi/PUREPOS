@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 30; 
-const APP_VERSION = "44"; 
+const APP_VERSION = "45"; 
 window.db = null;
 
 // Core State
@@ -1342,6 +1342,9 @@ window.splitOrderItemsForAccounting = function(items, freeAmount = 0, isVoid = f
             out.push({ name, normalQty: paidQ, normalNom: paidQ * unitP, discQty: 0, discNom: 0, discSaving: 0, freeQty: freeQ, voidQty: 0 });
         }
     });
+    if (!isVoid && remFreeVal > 0) {
+        out.push({ name: "Potongan / Diskon Manual", normalQty: 0, normalNom: 0, discQty: 1, discNom: -remFreeVal, discSaving: remFreeVal, freeQty: 0, voidQty: 0 });
+    }
     return out;
 };
 
@@ -2878,16 +2881,17 @@ window.reviewOrder = function() {
             cartAgg[nameKey] = { qty: (cartAgg[nameKey]?.qty || 0) + item.qty, price: item.price, originalName: item.name, itemId: item.itemId };
         });
 
-        // 1. Loyalty Points
+        // 1. Loyalty Points (mendukung defisit poin negatif dengan aman)
         window.currentCart.forEach(item => {
             if (item.loyaltyThreshold > 0) {
-                let existingFree = wallet[item.name] ? wallet[item.name].free : 0;
-                let existingPoints = wallet[item.name] ? wallet[item.name].points : 0;
+                let normInit = window.normalizeLoyaltyBucket(wallet[item.name] ? wallet[item.name].points : 0, wallet[item.name] ? wallet[item.name].free : 0, item.loyaltyThreshold);
+                let existingFree = normInit.free;
+                let existingPoints = normInit.points;
                 let t = item.loyaltyThreshold;
                 let maxRedeemable = 0;
                 for (let f = Math.floor(item.qty); f >= 0; f--) {
                     let paidQty = item.qty - f;
-                    let generatedFree = Math.floor((existingPoints + paidQty) / t);
+                    let generatedFree = (existingPoints + paidQty >= t) ? Math.floor((existingPoints + paidQty) / t) : 0;
                     if (f <= existingFree + generatedFree) { maxRedeemable = f; break; }
                 }
                 
@@ -2910,12 +2914,13 @@ window.reviewOrder = function() {
             for (let pk in window.promoRules) { if (ruleKey.includes(pk) || pk.includes(ruleKey)) { ruleQty = window.promoRules[pk]; break; } }
             
             if (ruleQty > 0) {
-                let pItem = Number(wallet["_prog_" + cartAgg[itemName].originalName]) || 0;
-                let fItem = Number(wallet[cartAgg[itemName].originalName]) || 0;
+                let normBx = window.normalizeLoyaltyBucket(Number(wallet["_prog_" + cartAgg[itemName].originalName]) || 0, Number(wallet[cartAgg[itemName].originalName]) || 0, ruleQty);
+                let pItem = normBx.points;
+                let fItem = normBx.free;
                 let maxItemRedeemable = 0;
                 for (let r = Math.floor(cartQty); r >= 0; r--) {
                     let paidItems = cartQty - r;
-                    let earnedFree = Math.floor((pItem + paidItems) / ruleQty);
+                    let earnedFree = (pItem + paidItems >= ruleQty) ? Math.floor((pItem + paidItems) / ruleQty) : 0;
                     if (r <= fItem + earnedFree) { maxItemRedeemable = r; break; }
                 }
 
@@ -3131,7 +3136,11 @@ window.updatePromoBanner = function(member) {
     loyaltyItems.forEach(item => {
         let w = wallet[item.name];
         if (w && typeof w === 'object') {
-            pointSummary.push(`💧 <strong>${item.name}</strong>: ${w.points}/${item.loyaltyThreshold} Poin${w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : ''}`);
+            let deficitTag = w.points < 0
+                ? ` <span style="color:#c0392b; font-weight:bold;">(⚠️ Kurang ${Math.abs(w.points)} Poin — perlu ${item.loyaltyThreshold + Math.abs(w.points)} lagi utk Gratis)</span>`
+                : '';
+            let freeTag = w.free > 0 ? ` <span style="color:#27ae60;">(🎁 ${w.free} Gratis)</span>` : '';
+            pointSummary.push(`💧 <strong>${item.name}</strong>: ${w.points}/${item.loyaltyThreshold} Poin${freeTag}${deficitTag}`);
         } else {
             pointSummary.push(`💧 <strong>${item.name}</strong>: 0/${item.loyaltyThreshold} Poin`);
         }
@@ -3139,7 +3148,7 @@ window.updatePromoBanner = function(member) {
 
     for (let key in wallet) {
         let val = wallet[key];
-        if (typeof val === 'number' && val > 0) {
+        if (typeof val === 'number' && val !== 0) {
             let baseName = key.replace("_prog_", "").replace("_stamp_", "");
             let isAvail = availableMenu.find(m => m.name === baseName);
             if (isAvail) {
@@ -3148,26 +3157,35 @@ window.updatePromoBanner = function(member) {
                     for (let pk in window.promoRules) {
                         if (baseName.toUpperCase().replace(/\s+/g, '').includes(pk)) { target = window.promoRules[pk]; break; }
                     }
-                    if (target > 0) pointSummary.push(`⏳ Progres <strong>${baseName}</strong>: ${val}/${target}`);
-                } else if (key.startsWith("_stamp_")) {
+                    if (target > 0) {
+                        let defProg = val < 0 ? ` <span style="color:#c0392b; font-weight:bold;">(⚠️ Kurang ${Math.abs(val)})</span>` : '';
+                        pointSummary.push(`⏳ Progres <strong>${baseName}</strong>: ${val}/${target}${defProg}`);
+                    }
+                } else if (key.startsWith("_stamp_") && val > 0) {
                     let target = 0;
                     for (let sk in window.promoStampRules) {
                         if (window.promoStampRules[sk].originalName === baseName) { target = window.promoStampRules[sk].target; break; }
                     }
                     pointSummary.push(`🏷️ Stempel <strong>${baseName}</strong>: ${val}${target > 0 ? '/'+target : ''}`);
-                } else {
+                } else if (val > 0) {
                     pointSummary.push(`🎁 <strong>${baseName}</strong>: <span style="color:#27ae60;">${val} Siap Ditukar!</span>`);
                 }
             }
         }
     }
 
-    if (pointSummary.length > 0) { 
-        promoBanner.innerHTML = `🌟 <strong>Info Saldo Poin & Promo:</strong><br>` + pointSummary.join('<br>'); 
-        promoBanner.classList.remove("hidden"); 
-    } else { 
-        promoBanner.innerHTML = `🌟 Promo Loyalty belum ada progress di cabang ini.`; 
-        promoBanner.classList.remove("hidden"); 
+    let safeP = (member && member.phone) ? String(member.phone).replace(/'/g, "\\'") : "";
+    let safeN = (member && member.name) ? String(member.name).replace(/'/g, "\\'").replace(/"/g, "&quot;") : "Pelanggan";
+    let traceBtn = (safeP && safeP !== "-")
+        ? `<button type="button" onclick="window.openLoyaltyHistoryModal('${safeP}', '${safeN}')" style="margin-left:8px; padding:3px 9px; background:#2980b9; color:#fff; border:none; border-radius:4px; font-size:11.5px; font-weight:bold; cursor:pointer;">📜 Riwayat Poin</button>`
+        : "";
+
+    if (pointSummary.length > 0) {
+        promoBanner.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:4px; margin-bottom:4px;"><span>🌟 <strong>Info Saldo Poin & Promo:</strong></span>${traceBtn}</div>` + pointSummary.join('<br>');
+        promoBanner.classList.remove("hidden");
+    } else {
+        promoBanner.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center;"><span>🌟 Promo Loyalty belum ada progress di cabang ini.</span>${traceBtn}</div>`;
+        promoBanner.classList.remove("hidden");
     }
 }
 
@@ -3516,12 +3534,14 @@ window.submitPiutang = function() {
 
     let processPayment = function(courierName) {
         let netC = c; let netQ = q; let netT = t;
-        let remExtra = parkir + tip;
-        
-        // Potong Parkir/Tip dari Tunai terlebih dahulu; hanya potong QRIS/Transfer jika pelanggan melebihkan transfer/QRIS
-        if (remExtra > 0 && netC > 0) { let d = Math.min(remExtra, netC); netC -= d; remExtra -= d; }
-        if (remExtra > 0 && netQ > 0) { let d = Math.min(remExtra, netQ); netQ -= d; remExtra -= d; }
-        if (remExtra > 0 && netT > 0) { let d = Math.min(remExtra, netT); netT -= d; remExtra -= d; }
+        const takeFrom = (amt) => {
+            let tc = Math.min(amt, netC); netC -= tc; amt -= tc;
+            let tq = Math.min(amt, netQ); netQ -= tq; amt -= tq;
+            let tt = Math.min(amt, netT); netT -= tt; amt -= tt;
+            return { tc, tq, tt };
+        };
+        const prkSplit = takeFrom(parkir);
+        const tipSplit = takeFrom(tip);
 
         let payMethods = [];
         if(netC > 0) payMethods.push("Tunai");
@@ -3534,7 +3554,8 @@ window.submitPiutang = function() {
             customerName: window.piutangTargetMember.name, customerPhone: window.piutangTargetMember.phone, 
             amountPaid: payAmount, paymentMethod: method, 
             cashAmount: netC, qrisAmount: netQ, transferAmount: netT, 
-            parkirFee: parkir, tipAmount: tip, tipCourier: courierName,
+            parkirFee: parkir, parkirQris: prkSplit.tq, parkirTransfer: prkSplit.tt,
+            tipAmount: tip, tipCash: tipSplit.tc, tipQris: tipSplit.tq, tipTransfer: tipSplit.tt, tipCourier: courierName,
             cashier: window.currentCashier, outlet: window.currentOutlet, 
             syncStatus: "Pending", shiftId: window.currentShiftId, originalOrderId: targetOrderId 
         };
@@ -3739,16 +3760,10 @@ window.finalizeOrder = async function(shouldPrint) {
         updatedWallet = JSON.parse(JSON.stringify(window.activeCustomerProfile.wallet || {})); 
         
         for(let itemName in loyaltyChanges) {
-            if(!updatedWallet[itemName]) updatedWallet[itemName] = {points:0, free:0};
-            updatedWallet[itemName].free -= loyaltyChanges[itemName].redeemed;
-            if (debtAmount === 0) {
-                updatedWallet[itemName].points += loyaltyChanges[itemName].earned;
-                if(loyaltyChanges[itemName].threshold > 0) {
-                    let newFree = Math.floor(updatedWallet[itemName].points / loyaltyChanges[itemName].threshold);
-                    updatedWallet[itemName].points = updatedWallet[itemName].points % loyaltyChanges[itemName].threshold; 
-                    updatedWallet[itemName].free += newFree;
-                }
-            }
+            if(!updatedWallet[itemName] || typeof updatedWallet[itemName] !== "object") updatedWallet[itemName] = {points:0, free: Number(updatedWallet[itemName]) || 0};
+            let nextPts = (Number(updatedWallet[itemName].points) || 0) + (debtAmount === 0 ? loyaltyChanges[itemName].earned : 0);
+            let nextFree = (Number(updatedWallet[itemName].free) || 0) - loyaltyChanges[itemName].redeemed;
+            updatedWallet[itemName] = window.normalizeLoyaltyBucket(nextPts, nextFree, loyaltyChanges[itemName].threshold);
         }
         
         if (debtAmount === 0) {
@@ -3769,15 +3784,13 @@ window.finalizeOrder = async function(shouldPrint) {
                          
                          let pKey = "_prog_" + cartAggT[cName].orig;
                          let curProg = Number(updatedWallet[pKey]) || 0;
-                         let totalAccum = curProg + paid;
-                         let earned = Math.floor(totalAccum / ruleQty);
-                         let leftover = totalAccum % ruleQty;
-                         
                          let initF = Number(updatedWallet[cartAggT[cName].orig]) || 0;
-                         let finalF = Math.max(0, (initF + earned) - claimed);
-                         
-                         if (finalF > 0) updatedWallet[cartAggT[cName].orig] = finalF; else delete updatedWallet[cartAggT[cName].orig];
-                         if (leftover > 0) updatedWallet[pKey] = leftover; else delete updatedWallet[pKey];
+                         let beforeFree = initF;
+                         let normBx = window.normalizeLoyaltyBucket(curProg + paid, initF - claimed, ruleQty);
+                         let earned = Math.max(0, (normBx.free + claimed) - beforeFree);
+
+                         if (normBx.free > 0) updatedWallet[cartAggT[cName].orig] = normBx.free; else delete updatedWallet[cartAggT[cName].orig];
+                         if (normBx.points !== 0) updatedWallet[pKey] = normBx.points; else delete updatedWallet[pKey];
                          
                          if (earned > 0) newEarnedRewards.push({ item: cartAggT[cName].orig, qty: earned, code: "BUY_X_GET_1" });
                          break;
@@ -3981,7 +3994,10 @@ window.buildEscPosReceipt = async function(orderId, order, deposit, debt, payMet
         let loyaltyItems = window.globalMenuData.filter(m => m.loyaltyThreshold > 0);
         loyaltyItems.forEach(item => { 
             let data = updatedWallet[item.name] || {points: 0, free: 0}; 
-            receipt += window.formatLine(item.name, `Poin:${data.points} | Free:${data.free}`, false); 
+            receipt += window.formatLine(item.name, `Poin:${data.points}/${item.loyaltyThreshold} | Free:${data.free}`, false);
+            if ((Number(data.points) || 0) < 0) {
+                receipt += ` *Kurang ${Math.abs(data.points)} poin (revisi/batal)\n`;
+            }
         });
     }
 
@@ -4806,13 +4822,13 @@ window.applyLocalVoidAftermath = function(order) {
                 let currentWallet = typeof mem.wallet === 'object' ? mem.wallet : {};
                 if (order.loyaltyChanges) {
                     for (let itemName in order.loyaltyChanges) {
-                        if (!currentWallet[itemName]) currentWallet[itemName] = {points: 0, free: 0};
-                        currentWallet[itemName].free += order.loyaltyChanges[itemName].redeemed;
-                        currentWallet[itemName].points -= order.loyaltyChanges[itemName].earned;
-                        while(currentWallet[itemName].points < 0 && currentWallet[itemName].free > 0) {
-                            currentWallet[itemName].free -= 1; currentWallet[itemName].points += order.loyaltyChanges[itemName].threshold;
-                        }
-                        if (currentWallet[itemName].points < 0) currentWallet[itemName].points = 0;
+                        if (!currentWallet[itemName] || typeof currentWallet[itemName] !== "object") currentWallet[itemName] = {points: 0, free: Number(currentWallet[itemName]) || 0};
+                        let earnedBeforeVoid = (voidDebt === 0) ? (Number(order.loyaltyChanges[itemName].earned) || 0) : 0;
+                        currentWallet[itemName] = window.normalizeLoyaltyBucket(
+                            (Number(currentWallet[itemName].points) || 0) - earnedBeforeVoid,
+                            (Number(currentWallet[itemName].free) || 0) + (Number(order.loyaltyChanges[itemName].redeemed) || 0),
+                            order.loyaltyChanges[itemName].threshold
+                        );
                     }
                 }
                 
@@ -4884,7 +4900,12 @@ window.calculateLiveDrawer = function(callback) {
         });
         dropReq.result.forEach(d => { if (isCurOut(d.outlet) && d.syncStatus === "Pending") liveDrawer -= ((Number(d.toAdmin) || 0) + (Number(d.toBank) || 0)); });
         expReq.result.forEach(e => { if (isCurOut(e.outlet) && e.syncStatus === "Pending" && e.status === "Active") liveDrawer -= (Number(e.amount) || 0); });
-        bpReq.result.forEach(bp => { if (isCurOut(bp.outlet) && bp.syncStatus === "Pending") liveDrawer += ((Number(bp.cashAmount) || 0) + (Number(bp.tipAmount) || 0)); });
+        bpReq.result.forEach(bp => {
+            if (isCurOut(bp.outlet) && bp.syncStatus === "Pending") {
+                let cashTip = (bp.tipCash !== undefined) ? (Number(bp.tipCash) || 0) : (Number(bp.tipAmount) || 0);
+                liveDrawer += ((Number(bp.cashAmount) || 0) + cashTip);
+            }
+        });
         callback(liveDrawer);
     };
 }
@@ -7117,6 +7138,8 @@ window.openOrderRevisionModalFromLocal = function(orderId) {
     window.db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = (e) => {
         const o = e.target.result;
         if (!o) return alert("Nota tidak ditemukan di memori lokal.");
+        let pelTot = (Number(o.pelunasanCash) || 0) + (Number(o.pelunasanQris) || 0) + (Number(o.pelunasanTransfer) || 0);
+        if (pelTot > 0) return alert("⚠️ Nota ini sudah memiliki riwayat pelunasan/cicilan piutang terpisah. Gunakan Void agar buku Piutang & Jurnal tetap akurat.");
         window.openOrderRevisionModal({
             orderId: o.orderId, timestamp: o.timestamp, outlet: o.outlet || window.currentOutlet,
             cashier: o.cashier, customerName: o.customerName, customerPhone: o.customerPhone,
@@ -7228,7 +7251,34 @@ window.openOrderRevisionModal = function(orderObj) {
     modal.classList.remove("hidden");
 };
 
+window.applyVolumeDiscountsToRevisionDraft = function() {
+    if (!Array.isArray(window.revisionDraftItems)) return;
+    let curOutlet = String((window.revisionTargetOrder && window.revisionTargetOrder.outlet) || window.currentOutlet || "").trim().toUpperCase();
+    let hasDeliv = window.revisionDraftItems.some(c => window.isDeliveryCartItem(c));
+    window.revisionDraftItems.forEach(item => {
+        let baseP = (item.originalPrice !== undefined && Number(item.originalPrice) > 0) ? Number(item.originalPrice) : Number(item.price) || 0;
+        item.originalPrice = baseP;
+        let itemKey = String(item.name || "").trim().toUpperCase().replace(/\s+/g, '');
+        let matched = null;
+        for (let r of (window.volumeDiscountRules || [])) {
+            let outMatch = r.outlets.includes("ALL") || (curOutlet && r.outlets.includes(curOutlet));
+            let delMatch = !hasDeliv || r.allowDelivery;
+            if (outMatch && delMatch && (itemKey === r.itemKey || itemKey.includes(r.itemKey) || r.itemKey.includes(itemKey))) {
+                if (item.qty >= r.minQty) { matched = r; break; }
+            }
+        }
+        if (matched) {
+            item.price = Math.max(0, baseP - matched.discount);
+            item.volumeDiscountPerUnit = matched.discount;
+        } else {
+            item.price = baseP;
+            item.volumeDiscountPerUnit = 0;
+        }
+    });
+};
+
 window.renderRevisionItems = function() {
+    window.applyVolumeDiscountsToRevisionDraft();
     const box = document.getElementById("rev-items-list");
     if (!box) return;
     if (window.revisionDraftItems.length === 0) {
@@ -7249,11 +7299,98 @@ window.renderRevisionItems = function() {
     window.recalcRevisionTotals();
 };
 
+window.normalizeLoyaltyBucket = function(points, free, threshold) {
+    let p = Number(points) || 0;
+    let f = Number(free) || 0;
+    let t = Number(threshold) || 0;
+    if (t <= 0) return { points: p, free: Math.max(0, f) };
+    while (f < 0) { f += 1; p -= t; }
+    while (p < 0 && f > 0) { f -= 1; p += t; }
+    if (p >= t) {
+        let earnedFree = Math.floor(p / t);
+        p = p % t;
+        f += earnedFree;
+    }
+    return { points: p, free: f };
+};
+
+window.openLoyaltyHistoryModal = async function(phone, name) {
+    if (!navigator.onLine) return alert("⚠️ Fitur Riwayat Poin membutuhkan koneksi internet.");
+    let modal = document.getElementById("loyalty-history-modal");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "loyalty-history-modal";
+        modal.className = "modal-overlay hidden";
+        modal.style.setProperty("z-index", "10090", "important");
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width:560px; width:96%; background:#fff; border-radius:12px; padding:18px; color:#2c3e50;">
+                <h2 style="margin:0 0 6px 0; color:#2980b9;">📜 Riwayat & Mutasi Poin Loyalty</h2>
+                <div id="lyl-hist-header" style="font-size:13px; background:#ebf5fb; padding:10px 12px; border-radius:8px; margin-bottom:10px;"></div>
+                <div id="lyl-hist-body" style="max-height:360px; overflow-y:auto; border:1px solid #ecf0f1; border-radius:8px; padding:8px;"></div>
+                <div style="margin-top:12px; text-align:right;">
+                    <button type="button" onclick="document.getElementById('loyalty-history-modal').classList.add('hidden')" style="background:#95a5a6; color:white; border:none; padding:10px 18px; border-radius:7px; font-weight:bold; cursor:pointer;">Tutup</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+
+    document.getElementById("lyl-hist-header").innerHTML = `👤 <strong>${name}</strong> (${phone})<br><small>Memuat saldo & riwayat poin terbaru dari server...</small>`;
+    document.getElementById("lyl-hist-body").innerHTML = `<div style="padding:24px; text-align:center; color:#e67e22; font-weight:bold;">⏳ Mengambil buku mutasi poin...</div>`;
+    modal.classList.remove("hidden");
+
+    try {
+        let url = API_URL + `?type=loyaltyHistory&phone=${encodeURIComponent(phone)}&outlet=${encodeURIComponent(window.currentOutlet || "")}`;
+        let res = await (await fetch(url, { method: "GET", redirect: "follow" })).json();
+        if (res.status !== "Success") throw new Error(res.message || "Gagal memuat");
+
+        let w = (res.data && res.data.currentWallet) || {};
+        let wSummary = [];
+        for (let k in w) {
+            if (typeof w[k] === "object" && w[k] !== null) {
+                let def = w[k].points < 0 ? ` <span style="color:#c0392b;">(⚠️ Kurang ${Math.abs(w[k].points)} Poin)</span>` : "";
+                wSummary.push(`<strong>${k}</strong>: ${w[k].points} Poin | 🎁 ${w[k].free} Gratis${def}`);
+            } else if (typeof w[k] === "number" && !k.startsWith("_")) {
+                wSummary.push(`<strong>${k}</strong>: 🎁 ${w[k]} Gratis`);
+            }
+        }
+        document.getElementById("lyl-hist-header").innerHTML = `👤 <strong>${name}</strong> (${phone})<br>${wSummary.join("<br>") || "Belum ada saldo poin."}`;
+
+        let logs = (res.data && res.data.logs) || [];
+        if (logs.length === 0) {
+            document.getElementById("lyl-hist-body").innerHTML = `<div style="padding:24px; text-align:center; color:#7f8c8d;">Belum ada riwayat mutasi poin tercatat.</div>`;
+        } else {
+            document.getElementById("lyl-hist-body").innerHTML = logs.map(l => {
+                let deltaStr = l.ptsIn > 0
+                    ? `<span style="color:#27ae60; font-weight:bold;">+${l.ptsIn} Poin</span>`
+                    : (l.ptsOut > 0 ? `<span style="color:#c0392b; font-weight:bold;">-${l.ptsOut} Poin</span>` : `<span style="color:#7f8c8d;">0 Poin</span>`);
+                let freeStr = l.freeUsed > 0 ? ` • <span style="color:#8e44ad; font-weight:bold;">🎁 Tukar ${l.freeUsed}</span>` : "";
+                let endCol = l.endPts < 0 ? "#c0392b" : "#2c3e50";
+                return `
+                <div style="border-bottom:1px solid #ecf0f1; padding:8px 4px; font-size:12.5px;">
+                    <div style="display:flex; justify-content:space-between; gap:8px;">
+                        <span><strong>${window.formatDateReadable(l.timestamp)}</strong> • <small>${l.orderId}</small></span>
+                        <span>${deltaStr}${freeStr}</span>
+                    </div>
+                    <div style="color:#5d6d7e; margin-top:2px;">${l.status} ${l.earnedTxt && l.earnedTxt !== "-" ? `• ${l.earnedTxt}` : ""} ${l.usedTxt && l.usedTxt !== "-" ? `• ${l.usedTxt}` : ""}</div>
+                    <div style="font-size:11.5px; color:${endCol}; margin-top:2px;">Saldo Akhir: <strong>${l.endPts} Poin | ${l.endFree} Gratis</strong> <small style="color:#95a5a6;">(Kasir: ${l.cashier})</small></div>
+                </div>`;
+            }).join("");
+        }
+    } catch (err) {
+        document.getElementById("lyl-hist-body").innerHTML = `<div style="padding:20px; color:#c0392b;">Gagal memuat riwayat poin: ${err.message}</div>`;
+    }
+};
+
 window.updateRevisionItemQty = function(idx, delta) {
     let it = window.revisionDraftItems[idx];
     if (!it) return;
     it.qty += delta;
-    if (it.qty <= 0) window.revisionDraftItems.splice(idx, 1);
+    if (it.qty <= 0) {
+        window.revisionDraftItems.splice(idx, 1);
+    } else if ((it.redeemed || 0) > it.qty) {
+        it.redeemed = it.qty;
+    }
     window.renderRevisionItems();
 };
 
@@ -7323,6 +7460,21 @@ window.submitOrderRevision = async function(withAdminPin) {
     if (tot.f > 0) methods.push("Gratis");
     if (tot.d > 0) methods.push("Piutang");
 
+    // Sinkronkan field redeemed pada item revisi dengan nominal Gratis (#rev-free) agar tidak ada flag redeemed usang
+    let remRevFree = tot.f;
+    const cleanedRevItems = window.revisionDraftItems.map(it => {
+        let copy = { ...it };
+        let up = Number(copy.price) || 0;
+        if (remRevFree <= 0) {
+            copy.redeemed = 0;
+        } else if (up > 0) {
+            let maxRed = Math.min(copy.qty, Math.floor(remRevFree / up));
+            copy.redeemed = Math.min(copy.redeemed || 0, maxRed);
+            remRevFree = Math.max(0, remRevFree - (copy.redeemed * up));
+        }
+        return copy;
+    });
+
     const revId = "REV-" + Date.now();
     const revPayload = {
         id: "ORDREV-" + revId,
@@ -7334,7 +7486,7 @@ window.submitOrderRevision = async function(withAdminPin) {
         reason: reason,
         instantApprove: !!withAdminPin,
         authName: authName,
-        newItems: window.revisionDraftItems,
+        newItems: cleanedRevItems,
         newSubtotal: tot.grand,
         newFree: tot.f,
         newGrandTotal: tot.grand,
@@ -7355,10 +7507,21 @@ window.submitOrderRevision = async function(withAdminPin) {
 
     document.getElementById("order-revision-modal").classList.add("hidden");
     if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
-    if (navigator.onLine) window.runBackgroundSync();
+    if (navigator.onLine) {
+        if (withAdminPin) {
+            window.lastBackgroundPullMs = 0;
+            await window.runBackgroundSync(true);
+            await window.syncMasterData();
+            if (!document.getElementById("history-modal").classList.contains("hidden")) {
+                window.renderHistoryList("orders");
+            }
+        } else {
+            window.runBackgroundSync();
+        }
+    }
 
     alert(withAdminPin
-        ? `✅ Revisi nota ${o.orderId} disetujui langsung oleh ${authName} dan sedang disinkronkan ke Spreadsheet!`
+        ? `✅ Revisi nota ${o.orderId} disetujui langsung oleh ${authName} dan data tablet telah diperbarui!`
         : `📨 Permintaan revisi untuk nota ${o.orderId} telah dikirim ke Admin!\nAdmin akan menerima notifikasi email dan dapat menyetujui dari menu Otorisasi Revisi.`);
 };
 
