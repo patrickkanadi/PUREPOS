@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 30; 
-const APP_VERSION = "42"; 
+const APP_VERSION = "43"; 
 window.db = null;
 
 // Core State
@@ -1237,21 +1237,58 @@ window.checkAutoCloseShifts = async function() {
     if (!window.db) return;
     const shifts = await new Promise(res => window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").getAll().onsuccess = e => res(e.target.result || []));
     const todayWib = window.getWibDate().split(" ")[0]; // YYYY-MM-DD
-    const nowTime = Date.now();
-    
+    let closedCurrentCashierMidnight = false;
+
+    // 1. Tutup hanya shift dari HARI SEBELUMNYA (setelah lewat tengah malam WIB) — kasir double-shift di hari yg sama TIDAK pernah di-logout!
     for (let shift of shifts) {
         let shiftDateStr = String(shift.loginTime || "").split(" ")[0];
         let isDifferentDay = (shiftDateStr && shiftDateStr !== todayWib);
+        if (!isDifferentDay) continue;
 
-        const loginDate = new Date(String(shift.loginTime).replace(' ', 'T'));
-        let loginTime = isNaN(loginDate.getTime()) ? nowTime : loginDate.getTime();
+        await window.forceCloseShift(shift);
+        if (window.currentPin && shift.pin === window.currentPin) {
+            closedCurrentCashierMidnight = true;
+        }
+    }
 
-        // 🔥 NEVER kick out the currently active cashier during the same business day!
-        if (shift.pin === window.currentPin && !isDifferentDay) continue;
+    // 2. Tutup absensi terbuka (Kasir, OP, P) dari hari sebelumnya memakai jam transaksi terakhir hari tersebut
+    const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result || []));
+    const staleOpenAtts = attendances.filter(a => a.date && a.date < todayWib && !a.clockOut);
+    if (staleOpenAtts.length > 0) {
+        const allOrds = await new Promise(res => window.db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = e => res(e.target.result || []));
+        let lastTxByOutDate = {};
+        allOrds.forEach(o => {
+            if (o.orderStatus === "Voided" || o.deliveryStatus === "Dibatalkan") return;
+            let ms = window.parseSafeTimeMs(o.timestamp);
+            if (!ms) return;
+            let ymd = window.getWibDateFromMs(ms).split(" ")[0];
+            let k = String(o.outlet || "").trim().toUpperCase() + "::" + ymd;
+            if (!lastTxByOutDate[k] || ms > lastTxByOutDate[k]) lastTxByOutDate[k] = ms;
+        });
+        await new Promise(res => {
+            let txAtt = window.db.transaction(["attendance"], "readwrite");
+            let store = txAtt.objectStore("attendance");
+            staleOpenAtts.forEach(a => {
+                let k = String(a.outlet || "").trim().toUpperCase() + "::" + a.date;
+                let lastMs = lastTxByOutDate[k] || 0;
+                a.clockOut = lastMs > 0 ? window.getWibDateFromMs(lastMs) : `${a.date} 23:59:00`;
+                a.syncStatus = "OutPending";
+                store.put(a);
+            });
+            txAtt.oncomplete = res;
+            txAtt.onerror = res;
+        });
+        if (navigator.onLine) window.runBackgroundSync();
+    }
 
-        // Only auto-close if midnight crossed (different calendar day) or > 16 hours old
-        if (isDifferentDay || (nowTime - loginTime > 16 * 60 * 60 * 1000)) { 
-            await window.forceCloseShift(shift); 
+    // 3. Jika tablet masih terbuka melewati tengah malam dan keranjang kosong, kembali ke layar Login untuk hari baru
+    if (closedCurrentCashierMidnight) {
+        let allCartsEmpty = (window.posSessions || []).every(s => !s.cart || s.cart.length === 0);
+        if (allCartsEmpty) {
+            localStorage.removeItem("activePosPin");
+            localStorage.removeItem("activePosName");
+            if (navigator.onLine) await window.runBackgroundSync(true);
+            window.location.reload();
         }
     }
 }
@@ -1259,13 +1296,20 @@ window.checkAutoCloseShifts = async function() {
 window.forceCloseShift = async function(shift) {
     let tCust = 0, tOrders = 0, tOmset = 0, tCash = 0, tQris = 0, tTransfer = 0, tFree = 0, tExpense = 0, tPiutangGiven = 0, tPiutangPaidCash = 0;
     let foodSummary = {};
-    
+    let shiftDateStr = String(shift.loginTime || "").split(" ")[0] || window.getWibDate().split(" ")[0];
+    let lastActivityMs = 0;
+    const trackMs = (ts) => {
+        let ms = window.parseSafeTimeMs ? window.parseSafeTimeMs(ts) : new Date(ts).getTime();
+        if (ms > lastActivityMs) lastActivityMs = ms;
+    };
+
     const tx = window.db.transaction(["orders", "expenses", "bayar_piutang"], "readonly");
     const orders = await new Promise(r => tx.objectStore("orders").getAll().onsuccess = e => r(e.target.result || []));
     const expenses = await new Promise(r => tx.objectStore("expenses").getAll().onsuccess = e => r(e.target.result || []));
     const piutangs = await new Promise(r => tx.objectStore("bayar_piutang").getAll().onsuccess = e => r(e.target.result || []));
-    
-    orders.filter(o => o.shiftId === shift.shiftId && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending").forEach(o => {
+
+    orders.filter(o => o.shiftId === shift.shiftId && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && o.deliveryStatus !== "Dibatalkan").forEach(o => {
+        trackMs(o.timestamp);
         tOrders++; if(o.customerPhone && o.customerPhone !== "-") tCust++;
         let pelC = Number(o.pelunasanCash) || 0;
         let pelQ = Number(o.pelunasanQris) || 0;
@@ -1276,58 +1320,43 @@ window.forceCloseShift = async function(shift) {
         tTransfer += Math.max(0, (Number(o.transferAmount) || 0) - pelT);
         tFree += (Number(o.freeAmount) || 0);
         tPiutangGiven += (Number(o.debtAmount) || 0);
-        if (o.items) o.items.forEach(i => { 
+        if (o.items) o.items.forEach(i => {
             let key = i.name || i.itemId;
-            if(!foodSummary[key]) foodSummary[key] = { name: i.name, qty: 0, nominal: 0 }; 
-            foodSummary[key].qty += (Number(i.qty) || 0); 
-            foodSummary[key].nominal += ((Number(i.qty) || 0) * (Number(i.price || i.originalPrice) || 0)); 
+            let unitP = (i.price !== undefined) ? Number(i.price) : Number(i.originalPrice);
+            if(!foodSummary[key]) foodSummary[key] = { name: i.name, qty: 0, nominal: 0 };
+            foodSummary[key].qty += (Number(i.qty) || 0);
+            foodSummary[key].nominal += ((Number(i.qty) || 0) * (unitP || 0));
         });
     });
-    
-    expenses.filter(ex => ex.shiftId === shift.shiftId && ex.status === "Active").forEach(ex => { tExpense += (Number(ex.amount) || 0); });
+
+    expenses.filter(ex => ex.shiftId === shift.shiftId && ex.status === "Active").forEach(ex => {
+        trackMs(ex.timestamp);
+        tExpense += (Number(ex.amount) || 0);
+    });
     piutangs.filter(bp => bp.shiftId === shift.shiftId).forEach(bp => {
+        trackMs(bp.timestamp);
         tPiutangPaidCash += (Number(bp.cashAmount) || 0);
         tQris += (Number(bp.qrisAmount) || 0);
         tTransfer += (Number(bp.transferAmount) || 0);
     });
-    
-    // --- NEW: IGNORE EMPTY SHIFTS AND AUTO CLOCK OUT ---
+
+    let finalAutoLogout = lastActivityMs > 0 ? window.getWibDateFromMs(lastActivityMs) : `${shiftDateStr} 23:59:00`;
+
     const hasActivity = tOrders > 0 || tExpense > 0 || tPiutangGiven > 0 || tPiutangPaidCash > 0 || tQris > 0 || tTransfer > 0;
     if (!hasActivity) {
-        window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(shift.pin);
-        
-        // 🔥 CLOCK OUT STAFF PROPERLY IF THEY AUTO-CLOSE WITH NO TRANSACTIONS
-        const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
-        const staffList = await window.getStaffFromDB();
-        const staffMatch = staffList.find(s => s.pin === shift.pin);
-        
-        if (staffMatch) {
-            const activeLog = attendances.slice().reverse().find(a => a.staffName === staffMatch.name && !a.clockOut);
-            if (activeLog) {
-                activeLog.clockOut = window.getWibDate();
-                activeLog.syncStatus = "OutPending";
-                window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(activeLog);
-                if (navigator.onLine) fetch(API_URL, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "updateAttendanceOut", data: activeLog }) }).catch(()=>{});
-            }
-        }
-        return; // Stop here, do not create a shift report
+        await new Promise(res => {
+            let txDel = window.db.transaction(["active_shifts"], "readwrite");
+            txDel.objectStore("active_shifts").delete(shift.pin);
+            txDel.oncomplete = res;
+            txDel.onerror = res;
+        });
+        return;
     }
-    // --------------------------------
-    
-    // 🔥 Gunakan rumus Net Cash Shift murni agar 100% identik dengan Audit & POS Live Shift!
-    let shiftNetCash = tCash + tPiutangPaidCash - tExpense;
 
+    let shiftNetCash = tCash + tPiutangPaidCash - tExpense;
     const staffList = await window.getStaffFromDB();
     const staffMatch = staffList.find(s => s.pin === shift.pin);
     const actualCashier = (staffMatch ? staffMatch.name : "Unknown Cashier") + " (Auto-Close)";
-
-    // Gunakan jam transaksi terakhir pada shift tersebut sebagai logoutTime jika berasal dari hari sebelumnya
-    let lastActivityMs = 0;
-    orders.filter(o => o.shiftId === shift.shiftId).forEach(o => {
-        let ms = window.parseSafeTimeMs ? window.parseSafeTimeMs(o.timestamp) : new Date(o.timestamp).getTime();
-        if (ms > lastActivityMs) lastActivityMs = ms;
-    });
-    let finalAutoLogout = lastActivityMs > 0 ? window.getWibDateFromMs(lastActivityMs) : window.getWibDate();
 
     const shiftPayload = {
         shiftId: shift.shiftId, timestamp: window.getWibDate(), cashier: actualCashier, loginTime: shift.loginTime, logoutTime: finalAutoLogout,
@@ -1336,10 +1365,14 @@ window.forceCloseShift = async function(shift) {
         piutangGiven: tPiutangGiven, piutangPaid: tPiutangPaidCash, autoClosed: true
     };
 
-    const txWrite = window.db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
-    txWrite.objectStore("local_shift_history").put(shiftPayload);
-    txWrite.objectStore("shift_reports").put(shiftPayload);
-    txWrite.objectStore("active_shifts").delete(shift.pin);
+    await new Promise(res => {
+        const txWrite = window.db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
+        txWrite.objectStore("local_shift_history").put(shiftPayload);
+        txWrite.objectStore("shift_reports").put(shiftPayload);
+        txWrite.objectStore("active_shifts").delete(shift.pin);
+        txWrite.oncomplete = res;
+        txWrite.onerror = res;
+    });
 }
 
 window.printerKeepAliveTimer = null;
@@ -2057,8 +2090,40 @@ window.syncCriticalData = async function() {
                     };
                 } catch (eClean) {}
             }
+            if (result.data.todayAttendance) {
+                await window.mergeServerAttendance(result.data.todayAttendance);
+            }
         }
     } catch(e) { console.error("Critical Sync Error:", e); }
+};
+
+window.mergeServerAttendance = async function(serverAttList) {
+    if (!window.db || !Array.isArray(serverAttList)) return;
+    await new Promise(resolve => {
+        const tx = window.db.transaction(["attendance"], "readwrite");
+        const store = tx.objectStore("attendance");
+        store.getAll().onsuccess = (ev) => {
+            const locals = ev.target.result || [];
+            const localById = {};
+            locals.forEach(l => { localById[l.logId] = l; });
+
+            serverAttList.forEach(sa => {
+                const ex = localById[sa.logId];
+                if (ex && (ex.syncStatus === "OutPending" || ex.syncStatus === "Bundled")) return;
+                // Hapus entri lokal Synced dengan logId berbeda untuk staff+tanggal+cabang terbuka yg sama
+                locals.forEach(l => {
+                    if (l.logId !== sa.logId && l.syncStatus === "Synced" && !l.clockOut &&
+                        l.date === sa.date && String(l.staffName || "").toLowerCase() === String(sa.staffName || "").toLowerCase() &&
+                        String(l.outlet || "").toUpperCase() === String(sa.outlet || "").toUpperCase()) {
+                        store.delete(l.logId);
+                    }
+                });
+                store.put(sa);
+            });
+        };
+        tx.oncomplete = resolve;
+        tx.onerror = resolve;
+    });
 };
 
 window.syncBackgroundData = async function() {
@@ -2180,6 +2245,7 @@ window.syncBackgroundData = async function() {
                 }
             });
 
+            if (result.data.todayAttendance) await window.mergeServerAttendance(result.data.todayAttendance);
             if (result.data.authStatuses) await window.processServerUpdates(result.data.authStatuses);
             if (window.updateLeftBadges) window.updateLeftBadges();
 
@@ -2273,11 +2339,17 @@ window.attemptLogin = async function() {
         }
 
         if (staff) {
+            // 🔥 Tutup shift hari kemarin terlebih dahulu SEBELUM mengecek sesi aktif hari ini!
+            await window.checkAutoCloseShifts();
+            const todayWibLogin = window.getWibDate().split(" ")[0];
+
             window.db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staff.pin).onsuccess = async (shiftReq) => {
-                const activeShift = shiftReq.target.result;
-                window.currentCashier = staff.name; window.currentPin = staff.pin; 
+                const rawActiveShift = shiftReq.target.result;
+                const activeShift = (rawActiveShift && String(rawActiveShift.loginTime || "").split(" ")[0] === todayWibLogin) ? rawActiveShift : null;
+
+                window.currentCashier = staff.name; window.currentPin = staff.pin;
                 window.resetAllPosSessions(); // 🔥 Bersihkan sisa keranjang kasir sebelumnya!
-                
+
                 const dropdownSelection = document.getElementById("login-outlet").value;
                 const fallbackOutlet = document.getElementById("login-outlet").options.length > 1 ? document.getElementById("login-outlet").options[1].value : "Pusat";
                 const staffDefault = staff.defaultOutlet || fallbackOutlet;
@@ -2288,18 +2360,19 @@ window.attemptLogin = async function() {
                     window.currentOutlet = dropdownSelection;
                 }
 
-                if (activeShift) { 
-                    window.currentShiftId = activeShift.shiftId; window.currentLoginTime = activeShift.loginTime; window.currentOutlet = activeShift.outlet || window.currentOutlet; 
+                if (activeShift) {
+                    // Lanjutkan sesi aktif hari ini tanpa mencatat login baru!
+                    window.currentShiftId = activeShift.shiftId;
+                    window.currentLoginTime = activeShift.loginTime;
+                    window.currentOutlet = activeShift.outlet || window.currentOutlet;
                 } else {
-                    window.currentShiftId = "SHF-" + Date.now(); window.currentLoginTime = window.getWibDate();
+                    window.currentShiftId = "SHF-" + Date.now();
+                    window.currentLoginTime = window.getWibDate();
                     window.db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({ pin: staff.pin, shiftId: window.currentShiftId, loginTime: window.currentLoginTime, outlet: window.currentOutlet });
                 }
-                
-                // 🔥 THE FIX: Save the sticky session!
+
                 localStorage.setItem("activePosPin", staff.pin);
                 localStorage.setItem("activePosName", staff.name);
-
-                await window.checkAutoCloseShifts();
 
                 // Sinkronisasi dihapus dari jalur login agar menu terbuka instan
                 document.getElementById("login-screen").classList.add("hidden"); 
@@ -4920,24 +4993,22 @@ window.openCurrentShiftReport = async function() {
     const today = window.getWibDate().split(" ")[0];
     const curOutUpCheck = String(window.currentOutlet || "").trim().toUpperCase();
     
-    // 1. Cek staff di cabang ini yang belum clock-out
+    // 1. Cek staff (OP/P) di cabang ini yang belum clock-out — JANGAN paksa logout agar OP/P tetap aktif lintas shift
     const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = ev => res(ev.target.result || []));
     let pendingOuts = attendances.filter(l => l.date === today && !l.clockOut && l.staffName !== window.currentCashier && (!l.outlet || String(l.outlet).trim().toUpperCase() === curOutUpCheck));
-    let currentHour = new Date(window.getWibDate().replace(' ', 'T')).getHours();
     if (pendingOuts.length > 0) {
-        let msg = "Terdapat staff yang belum Clock-Out:\n";
+        let msg = "Staff (OP / Pengirim) berikut masih aktif (belum Clock-Out):\n";
         pendingOuts.forEach(p => msg += `- ${p.staffName}\n`);
-        if (currentHour >= 20) {
-            alert(msg + "\nKarena sudah lewat jam 20:00, sistem otomatis melakukan Clock-Out untuk mereka sekarang.");
-            let nowOutStr = window.getWibDate();
-            for (const p of pendingOuts) {
-                await window.clockOutStaff(p.logId, nowOutStr, true);
-            }
-        } else {
-            let forceOut = prompt(msg + "\nMasukkan waktu Clock-Out manual (HH:MM) atau biarkan kosong jika masih bekerja:", "");
-            if (forceOut && forceOut.includes(":")) {
+        let forceOut = prompt(
+            msg + "\n• Jika mereka MASIH BEKERJA (lanjut shift berikutnya): klik BATAL / biarkan kosong.\n• Jika mereka SUDAH PULANG: ketik jam pulang (HH:MM) atau 'NOW' untuk Clock-Out sekarang (jika lupa, otomatis di-Clock-Out tengah malam di transaksi terakhir):",
+            ""
+        );
+        if (forceOut && forceOut.trim() !== "") {
+            let cleanOut = forceOut.trim().toUpperCase();
+            let outStamp = (cleanOut === "NOW" || cleanOut === "YA") ? window.getWibDate() : (cleanOut.includes(":") ? `${today} ${cleanOut}:00` : null);
+            if (outStamp) {
                 for (const p of pendingOuts) {
-                    await window.clockOutStaff(p.logId, `${today} ${forceOut}:00`, true);
+                    await window.clockOutStaff(p.logId, outStamp, true);
                 }
             }
         }
@@ -5010,7 +5081,7 @@ window.openCurrentShiftReport = async function() {
         return false;
     };
 
-    const validOrders = allOrders.filter(o => o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && isSameDayAndCashier(o.timestamp, o.cashier, o.outlet, o.shiftId));
+    const validOrders = allOrders.filter(o => o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && o.deliveryStatus !== "Dibatalkan" && isSameDayAndCashier(o.timestamp, o.cashier, o.outlet, o.shiftId));
     validOrders.forEach(o => {
         tOrders++;
         if (o.customerPhone && o.customerPhone !== "-") tCust++;
@@ -5028,9 +5099,10 @@ window.openCurrentShiftReport = async function() {
         if (o.items && o.items.length > 0) {
             o.items.forEach(i => {
                 let key = i.name || i.itemId;
+                let unitP = (i.price !== undefined) ? Number(i.price) : Number(i.originalPrice);
                 if (!foodSummary[key]) foodSummary[key] = { name: i.name, qty: 0, nominal: 0 };
                 foodSummary[key].qty += (Number(i.qty) || 0);
-                foodSummary[key].nominal += ((Number(i.qty) || 0) * (Number(i.price || i.originalPrice) || 0));
+                foodSummary[key].nominal += ((Number(i.qty) || 0) * (unitP || 0));
             });
         }
     });
@@ -5774,7 +5846,17 @@ window.runBackgroundSync = async function(skipPullAfter = false, fromDrainLoop =
             if (att.syncStatus === "Pending") {
                 let k = "ATT:" + att.logId;
                 batchItems.push({ key: k, action: "syncAttendance", data: att });
-                batchHandlers[k] = async (ok) => { if (ok) { att.syncStatus = "Synced"; await dbPut("attendance", att); } };
+                batchHandlers[k] = async (ok, itemRes) => {
+                    if (ok) {
+                        let srvId = itemRes && itemRes.existingLogId;
+                        if (srvId && srvId !== att.logId) {
+                            await dbDel("attendance", att.logId);
+                            att.logId = srvId;
+                        }
+                        att.syncStatus = "Synced";
+                        await dbPut("attendance", att);
+                    }
+                };
             } else if (att.syncStatus === "OutPending" || (allowBundled && att.syncStatus === "Bundled")) {
                 let k = "ATTOUT:" + att.logId;
                 batchItems.push({ key: k, action: "updateAttendanceOut", data: att });
@@ -5810,7 +5892,7 @@ window.runBackgroundSync = async function(skipPullAfter = false, fromDrainLoop =
                             window.syncFailCounts[itemRes.key] = (window.syncFailCounts[itemRes.key] || 0) + 1;
                             if (itemRes.message) window.lastSyncServerError = `${itemRes.key}: ${itemRes.message}`;
                         }
-                        if (batchHandlers[itemRes.key]) await batchHandlers[itemRes.key](isOk);
+                        if (batchHandlers[itemRes.key]) await batchHandlers[itemRes.key](isOk, itemRes);
                     }
                 } else {
                     let msg = String(resJson.message || "Batch sync error");
@@ -7057,7 +7139,7 @@ window.onload = async () => {
     window.setInterval(() => {
         setTimeout(window.runBackgroundSync, Math.floor(Math.random() * 4000));
     }, 25000);
-    window.setInterval(window.checkAutoCloseShifts, 3600000); 
+    window.setInterval(window.checkAutoCloseShifts, 600000);
     
     if(window.updateLeftBadges) {
         window.setInterval(window.updateLeftBadges, 12000); 
