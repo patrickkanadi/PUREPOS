@@ -1396,7 +1396,7 @@ window.forceCloseShift = async function(shift) {
         tQris += Math.max(0, (Number(o.qrisAmount) || 0) - pelQ);
         tTransfer += Math.max(0, (Number(o.transferAmount) || 0) - pelT);
         tFree += (Number(o.freeAmount) || 0);
-        tPiutangGiven += (Number(o.debtAmount) || 0);
+        tPiutangGiven += (Number(o.debtAmount) || 0) + pelC + pelQ + pelT;
         window.addOrderToShiftSummaryBuckets(foodSummary, o);
     });
 
@@ -1843,7 +1843,7 @@ window.syncCriticalData = async function() {
                         }).catch(() => {});
                     }
                     let allCartsEmpty = (window.posSessions || []).every(s => !s.cart || s.cart.length === 0);
-                    let noModalOpen = document.querySelectorAll(".modal:not(.hidden)").length === 0;
+                    let noModalOpen = document.querySelectorAll(".modal-overlay:not(.hidden), .modal:not(.hidden)").length === 0;
                     let unsyncedNow = await window.getUnsyncedCount();
                     if (allCartsEmpty && noModalOpen && unsyncedNow === 0 && !window.isSyncing && !window.isFinalizingOrder) {
                         window.location.reload();
@@ -3423,6 +3423,46 @@ window.openPiutangModal = function(memberOverride, linkedOrderId = null) {
     document.getElementById("piutang-pay-transfer").value = "";
     document.getElementById("piutang-parkir").value = "0";
     document.getElementById("piutang-tip").value = "0";
+
+    // Pasang dropdown Penerima Tip Kurir tepat di bawah input #piutang-tip (tampil otomatis saat Tip > 0)
+    let tipEl = document.getElementById("piutang-tip");
+    if (tipEl && !document.getElementById("piutang-tip-courier-wrap")) {
+        let wrap = document.createElement("div");
+        wrap.id = "piutang-tip-courier-wrap";
+        wrap.className = "hidden";
+        wrap.style.cssText = "margin-top:8px; padding:8px 10px; background:#eafaf1; border:1px solid #27ae60; border-radius:6px;";
+        wrap.innerHTML = `<label style="display:block; font-weight:bold; font-size:12px; color:#1e8449; margin-bottom:4px;">🎁 Penerima Tip Kurir (Masuk Gaji/Bonus Terdekat):</label>
+            <select id="piutang-tip-courier" style="width:100%; padding:8px; border:1px solid #27ae60; border-radius:5px; font-size:13.5px; font-weight:bold;"></select>`;
+        tipEl.parentElement.appendChild(wrap);
+    }
+    window.populatePiutangTipCouriers = async function(preferredCourier) {
+        let sel = document.getElementById("piutang-tip-courier");
+        if (!sel) return;
+        const staffList = await window.getStaffFromDB();
+        const curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
+        let seen = new Set();
+        let homeStaff = [], otherStaff = [];
+        staffList.forEach(s => {
+            if (String(s.role || "").trim().toLowerCase() === "admin") return;
+            let k = String(s.name || "").trim().toLowerCase();
+            if (!k || seen.has(k)) return;
+            seen.add(k);
+            if (String(s.defaultOutlet || "").trim().toUpperCase() === curOutUp) homeStaff.push(s.name);
+            else otherStaff.push(s.name);
+        });
+        homeStaff.sort(); otherStaff.sort();
+        let opts = `<option value="">-- Pilih Nama Kurir / Staff --</option>`;
+        homeStaff.forEach(nm => { opts += `<option value="${nm.replace(/"/g, '&quot;')}">${nm}</option>`; });
+        if (otherStaff.length > 0) {
+            opts += `<option disabled>── Cabang Lain ──</option>`;
+            otherStaff.forEach(nm => { opts += `<option value="${nm.replace(/"/g, '&quot;')}">${nm}</option>`; });
+        }
+        sel.innerHTML = opts;
+        if (preferredCourier && preferredCourier !== "-") sel.value = preferredCourier;
+    };
+    window.populatePiutangTipCouriers("");
+    let tipWrapInit = document.getElementById("piutang-tip-courier-wrap");
+    if (tipWrapInit) tipWrapInit.classList.add("hidden");
     
     const orderSelect = document.getElementById("piutang-target-order"); 
     orderSelect.innerHTML = `<option value="">-- Lunasi Saldo Global --</option>`;
@@ -3491,6 +3531,9 @@ window.autoBalancePiutangPay = function() {
 
     document.getElementById("piutang-total-dibayar").innerText = `Rp ${totalReceived.toLocaleString('id-ID')}`;
     
+    let tipWrap = document.getElementById("piutang-tip-courier-wrap");
+    if (tipWrap) tipWrap.classList.toggle("hidden", tip <= 0);
+
     let extraInfo = document.getElementById("piutang-extra-info");
     if (totalExtra > 0) {
         extraInfo.innerText = `(Potongan Parkir/Tip: Rp ${totalExtra.toLocaleString('id-ID')} | Masuk ke Piutang: Rp ${Math.max(0, debtPaid).toLocaleString('id-ID')})`;
@@ -3655,13 +3698,28 @@ window.submitPiutang = function() {
         };
     };
 
-    // Auto-infer the Courier from the selected order silently
-    if (targetOrderId) {
+    let pickedTipCourier = document.getElementById("piutang-tip-courier") ? document.getElementById("piutang-tip-courier").value.trim() : "";
+    if (tip > 0 && pickedTipCourier) {
+        processPayment(pickedTipCourier);
+    } else if (targetOrderId) {
         window.db.transaction(["orders"], "readonly").objectStore("orders").get(targetOrderId).onsuccess = (e) => {
             let ord = e.target.result;
-            processPayment((ord && ord.courier && ord.courier !== "-") ? ord.courier : "-");
+            let inferred = (ord && ord.courier && ord.courier !== "-") ? ord.courier : "";
+            if (tip > 0 && !inferred) {
+                delete window._activeSubmitLocks["piutang"];
+                let wrap = document.getElementById("piutang-tip-courier-wrap");
+                if (wrap) wrap.classList.remove("hidden");
+                return alert("⚠️ Harap pilih Nama Kurir penerima Tip terlebih dahulu agar Tip masuk ke Gaji/Bonus kurir yang tepat!");
+            }
+            processPayment(inferred || "-");
         };
     } else {
+        if (tip > 0) {
+            delete window._activeSubmitLocks["piutang"];
+            let wrap = document.getElementById("piutang-tip-courier-wrap");
+            if (wrap) wrap.classList.remove("hidden");
+            return alert("⚠️ Harap pilih Nama Kurir penerima Tip terlebih dahulu agar Tip masuk ke Gaji/Bonus kurir yang tepat!");
+        }
         processPayment("-");
     }
 }
@@ -3967,7 +4025,7 @@ window.buildEscPosReceipt = async function(orderId, order, deposit, debt, payMet
     receipt += "-".repeat(32) + "\n";
 
     let volDiscSaving = 0;
-    order.items.forEach(item => { 
+    (order.items || []).forEach(item => {
         let unitP = (item.price !== undefined) ? Number(item.price) : Number(item.originalPrice);
         let origP = (item.originalPrice !== undefined) ? Number(item.originalPrice) : unitP;
         if (origP > unitP) volDiscSaving += (origP - unitP) * item.qty;
@@ -4823,7 +4881,8 @@ window.applyLocalVoidAftermath = function(order) {
                 if (order.loyaltyChanges) {
                     for (let itemName in order.loyaltyChanges) {
                         if (!currentWallet[itemName] || typeof currentWallet[itemName] !== "object") currentWallet[itemName] = {points: 0, free: Number(currentWallet[itemName]) || 0};
-                        let earnedBeforeVoid = (voidDebt === 0) ? (Number(order.loyaltyChanges[itemName].earned) || 0) : 0;
+                        let origInitDebt = voidDebt + (Number(order.pelunasanCash) || 0) + (Number(order.pelunasanQris) || 0) + (Number(order.pelunasanTransfer) || 0);
+                        let earnedBeforeVoid = (origInitDebt === 0) ? (Number(order.loyaltyChanges[itemName].earned) || 0) : 0;
                         currentWallet[itemName] = window.normalizeLoyaltyBucket(
                             (Number(currentWallet[itemName].points) || 0) - earnedBeforeVoid,
                             (Number(currentWallet[itemName].free) || 0) + (Number(order.loyaltyChanges[itemName].redeemed) || 0),
@@ -5004,6 +5063,9 @@ window.restorePrinterConnection = async function() {
 };
 
 window.submitNewMember = async function() {
+    if (window._activeSubmitLocks["newMember"]) return;
+    window._activeSubmitLocks["newMember"] = true;
+    setTimeout(() => { delete window._activeSubmitLocks["newMember"]; }, 1500);
     let phone = document.getElementById("new-mem-phone").value.trim();
     let name = document.getElementById("new-mem-name").value.trim() || "Tanpa Nama";
     let address = document.getElementById("new-mem-address").value.trim();
@@ -5187,7 +5249,7 @@ window.openCurrentShiftReport = async function() {
         tQris += Math.max(0, (Number(o.qrisAmount) || 0) - pelQ);
         tTransfer += Math.max(0, (Number(o.transferAmount) || 0) - pelT);
         tFree += (Number(o.freeAmount) || 0);
-        tPiutangGiven += (Number(o.debtAmount) || 0);
+        tPiutangGiven += (Number(o.debtAmount) || 0) + pelC + pelQ + pelT;
 
         window.addOrderToShiftSummaryBuckets(foodSummary, o);
     });
@@ -7439,6 +7501,10 @@ window.submitOrderRevision = async function(withAdminPin) {
 
     const tot = window.recalcRevisionTotals();
     if (tot.rem !== 0) return alert("⚠️ Total pembayaran baru (Tunai + QRIS + Transfer + Piutang + Gratis) harus persis sama dengan Total Baru!");
+    let revPhone = String(o.customerPhone || "").replace(/-DUP\d+$/i, "").trim();
+    if (tot.d > 0 && (!revPhone || revPhone === "-" || revPhone === "Walk-in")) {
+        return alert("⚠️ Nota Walk-in tanpa Nomor WA / ID Pelanggan tidak dapat direvisi menjadi Piutang.");
+    }
 
     let authName = "";
     if (withAdminPin) {
