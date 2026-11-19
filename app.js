@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 30; 
-const APP_VERSION = "45"; 
+const APP_VERSION = "46"; 
 window.db = null;
 
 // Core State
@@ -4742,11 +4742,16 @@ window.confirmAdminVoid = async function() {
                 window.db.transaction([storeName], "readwrite").objectStore(storeName).get(id).onsuccess = (ev) => {
                     const item = ev.target.result;
                     if (type === 'orders') { 
+                        let wasSyncedVoid = (item.syncStatus === "Synced" || !!item.hasSyncedOnce);
+                        let refundCashDrawer = Number(item.cashAmount) || 0;
+                        if (wasSyncedVoid && refundCashDrawer > 0 && window.outletStocks && window.outletStocks[window.currentOutlet]) {
+                            window.outletStocks[window.currentOutlet]["Saldo_Laci"] = (Number(window.outletStocks[window.currentOutlet]["Saldo_Laci"]) || 0) - refundCashDrawer;
+                        }
                         item.orderStatus = "Voided"; item.voidAuth = authName; 
                         if(item.items) item.items.forEach(i => i.qty = Number(i.qty)); 
                         window.applyLocalVoidAftermath(item);
                         item.debtAmount = 0; // Nolkan hutang nota seketika
-                    } 
+                    }
                     else { item.status = "Voided"; item.voidAuth = authName; }
                     item.syncStatus = "Pending"; 
                     window.db.transaction([storeName], "readwrite").objectStore(storeName).put(item); 
@@ -7226,6 +7231,9 @@ window.openOrderRevisionModalFromLocal = function(orderId) {
 window.openOrderRevisionModalFromArchive = function(idx) {
     const o = window.lastHistorySearchResults && window.lastHistorySearchResults[idx];
     if (!o) return alert("Data arsip tidak ditemukan.");
+    if ((Number(o.pelunasanTot) || 0) > 0) {
+        return alert("⚠️ Nota arsip ini sudah memiliki riwayat pelunasan/cicilan piutang terpisah. Gunakan Void agar Piutang_Galon & Jurnal tetap seimbang.");
+    }
     window.openOrderRevisionModal(JSON.parse(JSON.stringify(o)));
 };
 
@@ -7586,7 +7594,7 @@ window.submitOrderRevision = async function(withAdminPin) {
     if (navigator.onLine) {
         if (withAdminPin) {
             window.lastBackgroundPullMs = 0;
-            await window.runBackgroundSync(true);
+            await window.drainSyncQueue();
             await window.syncMasterData();
             if (!document.getElementById("history-modal").classList.contains("hidden")) {
                 window.renderHistoryList("orders");
