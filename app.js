@@ -7675,19 +7675,21 @@ window.onload = async () => {
         }
     }
     
+    const setBootNetUi = (txt, color) => {
+        ["network-text", "login-network-text"].forEach(id => { let el = document.getElementById(id); if (el) el.innerText = txt; });
+        ["network-dot", "login-network-dot"].forEach(id => { let el = document.getElementById(id); if (el) el.style.backgroundColor = color; });
+    };
     if (navigator.onLine) {
         window.getUnsyncedCount().then(cnt => {
             if (cnt > 0) {
+                setBootNetUi(`Online (${cnt} Antre Sync)`, "#f39c12");
                 window.runBackgroundSync();
             } else {
                 window.syncMasterData();
             }
         });
     } else {
-        let netText = document.getElementById("network-text");
-        let netDot = document.getElementById("network-dot");
-        if (netText) netText.innerText = "Mode Offline (Data Lokal)";
-        if (netDot) netDot.style.backgroundColor = "#e74c3c";
+        setBootNetUi("Mode Offline (Data Lokal)", "#e74c3c");
     }
     
     window.setInterval(() => {
