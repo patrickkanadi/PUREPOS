@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 30; 
-const APP_VERSION = "43"; 
+const APP_VERSION = "44"; 
 window.db = null;
 
 // Core State
@@ -1293,6 +1293,76 @@ window.checkAutoCloseShifts = async function() {
     }
 }
 
+window.splitOrderItemsForAccounting = function(items, freeAmount = 0, isVoid = false) {
+    let out = [];
+    if (!Array.isArray(items) || items.length === 0) return out;
+
+    let explicitFreeVal = 0;
+    if (!isVoid) {
+        items.forEach(it => {
+            let qty = Number(it.qty) || 0;
+            if (qty <= 0) return;
+            let origP = Number(it.originalPrice !== undefined ? it.originalPrice : it.price) || 0;
+            let unitP = Number(it.price !== undefined ? it.price : origP) || 0;
+            let red = Math.min(qty, Math.max(0, Number(it.redeemed) || 0));
+            if (unitP === 0) red = qty;
+            explicitFreeVal += red * unitP;
+        });
+    }
+    let remFreeVal = isVoid ? 0 : Math.max(0, (Number(freeAmount) || 0) - explicitFreeVal);
+
+    items.forEach(it => {
+        let name = String(it.name || "").trim();
+        let qty = Number(it.qty) || 0;
+        if (!name || qty <= 0) return;
+        let origP = Number(it.originalPrice !== undefined ? it.originalPrice : it.price) || 0;
+        let unitP = Number(it.price !== undefined ? it.price : origP) || 0;
+        if (isVoid) {
+            out.push({ name, normalQty: 0, normalNom: 0, discQty: 0, discNom: 0, discSaving: 0, freeQty: 0, voidQty: qty });
+            return;
+        }
+        let freeQ = 0;
+        if (unitP === 0) {
+            freeQ = qty;
+        } else {
+            freeQ = Math.min(qty, Math.max(0, Number(it.redeemed) || 0));
+            let paidLeft = qty - freeQ;
+            if (remFreeVal > 0 && paidLeft > 0 && unitP > 0) {
+                let extraFree = Math.min(paidLeft, Math.floor(remFreeVal / unitP));
+                if (extraFree === 0 && remFreeVal >= (unitP * 0.99)) extraFree = 1;
+                freeQ += extraFree;
+                remFreeVal = Math.max(0, remFreeVal - extraFree * unitP);
+            }
+        }
+        let paidQ = Math.max(0, qty - freeQ);
+        let isDisc = (paidQ > 0) && ((Number(it.volumeDiscountPerUnit) || 0) > 0 || (origP > 0 && unitP > 0 && unitP < origP));
+        if (isDisc) {
+            out.push({ name, normalQty: 0, normalNom: 0, discQty: paidQ, discNom: paidQ * unitP, discSaving: Math.max(0, (origP - unitP) * paidQ), freeQty: freeQ, voidQty: 0 });
+        } else {
+            out.push({ name, normalQty: paidQ, normalNom: paidQ * unitP, discQty: 0, discNom: 0, discSaving: 0, freeQty: freeQ, voidQty: 0 });
+        }
+    });
+    return out;
+};
+
+window.addOrderToShiftSummaryBuckets = function(foodSummary, order) {
+    if (!order || !Array.isArray(order.items)) return;
+    let isVoid = (order.orderStatus === "Voided" || order.deliveryStatus === "Dibatalkan");
+    const addB = (key, qty, nom, tagType, saving) => {
+        if (qty <= 0) return;
+        if (!foodSummary[key]) foodSummary[key] = { name: key, qty: 0, nominal: 0, tagType: tagType, saving: 0 };
+        foodSummary[key].qty += qty;
+        foodSummary[key].nominal += nom;
+        foodSummary[key].saving += (saving || 0);
+    };
+    window.splitOrderItemsForAccounting(order.items, Number(order.freeAmount) || 0, isVoid).forEach(s => {
+        if (s.normalQty > 0) addB(s.name, s.normalQty, s.normalNom, "NORMAL", 0);
+        if (s.discQty > 0) addB(s.name + " [DISKON]", s.discQty, s.discNom, "DISKON", s.discSaving);
+        if (s.freeQty > 0) addB(s.name + " [GRATIS]", s.freeQty, 0, "GRATIS", 0);
+        if (s.voidQty > 0) addB(s.name + " [VOID]", s.voidQty, 0, "VOID", 0);
+    });
+};
+
 window.forceCloseShift = async function(shift) {
     let tCust = 0, tOrders = 0, tOmset = 0, tCash = 0, tQris = 0, tTransfer = 0, tFree = 0, tExpense = 0, tPiutangGiven = 0, tPiutangPaidCash = 0;
     let foodSummary = {};
@@ -1308,7 +1378,11 @@ window.forceCloseShift = async function(shift) {
     const expenses = await new Promise(r => tx.objectStore("expenses").getAll().onsuccess = e => r(e.target.result || []));
     const piutangs = await new Promise(r => tx.objectStore("bayar_piutang").getAll().onsuccess = e => r(e.target.result || []));
 
-    orders.filter(o => o.shiftId === shift.shiftId && o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && o.deliveryStatus !== "Dibatalkan").forEach(o => {
+    orders.filter(o => o.shiftId === shift.shiftId && o.orderStatus !== "Void Pending").forEach(o => {
+        if (o.orderStatus === "Voided" || o.deliveryStatus === "Dibatalkan") {
+            window.addOrderToShiftSummaryBuckets(foodSummary, o);
+            return;
+        }
         trackMs(o.timestamp);
         tOrders++; if(o.customerPhone && o.customerPhone !== "-") tCust++;
         let pelC = Number(o.pelunasanCash) || 0;
@@ -1320,13 +1394,7 @@ window.forceCloseShift = async function(shift) {
         tTransfer += Math.max(0, (Number(o.transferAmount) || 0) - pelT);
         tFree += (Number(o.freeAmount) || 0);
         tPiutangGiven += (Number(o.debtAmount) || 0);
-        if (o.items) o.items.forEach(i => {
-            let key = i.name || i.itemId;
-            let unitP = (i.price !== undefined) ? Number(i.price) : Number(i.originalPrice);
-            if(!foodSummary[key]) foodSummary[key] = { name: i.name, qty: 0, nominal: 0 };
-            foodSummary[key].qty += (Number(i.qty) || 0);
-            foodSummary[key].nominal += ((Number(i.qty) || 0) * (unitP || 0));
-        });
+        window.addOrderToShiftSummaryBuckets(foodSummary, o);
     });
 
     expenses.filter(ex => ex.shiftId === shift.shiftId && ex.status === "Active").forEach(ex => {
@@ -4132,7 +4200,7 @@ window.renderHistoryList = function(type) {
                 let payBadge = `<span style="font-size:11px; background:#f4f6f7; color:${pmColor}; border:1px solid ${pmColor}; padding:1px 6px; border-radius:4px; font-weight:bold; margin-left:4px;">💳 ${pmStr}</span>`;
                 let piutangBadge = (o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && (o.debtAmount || 0) > 0) ? `<br><span style="font-size:12px; color:#c0392b; font-weight:bold;">⚠️ Piutang: Rp ${(o.debtAmount).toLocaleString('id-ID')}</span>` : '';
                 let canEditPay = (o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending");
-                let btnEditPay = canEditPay ? `<button onclick="window.openChangePaymentModal('${o.orderId}')" style="background:#16a085; color:white; border:none; padding:6px 10px; border-radius:4px; cursor:pointer; font-weight:bold;">💳 Ubah Bayar</button>` : '';
+                let btnEditPay = canEditPay ? `<button onclick="window.openChangePaymentModal('${o.orderId}')" style="background:#16a085; color:white; border:none; padding:6px 10px; border-radius:4px; cursor:pointer; font-weight:bold;">💳 Ubah Bayar</button> <button onclick="window.openOrderRevisionModalFromLocal('${o.orderId}')" style="background:#8e44ad; color:white; border:none; padding:6px 10px; border-radius:4px; cursor:pointer; font-weight:bold;">✏️ Revisi</button>` : '';
                 let btnVoid = o.orderStatus === "Voided" ? '' : `<button onclick="window.requestVoid('orders', '${o.orderId}')" style="background:${o.orderStatus === 'Void Pending' ? '#8e44ad' : '#e74c3c'}; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">${o.orderStatus === 'Void Pending' ? '🔑 PIN Admin' : 'Batal'}</button>`;
                 let btnPrint = `<button onclick="window.reprintOrder('${o.orderId}')" style="background:#2980b9; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">🖨️ Cetak</button>`;
                 let btnDetail = `<button onclick="window.showOrderDetail('${o.orderId}')" style="background:#f39c12; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">👁️ Detail</button>`;
@@ -5081,8 +5149,12 @@ window.openCurrentShiftReport = async function() {
         return false;
     };
 
-    const validOrders = allOrders.filter(o => o.orderStatus !== "Voided" && o.orderStatus !== "Void Pending" && o.deliveryStatus !== "Dibatalkan" && isSameDayAndCashier(o.timestamp, o.cashier, o.outlet, o.shiftId));
-    validOrders.forEach(o => {
+    const shiftOrdersAll = allOrders.filter(o => o.orderStatus !== "Void Pending" && isSameDayAndCashier(o.timestamp, o.cashier, o.outlet, o.shiftId));
+    shiftOrdersAll.forEach(o => {
+        if (o.orderStatus === "Voided" || o.deliveryStatus === "Dibatalkan") {
+            window.addOrderToShiftSummaryBuckets(foodSummary, o);
+            return;
+        }
         tOrders++;
         if (o.customerPhone && o.customerPhone !== "-") tCust++;
         let pelC = Number(o.pelunasanCash) || 0;
@@ -5096,15 +5168,7 @@ window.openCurrentShiftReport = async function() {
         tFree += (Number(o.freeAmount) || 0);
         tPiutangGiven += (Number(o.debtAmount) || 0);
 
-        if (o.items && o.items.length > 0) {
-            o.items.forEach(i => {
-                let key = i.name || i.itemId;
-                let unitP = (i.price !== undefined) ? Number(i.price) : Number(i.originalPrice);
-                if (!foodSummary[key]) foodSummary[key] = { name: i.name, qty: 0, nominal: 0 };
-                foodSummary[key].qty += (Number(i.qty) || 0);
-                foodSummary[key].nominal += ((Number(i.qty) || 0) * (unitP || 0));
-            });
-        }
+        window.addOrderToShiftSummaryBuckets(foodSummary, o);
     });
 
     const shiftExpenses = allExpenses.filter(exp => exp.status === "Active" && isSameDayAndCashier(exp.timestamp, exp.cashier, exp.outlet, exp.shiftId));
@@ -5547,7 +5611,10 @@ window.getUnsyncedDetailsList = async function() {
         drops.filter(d => d.syncStatus === "Pending" || (includeBundled && d.syncStatus === "Bundled")).forEach(d => list.push(`Setor Laci: ${d.dropId}`));
         reports.filter(r => r.syncStatus === "Pending" || (includeBundled && r.syncStatus === "Bundled")).forEach(r => list.push(`Shift Report: ${r.shiftId}`));
         expenses.filter(e => e.syncStatus === "Pending").forEach(e => list.push(`Expense: ${e.expenseId}`));
-        voids.forEach(v => list.push(v.type === "payment_edit" ? `Ubah Metode Bayar: ${v.orderId} (${v.oldMethod} ➔ ${v.newMethod})` : `Void Request: ${v.id}`));
+        voids.forEach(v => list.push(
+            v.type === "payment_edit" ? `Ubah Metode Bayar: ${v.orderId} (${v.oldMethod} ➔ ${v.newMethod})`
+            : (v.type === "order_revision" ? `Revisi Nota: ${v.orderId} (${v.reason})` : `Void Request: ${v.id}`)
+        ));
         members.forEach(m => list.push(`Member: ${m.name} (${m.phone})`));
         inb.filter(i => i.syncStatus === "Pending").forEach(i => list.push(`Inbound: ${i.logId}`));
         cuci.filter(c => c.syncStatus === "Pending").forEach(c => list.push(`Cuci Tandon: ${c.logId}`));
@@ -5803,6 +5870,10 @@ window.runBackgroundSync = async function(skipPullAfter = false, fromDrainLoop =
             if (req.type === "payment_edit") {
                 let k = "PAYEDIT:" + req.orderId;
                 batchItems.push({ key: k, action: "changeOrderPayment", data: req });
+                batchHandlers[k] = async (ok) => { if (ok) await dbDel("void_requests", req.id); };
+            } else if (req.type === "order_revision") {
+                let k = "ORDREV:" + req.revisionId;
+                batchItems.push({ key: k, action: "requestOrderRevision", data: req });
                 batchHandlers[k] = async (ok) => { if (ok) await dbDel("void_requests", req.id); };
             } else {
                 let k = "VOID:" + req.id;
@@ -6961,8 +7032,9 @@ window.fetchMemberHistory = async function() {
                             <strong style="font-size:16px; color:#2c3e50;">Rp ${o.total.toLocaleString('id-ID')}</strong><br>
                             <small style="color:#27ae60; font-weight:bold;">${o.paymentMethod}</small>
                             ${debtBadge}
-                            <div style="margin-top:6px; display:flex; gap:5px; justify-content:flex-end;">
+                            <div style="margin-top:6px; display:flex; gap:5px; justify-content:flex-end; flex-wrap:wrap;">
                                 <button onclick="window.showArchivedOrderDetail(${idx})" style="background:#f39c12; color:white; border:none; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:bold; cursor:pointer;">👁️ Detail</button>
+                                ${o.status !== "Voided" ? `<button onclick="window.openOrderRevisionModalFromArchive(${idx})" style="background:#8e44ad; color:white; border:none; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:bold; cursor:pointer;">✏️ Revisi</button>` : ''}
                                 <button onclick="window.reprintArchivedOrder(${idx})" style="background:#2980b9; color:white; border:none; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:bold; cursor:pointer;">🖨️ Cetak</button>
                             </div>
                         </div>
@@ -6989,8 +7061,9 @@ window.showArchivedOrderDetail = function(idx) {
     let html = `<strong>Nota:</strong> ${o.orderId}<br><strong>Waktu:</strong> ${window.formatDateReadable(o.timestamp)}<br><strong>Cabang:</strong> ${o.outlet} (${o.cashier})<br><strong>Pelanggan:</strong> ${o.customerName} (${o.customerPhone})<br><strong>Metode Bayar:</strong> ${o.paymentMethod}<br><hr style="border-top:1px dashed #ccc; margin:10px 0;">`;
     if (o.itemsArray && o.itemsArray.length > 0) {
         o.itemsArray.forEach(i => {
-            let p = Number(i.originalPrice || i.price) || 0;
-            html += `<div style="display:flex; justify-content:space-between;"><span>${i.qty}x ${i.name}</span><span>Rp ${(i.qty * p).toLocaleString('id-ID')}</span></div>`;
+            let p = (i.price !== undefined) ? Number(i.price) : (Number(i.originalPrice) || 0);
+            let tag = (i.redeemed > 0) ? ` <small style="color:#27ae60;">(${i.redeemed} Gratis)</small>` : ((i.volumeDiscountPerUnit > 0 || (i.originalPrice && p < i.originalPrice)) ? ` <small style="color:#2980b9;">[Diskon]</small>` : "");
+            html += `<div style="display:flex; justify-content:space-between;"><span>${i.qty}x ${i.name}${tag}</span><span>Rp ${(i.qty * p).toLocaleString('id-ID')}</span></div>`;
         });
     } else {
         html += `<div style="color:#2c3e50;">${o.items}</div>`;
@@ -7037,7 +7110,259 @@ window.reprintArchivedOrder = async function(idx) {
     await window.printViaBluetooth(payloadBytes);
 };
 
-window.onload = async () => { 
+window.revisionTargetOrder = null;
+window.revisionDraftItems = [];
+
+window.openOrderRevisionModalFromLocal = function(orderId) {
+    window.db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = (e) => {
+        const o = e.target.result;
+        if (!o) return alert("Nota tidak ditemukan di memori lokal.");
+        window.openOrderRevisionModal({
+            orderId: o.orderId, timestamp: o.timestamp, outlet: o.outlet || window.currentOutlet,
+            cashier: o.cashier, customerName: o.customerName, customerPhone: o.customerPhone,
+            status: o.orderStatus, courier: o.courier || "-", paymentMethod: o.paymentMethod || "-",
+            cashAmount: o.cashAmount || 0, qrisAmount: o.qrisAmount || 0, transferAmount: o.transferAmount || 0,
+            debt: o.debtAmount || 0, freeAmount: o.freeAmount || 0, total: o.grandTotal || 0,
+            itemsArray: Array.isArray(o.items) ? JSON.parse(JSON.stringify(o.items)) : []
+        });
+    };
+};
+
+window.openOrderRevisionModalFromArchive = function(idx) {
+    const o = window.lastHistorySearchResults && window.lastHistorySearchResults[idx];
+    if (!o) return alert("Data arsip tidak ditemukan.");
+    window.openOrderRevisionModal(JSON.parse(JSON.stringify(o)));
+};
+
+window.openOrderRevisionModal = function(orderObj) {
+    if (!orderObj || orderObj.status === "Voided") return alert("⚠️ Nota yang sudah dibatalkan tidak bisa direvisi.");
+    window.revisionTargetOrder = orderObj;
+    window.revisionDraftItems = (orderObj.itemsArray || []).map(it => ({
+        itemId: it.itemId || ("ITM-" + Math.random().toString(36).slice(2, 6)),
+        name: it.name,
+        qty: Number(it.qty) || 1,
+        price: (it.price !== undefined) ? Number(it.price) : (Number(it.originalPrice) || 0),
+        originalPrice: (it.originalPrice !== undefined) ? Number(it.originalPrice) : (Number(it.price) || 0),
+        volumeDiscountPerUnit: Number(it.volumeDiscountPerUnit) || 0,
+        redeemed: Number(it.redeemed) || 0,
+        volumeLiters: Number(it.volumeLiters) || 0,
+        tankSource: it.tankSource || "",
+        subCategory: it.subCategory || "",
+        autoDeduct: !!it.autoDeduct
+    }));
+
+    let modal = document.getElementById("order-revision-modal");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "order-revision-modal";
+        modal.className = "modal-overlay hidden";
+        modal.style.setProperty("z-index", "10080", "important");
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width:560px; width:96%; background:#fff; border-radius:12px; padding:18px; color:#2c3e50;">
+                <h2 style="margin:0 0 6px 0; color:#8e44ad;">✏️ Revisi Transaksi Lama (Persetujuan Admin)</h2>
+                <div id="rev-order-meta" style="font-size:12.5px; background:#f8f9fa; padding:9px 12px; border-radius:8px; border:1px solid #dcdde1; margin-bottom:10px;"></div>
+
+                <div style="font-weight:bold; font-size:13px; margin-bottom:6px;">📦 Daftar Item Baru:</div>
+                <div id="rev-items-list" style="max-height:190px; overflow-y:auto; border:1px solid #ecf0f1; border-radius:6px; padding:8px; margin-bottom:8px;"></div>
+
+                <div style="display:flex; gap:6px; margin-bottom:12px;">
+                    <select id="rev-add-menu" style="flex:1; padding:8px; border:1px solid #bdc3c7; border-radius:6px; font-size:13px;"></select>
+                    <button type="button" onclick="window.addItemToRevision()" style="background:#3498db; color:white; border:none; padding:8px 12px; border-radius:6px; font-weight:bold; cursor:pointer;">+ Tambah</button>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px;">
+                    <div><label style="font-size:11.5px; font-weight:bold;">💵 Tunai</label><input type="number" id="rev-cash" min="0" oninput="window.recalcRevisionTotals()" style="width:100%; padding:8px; border:1px solid #bdc3c7; border-radius:6px;"></div>
+                    <div><label style="font-size:11.5px; font-weight:bold;">📱 QRIS</label><input type="number" id="rev-qris" min="0" oninput="window.recalcRevisionTotals()" style="width:100%; padding:8px; border:1px solid #bdc3c7; border-radius:6px;"></div>
+                    <div><label style="font-size:11.5px; font-weight:bold;">🏦 Transfer</label><input type="number" id="rev-trf" min="0" oninput="window.recalcRevisionTotals()" style="width:100%; padding:8px; border:1px solid #bdc3c7; border-radius:6px;"></div>
+                    <div><label style="font-size:11.5px; font-weight:bold; color:#c0392b;">📒 Piutang</label><input type="number" id="rev-debt" min="0" oninput="window.recalcRevisionTotals()" style="width:100%; padding:8px; border:1px solid #bdc3c7; border-radius:6px; color:#c0392b;"></div>
+                    <div><label style="font-size:11.5px; font-weight:bold; color:#27ae60;">🎁 Gratis / Tukar Poin</label><input type="number" id="rev-free" min="0" oninput="window.recalcRevisionTotals()" style="width:100%; padding:8px; border:1px solid #bdc3c7; border-radius:6px;"></div>
+                    <div style="display:flex; flex-direction:column; justify-content:flex-end;">
+                        <button type="button" onclick="window.autoBalanceRevisionCash()" style="background:#16a085; color:white; border:none; padding:9px; border-radius:6px; font-weight:bold; font-size:12px; cursor:pointer;">⚖️ Pas-kan Sisa ke Tunai</button>
+                    </div>
+                </div>
+
+                <div style="display:flex; justify-content:space-between; background:#ecf0f1; padding:8px 12px; border-radius:6px; font-size:13px; margin-bottom:10px;">
+                    <span>Total Baru: <strong id="rev-grandtotal">Rp 0</strong></span>
+                    <span>Selisih Bayar: <strong id="rev-remaining">Rp 0</strong></span>
+                </div>
+
+                <div style="margin-bottom:10px;">
+                    <label style="font-size:12px; font-weight:bold; color:#c0392b;">📝 Alasan Revisi (Wajib diisi):</label>
+                    <input type="text" id="rev-reason" placeholder="Contoh: Salah input jumlah galon / salah item RO jadi Standar" style="width:100%; padding:9px; border:1px solid #e67e22; border-radius:6px;">
+                </div>
+
+                <div style="margin-bottom:12px;">
+                    <label style="font-size:11.5px; font-weight:bold; color:#7f8c8d;">🔑 PIN Admin (Opsional — isi HANYA jika Admin langsung menyetujui di tablet):</label>
+                    <input type="password" id="rev-admin-pin" placeholder="Kosongkan untuk kirim Request ke Admin" style="width:100%; padding:8px; border:1px solid #bdc3c7; border-radius:6px;">
+                </div>
+
+                <div style="display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end;">
+                    <button type="button" onclick="document.getElementById('order-revision-modal').classList.add('hidden')" style="background:#95a5a6; color:white; border:none; padding:10px 14px; border-radius:7px; font-weight:bold; cursor:pointer;">Batal</button>
+                    <button type="button" id="btn-rev-send" onclick="window.submitOrderRevision(false)" style="background:#8e44ad; color:white; border:none; padding:10px 15px; border-radius:7px; font-weight:bold; cursor:pointer;">📨 Kirim Request ke Admin</button>
+                    <button type="button" id="btn-rev-pin" onclick="window.submitOrderRevision(true)" style="background:#27ae60; color:white; border:none; padding:10px 14px; border-radius:7px; font-weight:bold; cursor:pointer;">🔑 Setujui (PIN Admin)</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+
+    document.getElementById("rev-order-meta").innerHTML = `
+        <strong>Nota:</strong> ${orderObj.orderId} | <strong>Tgl:</strong> ${window.formatDateReadable(orderObj.timestamp)}<br>
+        <strong>Cabang:</strong> ${orderObj.outlet} | <strong>Pelanggan:</strong> ${orderObj.customerName} (${orderObj.customerPhone})<br>
+        <strong>Total Lama:</strong> Rp ${(Number(orderObj.total) || 0).toLocaleString('id-ID')} (${orderObj.paymentMethod})
+    `;
+
+    let menuSel = document.getElementById("rev-add-menu");
+    let visibleMenu = (window.globalMenuData || []).filter(m => !m.hideOnPos);
+    menuSel.innerHTML = visibleMenu.map(m => `<option value="${m.itemId}">${m.name} (Rp ${Number(m.price).toLocaleString('id-ID')})</option>`).join("");
+
+    document.getElementById("rev-cash").value = Number(orderObj.cashAmount) || 0;
+    document.getElementById("rev-qris").value = Number(orderObj.qrisAmount) || 0;
+    document.getElementById("rev-trf").value = Number(orderObj.transferAmount) || 0;
+    document.getElementById("rev-debt").value = Number(orderObj.debt) || 0;
+    document.getElementById("rev-free").value = Number(orderObj.freeAmount) || 0;
+    document.getElementById("rev-reason").value = "";
+    document.getElementById("rev-admin-pin").value = "";
+
+    window.renderRevisionItems();
+    modal.classList.remove("hidden");
+};
+
+window.renderRevisionItems = function() {
+    const box = document.getElementById("rev-items-list");
+    if (!box) return;
+    if (window.revisionDraftItems.length === 0) {
+        box.innerHTML = '<div style="padding:10px;text-align:center;color:#95a5a6;">Belum ada item. Tambahkan item di bawah.</div>';
+    } else {
+        box.innerHTML = window.revisionDraftItems.map((it, i) => `
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; padding:6px 0; border-bottom:1px dashed #e0e0e0; font-size:12.5px;">
+                <div style="flex:1;"><strong>${it.name}</strong><br><small>Rp ${Number(it.price).toLocaleString('id-ID')} / item</small></div>
+                <div style="display:flex; align-items:center; gap:5px;">
+                    <button type="button" onclick="window.updateRevisionItemQty(${i}, -1)" style="width:28px;height:28px;background:#e74c3c;color:#fff;border:none;border-radius:4px;font-weight:bold;cursor:pointer;">-</button>
+                    <strong style="min-width:22px;text-align:center;">${it.qty}</strong>
+                    <button type="button" onclick="window.updateRevisionItemQty(${i}, 1)" style="width:28px;height:28px;background:#2ecc71;color:#fff;border:none;border-radius:4px;font-weight:bold;cursor:pointer;">+</button>
+                </div>
+                <div style="min-width:78px;text-align:right;font-weight:bold;">Rp ${(it.qty * it.price).toLocaleString('id-ID')}</div>
+            </div>
+        `).join("");
+    }
+    window.recalcRevisionTotals();
+};
+
+window.updateRevisionItemQty = function(idx, delta) {
+    let it = window.revisionDraftItems[idx];
+    if (!it) return;
+    it.qty += delta;
+    if (it.qty <= 0) window.revisionDraftItems.splice(idx, 1);
+    window.renderRevisionItems();
+};
+
+window.addItemToRevision = function() {
+    let sel = document.getElementById("rev-add-menu");
+    if (!sel || !sel.value) return;
+    let m = (window.globalMenuData || []).find(x => x.itemId === sel.value);
+    if (!m) return;
+    let ex = window.revisionDraftItems.find(x => x.name === m.name);
+    if (ex) ex.qty += 1;
+    else window.revisionDraftItems.push({
+        itemId: m.itemId, name: m.name, qty: 1, price: Number(m.price) || 0, originalPrice: Number(m.price) || 0,
+        volumeDiscountPerUnit: 0, redeemed: 0, volumeLiters: Number(m.volumeLiters) || 0, tankSource: m.tankSource || "", subCategory: m.subCategory || "", autoDeduct: !!m.autoDeduct
+    });
+    window.renderRevisionItems();
+};
+
+window.recalcRevisionTotals = function() {
+    let grand = window.revisionDraftItems.reduce((s, it) => s + ((Number(it.qty) || 0) * (Number(it.price) || 0)), 0);
+    let c = window.parsePayNum("rev-cash"), q = window.parsePayNum("rev-qris"), t = window.parsePayNum("rev-trf"), d = window.parsePayNum("rev-debt"), f = window.parsePayNum("rev-free");
+    let rem = grand - (c + q + t + d + f);
+    let gEl = document.getElementById("rev-grandtotal");
+    let rEl = document.getElementById("rev-remaining");
+    if (gEl) gEl.innerText = "Rp " + grand.toLocaleString('id-ID');
+    if (rEl) {
+        rEl.innerText = "Rp " + rem.toLocaleString('id-ID');
+        rEl.style.color = (rem === 0) ? "#27ae60" : "#c0392b";
+    }
+    return { grand, rem, c, q, t, d, f };
+};
+
+window.autoBalanceRevisionCash = function() {
+    let grand = window.revisionDraftItems.reduce((s, it) => s + ((Number(it.qty) || 0) * (Number(it.price) || 0)), 0);
+    let q = window.parsePayNum("rev-qris"), t = window.parsePayNum("rev-trf"), d = window.parsePayNum("rev-debt"), f = window.parsePayNum("rev-free");
+    document.getElementById("rev-cash").value = Math.max(0, grand - (q + t + d + f));
+    window.recalcRevisionTotals();
+};
+
+window.submitOrderRevision = async function(withAdminPin) {
+    const o = window.revisionTargetOrder;
+    if (!o) return;
+    if (window.revisionDraftItems.length === 0) return alert("⚠️ Minimal harus ada 1 item pada revisi (jika ingin membatalkan seluruh nota, gunakan fitur Void).");
+
+    const reason = document.getElementById("rev-reason").value.trim();
+    if (!reason) return alert("⚠️ Harap isi Alasan Revisi terlebih dahulu!");
+
+    const tot = window.recalcRevisionTotals();
+    if (tot.rem !== 0) return alert("⚠️ Total pembayaran baru (Tunai + QRIS + Transfer + Piutang + Gratis) harus persis sama dengan Total Baru!");
+
+    let authName = "";
+    if (withAdminPin) {
+        const pinInput = document.getElementById("rev-admin-pin").value.trim();
+        if (!pinInput) return alert("⚠️ Masukkan PIN Admin terlebih dahulu.");
+        const hashed = await window.hashPIN(pinInput);
+        const settings = await window.getDynamicSettings();
+        const isMaster = hashed === String(settings["Master_PIN"] || "").trim();
+        const staffList = await window.getStaffFromDB();
+        const staff = staffList.find(s => String(s.pin).trim() === hashed && String(s.role).toLowerCase() === "admin");
+        if (!isMaster && !staff) return alert("❌ PIN Admin / Master salah!");
+        authName = isMaster ? "Master Admin" : staff.name;
+    }
+
+    let methods = [];
+    if (tot.c > 0) methods.push("Tunai");
+    if (tot.q > 0) methods.push("QRIS");
+    if (tot.t > 0) methods.push("Trf.Bank");
+    if (tot.f > 0) methods.push("Gratis");
+    if (tot.d > 0) methods.push("Piutang");
+
+    const revId = "REV-" + Date.now();
+    const revPayload = {
+        id: "ORDREV-" + revId,
+        revisionId: revId,
+        type: "order_revision",
+        orderId: o.orderId,
+        outlet: o.outlet || window.currentOutlet,
+        requestedBy: window.currentCashier,
+        reason: reason,
+        instantApprove: !!withAdminPin,
+        authName: authName,
+        newItems: window.revisionDraftItems,
+        newSubtotal: tot.grand,
+        newFree: tot.f,
+        newGrandTotal: tot.grand,
+        newCash: tot.c,
+        newQris: tot.q,
+        newTransfer: tot.t,
+        newDebt: tot.d,
+        newPaymentMethod: methods.join("+") || "Belum Bayar",
+        newCourier: o.courier || "-"
+    };
+
+    await new Promise(res => {
+        let tx = window.db.transaction(["void_requests"], "readwrite");
+        tx.objectStore("void_requests").put(revPayload);
+        tx.oncomplete = res;
+        tx.onerror = res;
+    });
+
+    document.getElementById("order-revision-modal").classList.add("hidden");
+    if (window.updateUnsyncedBadge) await window.updateUnsyncedBadge();
+    if (navigator.onLine) window.runBackgroundSync();
+
+    alert(withAdminPin
+        ? `✅ Revisi nota ${o.orderId} disetujui langsung oleh ${authName} dan sedang disinkronkan ke Spreadsheet!`
+        : `📨 Permintaan revisi untuk nota ${o.orderId} telah dikirim ke Admin!\nAdmin akan menerima notifikasi email dan dapat menyetujui dari menu Otorisasi Revisi.`);
+};
+
+window.onload = async () => {
     document.getElementById("cust-phone").addEventListener("input", window.handleAutocomplete);
     document.getElementById("cust-name").addEventListener("input", window.handleAutocomplete);
     document.getElementById("cust-phone").addEventListener("click", window.handleAutocomplete);
