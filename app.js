@@ -1005,19 +1005,9 @@ window.historyHours = 24; // 🔥 Default 24 jam jika belum diatur di Settings
 window.promoRules = {};
 window.promoStampRules = {};
 window.volumeDiscountRules = [];
-window.outletSalaryModels = {};
-window.salaryRules = [];
-window.showShiftBonusPos = false;
 
 window.applySettingsToMemory = function(settingsObj) {
     if (!settingsObj) return;
-    window.showShiftBonusPos = String(settingsObj["Show_Shift_Bonus_POS"] || "FALSE").toUpperCase() === "TRUE";
-    if (settingsObj["_OutletSalaryModels"]) {
-        try { window.outletSalaryModels = JSON.parse(settingsObj["_OutletSalaryModels"]); } catch (_) {}
-    }
-    if (settingsObj["_SalaryRules"]) {
-        try { window.salaryRules = JSON.parse(settingsObj["_SalaryRules"]); } catch (_) {}
-    }
     window.volumeDiscountRules = [];
     window.promoRules = {};
     window.promoStampRules = {};
@@ -1807,14 +1797,6 @@ window.syncCriticalData = async function() {
                 for (const [k, v] of Object.entries(result.data.settings)) { 
                     setT.put({ key: k, value: v }); 
                 }
-                if (result.data.outletSalaryModels) {
-                    window.outletSalaryModels = result.data.outletSalaryModels;
-                    setT.put({ key: "_OutletSalaryModels", value: JSON.stringify(result.data.outletSalaryModels) });
-                }
-                if (result.data.salaryRules) {
-                    window.salaryRules = result.data.salaryRules;
-                    setT.put({ key: "_SalaryRules", value: JSON.stringify(result.data.salaryRules) });
-                }
                 window.applySettingsToMemory(result.data.settings);
                 
                 const rawOutlets = result.data.settings["Outlet_List"] || "Pusat"; 
@@ -2324,7 +2306,6 @@ window.attemptLogin = async function() {
                 document.getElementById("pos-screen").classList.remove("hidden");
                 document.getElementById("display-cashier").innerText = window.currentCashier; 
                 document.getElementById("display-outlet").innerText = window.currentOutlet;
-                window.resetAllPosSessions(); // 🔥 Cleans queues 1, 2, and 3 on auto-resume!
                 
                 await window.loadMenuFromCache(); // 🔥 Muat seketika dari memori lokal (0.1 detik)
                 window.loadMenuUI();
@@ -2334,13 +2315,16 @@ window.attemptLogin = async function() {
                     window.syncMasterData(); // 🔥 Tarik data terbaru di background dan perbarui teks status UI
                 }
                 
-                const today = window.getWibDate().split(" ")[0];
-                const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
-                const hasClockedInToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier);
-                if (!hasClockedInToday) {
-                    // ✅ PERBAIKAN:
-                    let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", outlet: window.currentOutlet, syncStatus: "Pending" };
-                    window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
+                // Skip auto clock-in for Admin (trial/spreadsheet admin only)
+                if (String(staff.role || "").trim().toLowerCase() !== "admin") {
+                    const today = window.getWibDate().split(" ")[0];
+                    const curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
+                    const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result || []));
+                    const hasOpenHereToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier && !a.clockOut && String(a.outlet || "").trim().toUpperCase() === curOutUp);
+                    if (!hasOpenHereToday) {
+                        let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", outlet: window.currentOutlet, syncStatus: "Pending" };
+                        window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
+                    }
                 }
             };
         } else { alert("PIN Salah atau Data Kasir Tidak Ditemukan."); }
@@ -4118,7 +4102,7 @@ window.renderHistoryList = function(type) {
                 let viewBtn = `<button onclick="window.viewHistoricalShift('${s.shiftId}')" style="background:#2980b9; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold; margin-top:5px;">👁️ Detail Shift</button>`;
                 
                 return `<div class="history-row" style="align-items:flex-start;"><div><strong>Shift: ${s.shiftId}</strong><br><small style="color:#7f8c8d;">Kasir: ${s.cashier} | Keluar: ${window.formatDateReadable(s.logoutTime)}</small>${pGiven}${pPaid}<br>${viewBtn}</div><div style="text-align:right;"><strong>Omset: Rp ${(s.totalOmset || 0).toLocaleString('id-ID')}</strong><br><small style="color:#27ae60;">Uang Laci: Rp ${(s.netCash || 0).toLocaleString('id-ID')}</small></div></div>`;
-            });
+            }).join("");
         };
     }
 };
@@ -4411,7 +4395,7 @@ window.submitChangePayment = async function() {
     const deltaCash = newCash - oldCash;
     const deltaDebt = newDebt - oldDebt;
     const deltaPaid = (newCash + newQris + newTransfer) - (oldCash + oldQris + oldTransfer);
-    const wasSynced = !!o.hasSyncedOnce && o.syncStatus === "Synced";
+    const wasSynced = (o.syncStatus === "Synced" || !!o.hasSyncedOnce);
 
     o.paymentMethod = newMethod;
     o.cashAmount = newCash;
@@ -4932,45 +4916,13 @@ window.submitNewMember = async function() {
     }
 };
 
-window.getActiveOutletSalaryModel = function(outletName) {
-    let up = String(outletName || window.currentOutlet || "").trim().toUpperCase();
-    return (window.outletSalaryModels && window.outletSalaryModels[up]) ? window.outletSalaryModels[up] : "MODEL_1";
-};
-
-window.calculateShiftBonusEstimate = function(foodSummary, outletName, shiftDateStr) {
-    let activeModel = window.getActiveOutletSalaryModel(outletName);
-    let d = shiftDateStr ? new Date(String(shiftDateStr).replace(/-/g, '/')) : new Date();
-    let dow = isNaN(d.getTime()) ? new Date().getDay() : d.getDay();
-    let isWeekend = (dow === 0 || dow === 6);
-
-    let menuKomisiMap = {};
-    (window.globalMenuData || []).forEach(m => {
-        if (m.name && m.kategoriKomisi) menuKomisiMap[m.name] = String(m.kategoriKomisi).trim().toUpperCase();
-    });
-
-    let estBonus = 0;
-    for (const [key, val] of Object.entries(foodSummary || {})) {
-        let name = (typeof val === "object" && val.name) ? val.name : key;
-        let qty = (typeof val === "object") ? (Number(val.qty) || 0) : (Number(val) || 0);
-        let nominal = (typeof val === "object") ? (Number(val.nominal) || 0) : 0;
-        let komisiCat = menuKomisiMap[name] || (name.toUpperCase().includes("RO") ? "KOMISI RO" : (name.toUpperCase().includes("19L") ? "KOMISI STD" : ""));
-        if (!komisiCat) continue;
-
-        let rule = (window.salaryRules || []).find(r => r.model === activeModel && (r.komisiCat === komisiCat || r.komisiCat === "ALL_OMSET"));
-        if (rule) {
-            let rate = isWeekend ? (Number(rule.rateHoliday) || 0) : (Number(rule.rateWeekday) || 0);
-            estBonus += (rule.basis === "PERSEN_OMSET") ? (nominal * (rate / 100)) : (qty * rate);
-        }
-    }
-    return { model: activeModel, estimatedBonus: Math.round(estBonus) };
-};
-
 window.openCurrentShiftReport = async function() {
     const today = window.getWibDate().split(" ")[0];
+    const curOutUpCheck = String(window.currentOutlet || "").trim().toUpperCase();
     
-    // 1. Cek staff yang belum clock-out
+    // 1. Cek staff di cabang ini yang belum clock-out
     const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = ev => res(ev.target.result || []));
-    let pendingOuts = attendances.filter(l => l.date === today && !l.clockOut && l.staffName !== window.currentCashier);
+    let pendingOuts = attendances.filter(l => l.date === today && !l.clockOut && l.staffName !== window.currentCashier && (!l.outlet || String(l.outlet).trim().toUpperCase() === curOutUpCheck));
     let currentHour = new Date(window.getWibDate().replace(' ', 'T')).getHours();
     if (pendingOuts.length > 0) {
         let msg = "Terdapat staff yang belum Clock-Out:\n";
@@ -5110,10 +5062,6 @@ window.openCurrentShiftReport = async function() {
             let qty = typeof val === 'object' ? val.qty : val;
             let name = typeof val === 'object' && val.name ? val.name : key;
             itemsHtml += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:14px; color:#2c3e50;"><span>${name}</span><strong>${qty}</strong></div>`;
-        }
-        const shiftBonusInfo = window.calculateShiftBonusEstimate(foodSummary, window.currentOutlet, window.getWibDate());
-        if (window.showShiftBonusPos) {
-            itemsHtml += `<div style="margin-top:8px; padding-top:8px; border-top:1px dashed #bdc3c7; display:flex; justify-content:space-between; font-size:13px; color:#1e8449;"><span>💰 Estimasi Bonus (${shiftBonusInfo.model}):</span><strong>Rp ${shiftBonusInfo.estimatedBonus.toLocaleString('id-ID')}</strong></div>`;
         }
         let itemsContainer = document.getElementById("sr-items-list");
         if (itemsContainer) itemsContainer.innerHTML = itemsHtml || "<div style='color:#7f8c8d; font-style:italic;'>Belum ada item terjual hari ini.</div>";
@@ -6351,12 +6299,20 @@ window.proceedToCourierSelection = async function(orderId) {
     const staffList = await window.getStaffFromDB();
     const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
     const today = window.getWibDate().split(" ")[0];
-    const activeClockIns = attendances.filter(a => a.date === today && !a.clockOut).map(a => a.staffName);
+    const curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
+    const activeClockIns = attendances
+        .filter(a => a.date === today && !a.clockOut && (!a.outlet || String(a.outlet).trim().toUpperCase() === curOutUp))
+        .map(a => a.staffName);
 
-    let outletStaff = staffList.filter(s => 
-        (s.defaultOutlet === window.currentOutlet || s.role.toLowerCase() === 'admin' || s.role.toLowerCase() === 'manager') &&
-        activeClockIns.includes(s.name)
-    );
+    let seenCouriers = new Set();
+    let outletStaff = staffList.filter(s => {
+        if (String(s.role || "").trim().toLowerCase() === "admin") return false;
+        if (!activeClockIns.includes(s.name)) return false;
+        let k = String(s.name || "").trim().toLowerCase();
+        if (seenCouriers.has(k)) return false;
+        seenCouriers.add(k);
+        return true;
+    });
     
     let select = document.getElementById("kurir-select");
     select.innerHTML = "";
@@ -6507,8 +6463,15 @@ window.renderAbsensi = async function() {
     window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = (e) => {
         let logs = (e.target.result || []).filter(l => l.date === today);
 
-        // Exclude Admin (Admin is for spreadsheet & POS trial only)
-        let eligibleStaff = staffList.filter(s => String(s.role || "").trim().toLowerCase() !== "admin");
+        // Exclude Admin & deduplicate duplicate Staff rows by name
+        let seenStaffNames = new Set();
+        let eligibleStaff = staffList.filter(s => {
+            if (String(s.role || "").trim().toLowerCase() === "admin") return false;
+            let nmKey = String(s.name || "").trim().toLowerCase();
+            if (!nmKey || seenStaffNames.has(nmKey)) return false;
+            seenStaffNames.add(nmKey);
+            return true;
+        });
 
         // Priority 1: Staff belonging to this outlet OR already clocked in at this outlet today
         let priorityStaff = [];
@@ -6609,7 +6572,9 @@ window.submitNewStaff = async function() {
         });
         let out = await res.json();
         if (out.status === "Success") {
-            alert(`Staff "${name}" berhasil ditambahkan ke database!\n(Sistem otomatis membuat PIN sementara: ${out.pin})`);
+            alert(out.duplicate
+                ? `Staff "${name}" sudah terdaftar di database (PIN: ${out.pin}).`
+                : `Staff "${name}" berhasil ditambahkan ke database!\n(Sistem otomatis membuat PIN sementara: ${out.pin})`);
             await window.syncMasterData(); 
             window.renderAbsensi(); 
         } else {
@@ -6622,10 +6587,15 @@ window.submitNewStaff = async function() {
     }
 }
 
-window.clockInStaff = function(staffName) {
+window.clockInStaff = async function(staffName) {
+    const today = window.getWibDate().split(" ")[0];
+    const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result || []));
+    if (attendances.some(a => a.date === today && a.staffName === staffName && !a.clockOut)) {
+        return alert(`⚠️ ${staffName} sudah berstatus Clock-IN hari ini.`);
+    }
     if (!confirm(`Apakah Anda yakin ingin melakukan Clock-IN untuk ${staffName}?`)) return;
     
-    let payload = { logId: "ABS-" + Date.now(), date: window.getWibDate().split(" ")[0], staffName: staffName, clockIn: window.getWibDate(), clockOut: null, loggedBy: window.currentCashier, outlet: window.currentOutlet, syncStatus: "Pending" };
+    let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: staffName, clockIn: window.getWibDate(), clockOut: null, loggedBy: window.currentCashier, outlet: window.currentOutlet, syncStatus: "Pending" };
     
     window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
     window.renderAbsensi(); window.runBackgroundSync();
@@ -7054,13 +7024,18 @@ window.onload = async () => {
     
     const isResumed = await window.autoResumeSession();
     
-    if (isResumed) {
-        const today = window.getWibDate().split(" ")[0];
-        const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result));
-        const hasClockedInToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier);
-        if (!hasClockedInToday && window.currentCashier) {
-            let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Resume)", outlet: window.currentOutlet, syncStatus: "Pending" };
-            window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
+    if (isResumed && window.currentCashier) {
+        const staffListResume = await window.getStaffFromDB();
+        const resumedStaff = staffListResume.find(s => s.pin === window.currentPin);
+        if (!resumedStaff || String(resumedStaff.role || "").trim().toLowerCase() !== "admin") {
+            const today = window.getWibDate().split(" ")[0];
+            const curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
+            const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result || []));
+            const hasOpenHereToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier && !a.clockOut && String(a.outlet || "").trim().toUpperCase() === curOutUp);
+            if (!hasOpenHereToday) {
+                let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Resume)", outlet: window.currentOutlet, syncStatus: "Pending" };
+                window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
+            }
         }
     }
     
