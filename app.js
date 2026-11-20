@@ -1,7 +1,7 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbzvSz3g98wTnVKdu25fFFhjlVSRrtjRoRB9zfHSlnpX08Sb810FzxxHuZcyBQDJMak/exec"; 
 const DB_NAME = "PureWater_POS";
 const DB_VERSION = 30; 
-const APP_VERSION = "46"; 
+const APP_VERSION = "47"; 
 window.db = null;
 
 // Core State
@@ -2179,7 +2179,7 @@ window.mergeServerAttendance = async function(serverAttList) {
 
             serverAttList.forEach(sa => {
                 const ex = localById[sa.logId];
-                if (ex && (ex.syncStatus === "OutPending" || ex.syncStatus === "Bundled")) return;
+                if (ex && (ex.syncStatus === "Pending" || ex.syncStatus === "OutPending" || ex.syncStatus === "Bundled")) return;
                 // Hapus entri lokal Synced dengan logId berbeda untuk staff+tanggal+cabang terbuka yg sama
                 locals.forEach(l => {
                     if (l.logId !== sa.logId && l.syncStatus === "Synced" && !l.clockOut &&
@@ -2474,10 +2474,14 @@ window.attemptLogin = async function() {
                     const today = window.getWibDate().split(" ")[0];
                     const curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
                     const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result || []));
-                    const hasOpenHereToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier && !a.clockOut && String(a.outlet || "").trim().toUpperCase() === curOutUp);
-                    if (!hasOpenHereToday) {
-                        let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", outlet: window.currentOutlet, syncStatus: "Pending" };
+                    const openHere = attendances.find(a => a.date === today && a.staffName === window.currentCashier && !a.clockOut && String(a.outlet || "").trim().toUpperCase() === curOutUp);
+                    if (!openHere) {
+                        let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, role: "K", clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Login)", outlet: window.currentOutlet, syncStatus: "Pending" };
                         window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
+                    } else if (openHere.role !== "K") {
+                        openHere.role = "K";
+                        openHere.syncStatus = "Pending";
+                        window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(openHere);
                     }
                 }
             };
@@ -6740,23 +6744,40 @@ window.renderAbsensi = async function() {
         priorityStaff.sort((a, b) => String(a.name).localeCompare(String(b.name)));
         otherStaff.sort((a, b) => String(a.defaultOutlet || "").localeCompare(String(b.defaultOutlet || "")) || String(a.name).localeCompare(String(b.name)));
 
+        const normDefaultRole = (r) => {
+            let rl = String(r || "").trim().toLowerCase();
+            if (rl === "k" || rl.includes("kasir")) return "K";
+            if (rl === "p" || rl.includes("pengirim") || rl.includes("kurir")) return "P";
+            return "OP";
+        };
+
         const buildStaffCard = (staff, isOtherOutlet) => {
             let activeLog = logs.find(l => l.staffName === staff.name && !l.clockOut);
             let safeName = String(staff.name || "").replace(/'/g, "\\'").replace(/"/g, "&quot;");
+            let defaultRole = normDefaultRole(staff.role);
+            let activeRole = activeLog ? (activeLog.role || defaultRole) : defaultRole;
+            let roleOpts = ["OP", "P", "K"].map(rc => `<option value="${rc}" ${rc === activeRole ? "selected" : ""}>${rc}</option>`).join("");
+
             let homeTag = isOtherOutlet
                 ? `<span style="background:#ebf5fb; color:#2980b9; border:1px solid #aed6f1; padding:1px 6px; border-radius:4px; font-size:11px; font-weight:bold; margin-left:4px;">${staff.defaultOutlet || "-"}</span>`
                 : "";
             let statusBadge = activeLog
-                ? `<span style="color:#27ae60; font-weight:bold;">🟢 Sedang Tugas di ${activeLog.outlet || window.currentOutlet} (Masuk: ${(activeLog.clockIn || "").split(" ")[1] || "-"})</span>`
+                ? `<span style="color:#27ae60; font-weight:bold;">🟢 Tugas [${activeRole}] di ${activeLog.outlet || window.currentOutlet} (Masuk: ${(activeLog.clockIn || "").split(" ")[1] || "-"})</span>`
                 : `<span style="color:#7f8c8d; font-weight:bold;">⚪ Belum Clock-in</span>`;
 
             let btnAction = activeLog
-                ? `<button onclick="window.clockOutStaff('${activeLog.logId}')" style="background:#e74c3c; color:white; border:none; padding:8px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Clock Out</button>`
-                : `<button onclick="window.clockInStaff('${safeName}')" style="background:#3498db; color:white; border:none; padding:8px 15px; border-radius:6px; font-weight:bold; cursor:pointer;">Clock In</button>`;
+                ? `<div style="display:flex; align-items:center; gap:6px;">
+                     <select onchange="window.changeActiveStaffRole('${activeLog.logId}', this.value)" title="Ubah Role Tugas Hari Ini" style="padding:7px 6px; border:1px solid #27ae60; border-radius:6px; font-weight:bold; font-size:12.5px; background:#eafaf1; color:#1e8449;">${roleOpts}</select>
+                     <button onclick="window.clockOutStaff('${activeLog.logId}')" style="background:#e74c3c; color:white; border:none; padding:8px 13px; border-radius:6px; font-weight:bold; cursor:pointer;">Clock Out</button>
+                   </div>`
+                : `<div style="display:flex; align-items:center; gap:6px;">
+                     <select title="Pilih Role Tugas Hari Ini" style="padding:7px 6px; border:1px solid #bdc3c7; border-radius:6px; font-weight:bold; font-size:12.5px; background:#fff; color:#2c3e50;">${roleOpts}</select>
+                     <button onclick="window.clockInStaff('${safeName}', this.previousElementSibling.value)" style="background:#3498db; color:white; border:none; padding:8px 13px; border-radius:6px; font-weight:bold; cursor:pointer;">Clock In</button>
+                   </div>`;
 
             let searchHay = `${staff.name} ${staff.role} ${staff.defaultOutlet || ""}`.toLowerCase().replace(/"/g, "");
             return `
-            <div class="absensi-staff-row" data-search="${searchHay}" style="border:1px solid #ecf0f1; padding:12px 14px; border-radius:6px; background:${isOtherOutlet ? "#fdfefe" : "#f9fcfc"}; display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <div class="absensi-staff-row" data-search="${searchHay}" style="border:1px solid #ecf0f1; padding:12px 14px; border-radius:6px; background:${isOtherOutlet ? "#fdfefe" : "#f9fcfc"}; display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px;">
                 <div>👤 <strong style="font-size:15.5px;">${staff.name}</strong> <small style="color:#5d6d7e;">(${staff.role})</small>${homeTag}<br><small>${statusBadge}</small></div>
                 <div>${btnAction}</div>
             </div>`;
@@ -6838,19 +6859,36 @@ window.submitNewStaff = async function() {
     }
 }
 
-window.clockInStaff = async function(staffName) {
+window.clockInStaff = async function(staffName, selectedRole) {
     const today = window.getWibDate().split(" ")[0];
     const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result || []));
     if (attendances.some(a => a.date === today && a.staffName === staffName && !a.clockOut)) {
         return alert(`⚠️ ${staffName} sudah berstatus Clock-IN hari ini.`);
     }
-    if (!confirm(`Apakah Anda yakin ingin melakukan Clock-IN untuk ${staffName}?`)) return;
+    const roleTugas = String(selectedRole || "OP").trim().toUpperCase();
+    if (!confirm(`Clock-IN untuk ${staffName} sebagai [${roleTugas}] hari ini?`)) return;
     
-    let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: staffName, clockIn: window.getWibDate(), clockOut: null, loggedBy: window.currentCashier, outlet: window.currentOutlet, syncStatus: "Pending" };
+    let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: staffName, role: roleTugas, clockIn: window.getWibDate(), clockOut: null, loggedBy: window.currentCashier, outlet: window.currentOutlet, syncStatus: "Pending" };
     
     window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
     window.renderAbsensi(); window.runBackgroundSync();
-}
+};
+
+window.changeActiveStaffRole = function(logId, newRole) {
+    const roleTugas = String(newRole || "OP").trim().toUpperCase();
+    let tx = window.db.transaction(["attendance"], "readwrite");
+    tx.objectStore("attendance").get(logId).onsuccess = (e) => {
+        let log = e.target.result;
+        if (!log || log.role === roleTugas) return;
+        log.role = roleTugas;
+        log.syncStatus = "Pending";
+        tx.objectStore("attendance").put(log);
+    };
+    tx.oncomplete = () => {
+        window.renderAbsensi();
+        window.runBackgroundSync();
+    };
+};
 
 window.clockOutStaff = function(logId, manualTime = null, skipSync = false) {
     if (!manualTime && !confirm(`Apakah Anda yakin ingin melakukan Clock-OUT sekarang?`)) return Promise.resolve();
@@ -7685,10 +7723,14 @@ window.onload = async () => {
             const today = window.getWibDate().split(" ")[0];
             const curOutUp = String(window.currentOutlet || "").trim().toUpperCase();
             const attendances = await new Promise(res => window.db.transaction(["attendance"], "readonly").objectStore("attendance").getAll().onsuccess = e => res(e.target.result || []));
-            const hasOpenHereToday = attendances.some(a => a.date === today && a.staffName === window.currentCashier && !a.clockOut && String(a.outlet || "").trim().toUpperCase() === curOutUp);
-            if (!hasOpenHereToday) {
-                let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Resume)", outlet: window.currentOutlet, syncStatus: "Pending" };
+            const openHere = attendances.find(a => a.date === today && a.staffName === window.currentCashier && !a.clockOut && String(a.outlet || "").trim().toUpperCase() === curOutUp);
+            if (!openHere) {
+                let payload = { logId: "ABS-" + Date.now() + Math.floor(Math.random()*100), date: today, staffName: window.currentCashier, role: "K", clockIn: window.getWibDate(), clockOut: null, loggedBy: "System (Auto-Resume)", outlet: window.currentOutlet, syncStatus: "Pending" };
                 window.db.transaction(["attendance"], "readwrite").objectStore("attendance").add(payload);
+            } else if (openHere.role !== "K") {
+                openHere.role = "K";
+                openHere.syncStatus = "Pending";
+                window.db.transaction(["attendance"], "readwrite").objectStore("attendance").put(openHere);
             }
         }
     }
